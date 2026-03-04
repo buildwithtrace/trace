@@ -2,6 +2,7 @@
 * This program source code file is part of KiCad, a free EDA CAD application.
 *
 * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
 *
 * This program is free software; you can redistribute it and/or
 * modify it under the terms of the GNU General Public License
@@ -171,6 +172,28 @@ const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow )
 }
 
 
+const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow )
+{
+    static wxAuiPaneInfo paneInfo;
+
+    paneInfo.Name( wxS( "AIChat" ) )
+            .Caption( _( "AI Agent" ) )
+            .CaptionVisible( false )
+            .PaneBorder( false )
+            .Right().Layer( 3 ).Position( 0 )
+            .TopDockable( false )
+            .BottomDockable( false )
+            .CloseButton( false )
+            .MinSize( aWindow->FromDIP( wxSize( 300, 200 ) ) )
+            .BestSize( aWindow->FromDIP( wxSize( 350, 500 ) ) )
+            .FloatingSize( aWindow->FromDIP( wxSize( 400, 600 ) ) )
+            .FloatingPosition( aWindow->FromDIP( wxPoint( 100, 100 ) ) )
+            .Show( true );
+
+    return paneInfo;
+}
+
+
 wxString EESCHEMA_SETTINGS::REMOTE_SYMBOL_CONFIG::DefaultDestinationDir()
 {
         return wxS( "${KIPRJMOD}/RemoteLibrary" );
@@ -300,6 +323,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<int>( "aui.remote_symbol_panel_float_height",
             &m_AuiPanels.remote_symbol_panel_float_height, -1 ) );
+
+    m_params.emplace_back( new PARAM<bool>( "aui.ai_chat_show",
+            &m_AuiPanels.ai_chat_show, true ) );
 
     m_params.emplace_back( new PARAM<bool>( "aui.schematic_hierarchy_float",
             &m_AuiPanels.schematic_hierarchy_float, false ) );

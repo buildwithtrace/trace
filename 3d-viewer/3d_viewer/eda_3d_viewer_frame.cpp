@@ -4,6 +4,7 @@
  * Copyright (C) 2015-2016 Mario Luzeiro <mrluzeiro@ua.pt>
  * Copyright (C) 2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -104,7 +105,7 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     wxLogTrace( m_logTrace, wxT( "EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME %s" ), aTitle );
 
     m_disable_ray_tracing = false;
-    m_aboutTitle = _HKI( "KiCad 3D Viewer" );
+    m_aboutTitle = _HKI( "Trace 3D Viewer" );
 
     // Give it an icon
     wxIcon icon;

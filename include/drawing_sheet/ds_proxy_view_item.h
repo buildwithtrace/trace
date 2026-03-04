@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -53,8 +54,19 @@ public:
 
     /**
      * Set the file name displayed in the title block.
+     * Automatically converts .kicad_sch/.kicad_pcb to .trace_sch/.trace_pcb for branding.
      */
-    void SetFileName( const std::string& aFileName ) { m_fileName = aFileName; }
+    void SetFileName( const std::string& aFileName )
+    {
+        m_fileName = aFileName;
+        // Display Trace file extensions instead of KiCad extensions
+        size_t pos = m_fileName.find( ".kicad_sch" );
+        if( pos != std::string::npos )
+            m_fileName.replace( pos, 10, ".trace_sch" );
+        pos = m_fileName.find( ".kicad_pcb" );
+        if( pos != std::string::npos )
+            m_fileName.replace( pos, 10, ".trace_pcb" );
+    }
 
     /**
      * Set the sheet name displayed in the title block.

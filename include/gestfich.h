@@ -137,4 +137,40 @@ KICOMMON_API bool AddDirectoryToZip( wxZipOutputStream& aZip,
                                      wxString& aErrors,
                                      const wxString& aParentDir = "" );
 
+/**
+ * Convert a kicad_sch file to trace_sch format using the Python trace converter.
+ * 
+ * @param aKicadSchPath Path to the .kicad_sch file to convert
+ * @return true if conversion succeeded, false otherwise (errors are logged but don't block)
+ */
+KICOMMON_API bool ConvertKicadSchToTraceSch( const wxString& aKicadSchPath );
+
+/**
+ * Convert a trace_sch file to kicad_sch format using the Python trace converter.
+ * 
+ * @param aTraceSchPath Path to the .trace_sch file to convert
+ * @return true if conversion succeeded, false otherwise (errors are logged but don't block)
+ */
+KICOMMON_API bool ConvertTraceSchToKicadSch( const wxString& aTraceSchPath );
+
+/**
+ * Convert a kicad_pcb file to trace_pcb format using the Python trace converter.
+ * 
+ * @param aKicadPcbPath Path to the .kicad_pcb file to convert
+ * @return true if conversion succeeded, false otherwise (errors are logged but don't block)
+ */
+KICOMMON_API bool ConvertKicadPcbToTracePcb( const wxString& aKicadPcbPath );
+
+/**
+ * Convert a trace_pcb file to kicad_pcb format using the Python trace converter.
+ * 
+ * @param aTracePcbPath Path to the .trace_pcb file to convert
+ * @param aKicadPcbPath Path to the existing .kicad_pcb file to merge with (optional)
+ * @param aKicadSchPath Path to the corresponding .kicad_sch file for footprint mapping (optional)
+ * @return true if conversion succeeded, false otherwise (errors are logged but don't block)
+ */
+KICOMMON_API bool ConvertTracePcbToKicadPcb( const wxString& aTracePcbPath, 
+                                             const wxString& aKicadPcbPath = wxEmptyString,
+                                             const wxString& aKicadSchPath = wxEmptyString );
+
 #endif /* GESTFICH_H */

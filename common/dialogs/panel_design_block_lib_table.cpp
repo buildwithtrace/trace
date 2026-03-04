@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -271,7 +272,7 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::AddTable( LIBRARY_TABLE* table, const wxStrin
     {
         wxString* lastGlobalLibDir = nullptr;
 
-        if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+        if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
         {
             if( cfg->m_lastDesignBlockLibDir.IsEmpty() )
                 cfg->m_lastDesignBlockLibDir = PATHS::GetDefaultUserDesignBlocksPath();
@@ -629,7 +630,7 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::browseLibrariesHandler( wxCommandEvent& event
         return;
 
     const IO_BASE::IO_FILE_DESC& fileDesc = m_supportedDesignBlockFiles.at( fileType );
-    KICAD_SETTINGS*              cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS*              cfg = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     wxString  title = wxString::Format( _( "Select %s Library" ), DESIGN_BLOCK_IO_MGR::ShowType( fileType ) );
     wxString  dummy;

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2004-2012 Jean-Pierre Charras
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -72,14 +73,17 @@ void PROJECT_TREE::LoadIcons()
     // KiCad for macOS currently has backported high-DPI support for this control
     // that is not in a released version of wxWidgets 3.2 yet.  This can become the
     // main codepath once wxWidgets 3.4 is released.
-#ifdef __WXMAC__
+    // HAVE_WX_SET_STATE_IMAGES is defined by CMake if wxWidgets has this method
+#if defined(__WXMAC__) && defined(HAVE_WX_SET_STATE_IMAGES)
     wxVector<wxBitmapBundle> images;
     images.push_back( KiBitmapBundle( BITMAPS::project ) );                // TREE_LEGACY_PROJECT
     images.push_back( KiBitmapBundle( BITMAPS::project_kicad ) );          // TREE_JSON_PROJECT
     images.push_back( KiBitmapBundle( BITMAPS::icon_eeschema_24 ) );       // TREE_LEGACY_SCHEMATIC
     images.push_back( KiBitmapBundle( BITMAPS::icon_eeschema_24 ) );       // TREE_SEXPR_SCHEMATIC
+    images.push_back( KiBitmapBundle( BITMAPS::icon_eeschema_24 ) );       // TREE_TRACE_SCHEMATIC
     images.push_back( KiBitmapBundle( BITMAPS::icon_pcbnew_24 ) );         // TREE_LEGACY_PCB
     images.push_back( KiBitmapBundle( BITMAPS::icon_pcbnew_24 ) );         // TREE_SEXPR_PCB
+    images.push_back( KiBitmapBundle( BITMAPS::icon_pcbnew_24 ) );         // TREE_TRACE_PCB
     images.push_back( KiBitmapBundle( BITMAPS::icon_gerbview_24 ) );       // TREE_GERBER
     images.push_back( KiBitmapBundle( BITMAPS::file_gerber_job ) );        // TREE_GERBER_JOB_FILE (.gbrjob)
     images.push_back( KiBitmapBundle( BITMAPS::file_html ) );              // TREE_HTML
@@ -154,8 +158,10 @@ void PROJECT_TREE::LoadIcons()
     m_imageList->Add( toBitmap( BITMAPS::project_kicad ) );          // TREE_JSON_PROJECT
     m_imageList->Add( toBitmap( BITMAPS::icon_eeschema_24 ) );       // TREE_LEGACY_SCHEMATIC
     m_imageList->Add( toBitmap( BITMAPS::icon_eeschema_24 ) );       // TREE_SEXPR_SCHEMATIC
+    m_imageList->Add( toBitmap( BITMAPS::icon_eeschema_24 ) );       // TREE_TRACE_SCHEMATIC
     m_imageList->Add( toBitmap( BITMAPS::icon_pcbnew_24 ) );         // TREE_LEGACY_PCB
     m_imageList->Add( toBitmap( BITMAPS::icon_pcbnew_24 ) );         // TREE_SEXPR_PCB
+    m_imageList->Add( toBitmap( BITMAPS::icon_pcbnew_24 ) );         // TREE_TRACE_PCB
     m_imageList->Add( toBitmap( BITMAPS::icon_gerbview_24 ) );       // TREE_GERBER
     m_imageList->Add( toBitmap( BITMAPS::file_gerber_job ) );        // TREE_GERBER_JOB_FILE (.gbrjob)
     m_imageList->Add( toBitmap( BITMAPS::file_html ) );              // TREE_HTML

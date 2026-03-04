@@ -4,6 +4,7 @@
  * Copyright (C) 2007 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
  * Copyright (C) 2009 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,7 +24,9 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <auth/auth_manager.h>
 #include <bitmaps.h>
+#include <eeschema_id.h>
 #include <tool/action_menu.h>
 #include <tool/tool_manager.h>
 #include <tools/sch_actions.h>
@@ -179,6 +182,27 @@ void SYMBOL_EDIT_FRAME::doReCreateMenuBar()
     AddMenuLanguageList( prefsMenu, selTool );
 
 
+    //-- Account menu -----------------------------------------------
+    //
+    ACTION_MENU* accountMenu = new ACTION_MENU( false, selTool );
+    accountMenu->SetTitle( _( "&Account" ) );
+
+    if( AUTH_MANAGER::Instance().IsAuthenticated() )
+    {
+        AUTH_USER user = AUTH_MANAGER::Instance().GetCurrentUser();
+        wxString userLabel = user.fullName.IsEmpty() ? user.email : user.fullName;
+        wxMenuItem* userItem = accountMenu->Add( userLabel, wxEmptyString, wxID_ANY, BITMAPS::icon_kicad );
+        userItem->Enable( false );
+        accountMenu->AppendSeparator();
+        accountMenu->Add( _( "Sign Out" ), _( "Sign out of your Trace account" ),
+                         ID_ACCOUNT_SIGN_OUT_SYM, BITMAPS::exit );
+    }
+    else
+    {
+        accountMenu->Add( _( "Sign In" ), _( "Sign in to your Trace account" ),
+                         ID_ACCOUNT_SIGN_IN_SYM, BITMAPS::icon_kicad );
+    }
+
     //-- Menubar -------------------------------------------------------------
     //
     menuBar->Append( fileMenu,    _( "&File" ) );
@@ -186,6 +210,7 @@ void SYMBOL_EDIT_FRAME::doReCreateMenuBar()
     menuBar->Append( viewMenu,    _( "&View" ) );
     menuBar->Append( placeMenu,   _( "&Place" ) );
     menuBar->Append( inspectMenu, _( "&Inspect" ) );
+    menuBar->Append( accountMenu, _( "&Account" ) );
     menuBar->Append( prefsMenu,   _( "P&references" ) );
     AddStandardHelpMenu( menuBar );
 

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 1992-2012 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -304,6 +305,13 @@ private:
     void onGitStatusTimer( wxTimerEvent& event );
 
     void gitStatusTimerHandler();
+
+    /**
+     * Ensure all kicad_sch and kicad_pcb files have corresponding trace files.
+     * Scans project root directory and converts missing trace files.
+     * @param aProjectDir The project root directory path
+     */
+    void EnsureTraceFilesExist( const wxString& aProjectDir );
 
 public:
     KICAD_MANAGER_FRAME*    m_Parent;

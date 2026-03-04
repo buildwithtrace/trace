@@ -5,29 +5,29 @@ if( APPLE )
     #TODO Generate this at runtime as well
     include( ${KICAD_CMAKE_MODULE_PATH}/WritePlatformMetadata_macos.cmake )
 elseif( UNIX )
-    # Note: We use two different app IDs here for legacy reasons. The org.kicad.KiCad
-    # ID is from FlatHub Flatpaks, while the org.kicad.kicad ID is used everywhere else.
+    # Note: We use two different app IDs here for legacy reasons. The org.trace.Trace
+    # ID is from FlatHub Flatpaks, while the org.trace.trace ID is used everywhere else.
     # Having these two be separate causes problems in Gnome Software because they wll
-    # each appear as their own app, so KiCad gets two entries.
+    # each appear as their own app, so Trace gets two entries.
     #
     # To work around this, we include a provides statement in the metainfo for the other
     # app ID to link the two IDs together.
 
     # Default values for regular builds
-    set( KICAD_REVERSE_DOMAIN "org.kicad" )
-    set( KICAD_APP_NAME "${KICAD_REVERSE_DOMAIN}.kicad" )
-    set( KICAD_PROVIDES_APP_ID "${KICAD_REVERSE_DOMAIN}.KiCad" )
+    set( KICAD_REVERSE_DOMAIN "org.trace" )
+    set( KICAD_APP_NAME "${KICAD_REVERSE_DOMAIN}.trace" )
+    set( KICAD_PROVIDES_APP_ID "${KICAD_REVERSE_DOMAIN}.Trace" )
     set( KICAD_APP_PREFIX "${KICAD_REVERSE_DOMAIN}" )
     set( KICAD_ICON_PREFIX "" )
     set( KICAD_DESKTOP_FILE_ICON_PREFIX "" )
-    set( KICAD_DESKTOP_FILE_ICON_KICAD "kicad" )
+    set( KICAD_DESKTOP_FILE_ICON_KICAD "trace" )
     set( KICAD_MIME_FILE_PREFIX "kicad" )
     set( KICAD_MIME_ICON_PREFIX "" )
 
     # Override default values from above if we are building a flatpak
     if( KICAD_BUILD_FLATPAK )
-        set( KICAD_APP_NAME "${KICAD_REVERSE_DOMAIN}.KiCad" )
-        set( KICAD_PROVIDES_APP_ID "${KICAD_REVERSE_DOMAIN}.kicad" )
+        set( KICAD_APP_NAME "${KICAD_REVERSE_DOMAIN}.Trace" )
+        set( KICAD_PROVIDES_APP_ID "${KICAD_REVERSE_DOMAIN}.trace" )
         if( KICAD_BUILD_NIGHTLY_FLATPAK )
             set( KICAD_APP_NAME "${KICAD_APP_NAME}.Nightly" )
             set( KICAD_PROVIDES_APP_ID "${KICAD_PROVIDES_APP_ID}.Nightly" )
@@ -42,7 +42,7 @@ elseif( UNIX )
 
     # Add the command to configure the linux metainfo file with the version information
     add_custom_command(
-        OUTPUT ${PROJECT_BINARY_DIR}/resources/linux/metainfo/org.kicad.kicad.metainfo.xml.in
+        OUTPUT ${PROJECT_BINARY_DIR}/resources/linux/metainfo/org.trace.trace.metainfo.xml.in
         COMMAND ${CMAKE_COMMAND}
             -DSRC_PATH=${PROJECT_SOURCE_DIR}
             -DBUILD_PATH=${PROJECT_BINARY_DIR}
@@ -56,7 +56,7 @@ elseif( UNIX )
 
     # Read the metainfo from the binary directory because it has been configured by Cmake already
     # to have the version string in it
-    linux_metadata_translation( ${PROJECT_BINARY_DIR}/resources/linux/metainfo/org.kicad.kicad.metainfo.xml.in
+    linux_metadata_translation( ${PROJECT_BINARY_DIR}/resources/linux/metainfo/org.trace.trace.metainfo.xml.in
                                 ${PROJECT_BINARY_DIR}/resources/linux/metainfo/${KICAD_APP_NAME}.metainfo.xml
                                 ${PROJECT_SOURCE_DIR}/translation/pofiles )
 
@@ -83,10 +83,10 @@ elseif( UNIX )
                                 ${PROJECT_BINARY_DIR}/resources/linux/launchers/${KICAD_APP_PREFIX}.gerbview.desktop
                                 ${PROJECT_SOURCE_DIR}/translation/pofiles )
 
-    configure_file( ${PROJECT_SOURCE_DIR}/resources/linux/launchers/org.kicad.kicad.desktop.in
-                    ${PROJECT_BINARY_DIR}/resources/linux/launchers/org.kicad.kicad.desktop.in
+    configure_file( ${PROJECT_SOURCE_DIR}/resources/linux/launchers/org.trace.trace.desktop.in
+                    ${PROJECT_BINARY_DIR}/resources/linux/launchers/org.trace.trace.desktop.in
                     @ONLY )
-    linux_metadata_translation( ${PROJECT_BINARY_DIR}/resources/linux/launchers/org.kicad.kicad.desktop.in
+    linux_metadata_translation( ${PROJECT_BINARY_DIR}/resources/linux/launchers/org.trace.trace.desktop.in
                                 ${PROJECT_BINARY_DIR}/resources/linux/launchers/${KICAD_APP_NAME}.desktop
                                 ${PROJECT_SOURCE_DIR}/translation/pofiles )
 
@@ -195,14 +195,14 @@ elseif( UNIX )
              )
 
     # Install bash completion
-    install( FILES ${PROJECT_SOURCE_DIR}/resources/linux/autocomplete/kicad-cli-completion.bash
+    install( FILES ${PROJECT_SOURCE_DIR}/resources/linux/autocomplete/trace-cli-completion.bash
              DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions
-             RENAME kicad-cli
+             RENAME trace-cli
              COMPONENT resources
              )
 
     # Install zsh completion
-    install( FILES ${PROJECT_SOURCE_DIR}/resources/linux/autocomplete/_kicad-cli
+    install( FILES ${PROJECT_SOURCE_DIR}/resources/linux/autocomplete/_trace-cli
              DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions
              COMPONENT resources
              )

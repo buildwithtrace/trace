@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2014-2020 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -29,12 +30,33 @@
 
 #include <tools/pcb_tool_base.h>
 #include <tool/tool_menu.h>
+#include <nlohmann/json.hpp>
+#include <atomic>
+#include <functional>
 
 namespace KIGFX {
     class ORIGIN_VIEWITEM;
 }
 
 class PCB_EDIT_FRAME;
+class BOARD;
+
+/**
+ * Perform cloud autorouting with the given parameters.
+ * This is a shared helper used by both the CloudAutoroute button and the AI tool callback.
+ * 
+ * @param aBoard The board to autoroute.
+ * @param aEditFrame The PCB edit frame (can be nullptr for headless operation).
+ * @param aParams Autorouting parameters (can be empty object).
+ * @param aProgressCallback Optional callback for progress updates.
+ * @param aStopRequested Optional atomic flag to check for cancellation.
+ * @return JSON result with success, message, and progress_log fields.
+ */
+nlohmann::json PerformCloudAutoroute( BOARD* aBoard,
+                                       PCB_EDIT_FRAME* aEditFrame,
+                                       const nlohmann::json& aParams,
+                                       std::function<void( const std::string& )> aProgressCallback = nullptr,
+                                       std::atomic<bool>* aStopRequested = nullptr );
 
 /**
  * Handle actions specific to the board editor in PcbNew.
@@ -70,6 +92,7 @@ public:
     int BoardSetup( const TOOL_EVENT& aEvent );
     int ImportNetlist( const TOOL_EVENT& aEvent );
     int ImportSpecctraSession( const TOOL_EVENT& aEvent );
+    int CloudAutoroute( const TOOL_EVENT& aEvent );
     int ExportSpecctraDSN( const TOOL_EVENT& aEvent );
     int ExportNetlist( const TOOL_EVENT& aEvent );
     int GenerateDrillFiles( const TOOL_EVENT& aEvent );
@@ -94,6 +117,7 @@ public:
     int ToggleLayersManager( const TOOL_EVENT& aEvent );
     int ToggleProperties( const TOOL_EVENT& aEvent );
     int ToggleNetInspector( const TOOL_EVENT& aEvent );
+    int ToggleAIChat( const TOOL_EVENT& aEvent );
     int ToggleSearch( const TOOL_EVENT& aEvent );
     int TogglePythonConsole( const TOOL_EVENT& aEvent );
     int ToggleLibraryTree( const TOOL_EVENT& aEvent );

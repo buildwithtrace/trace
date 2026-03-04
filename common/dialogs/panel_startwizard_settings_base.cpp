@@ -18,7 +18,7 @@ PANEL_STARTWIZARD_SETTINGS_BASE::PANEL_STARTWIZARD_SETTINGS_BASE( wxWindow* pare
 	wxBoxSizer* bSizer6;
 	bSizer6 = new wxBoxSizer( wxVERTICAL );
 
-	m_staticText2 = new wxStaticText( this, wxID_ANY, _("How would you like to configure KiCad?"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticText2 = new wxStaticText( this, wxID_ANY, _("How would you like to configure Trace?"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticText2->Wrap( -1 );
 	bSizer6->Add( m_staticText2, 0, wxALL|wxEXPAND, 5 );
 
@@ -42,7 +42,7 @@ PANEL_STARTWIZARD_SETTINGS_BASE::PANEL_STARTWIZARD_SETTINGS_BASE( wxWindow* pare
 
 	bSizer6->Add( bSizer5, 1, wxEXPAND, 5 );
 
-	m_lblPathError = new wxStaticText( this, wxID_ANY, _("The selected path does not contain valid KiCad settings!"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_lblPathError = new wxStaticText( this, wxID_ANY, _("The selected path does not contain valid Trace settings!"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_lblPathError->Wrap( -1 );
 	m_lblPathError->SetForegroundColour( wxColour( 255, 43, 0 ) );
 	m_lblPathError->Hide();

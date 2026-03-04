@@ -4,6 +4,7 @@
  * Copyright (C) 2013 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,6 +24,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <auth/auth_manager.h>
 #include <bitmaps.h>
 #include <wx/hyperlink.h>
 #include <base_screen.h>
@@ -107,6 +109,10 @@ BEGIN_EVENT_TABLE( SYMBOL_EDIT_FRAME, SCH_BASE_FRAME )
     // Drop files event
     EVT_DROP_FILES( SYMBOL_EDIT_FRAME::OnDropFiles )
 
+    // Account menu
+    EVT_MENU( ID_ACCOUNT_SIGN_IN_SYM, SYMBOL_EDIT_FRAME::onSignIn )
+    EVT_MENU( ID_ACCOUNT_SIGN_OUT_SYM, SYMBOL_EDIT_FRAME::onSignOut )
+
 END_EVENT_TABLE()
 
 
@@ -125,7 +131,7 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_libMgr = nullptr;
     m_unit = 1;
     m_bodyStyle = 1;
-    m_aboutTitle = _HKI( "KiCad Symbol Editor" );
+    m_aboutTitle = _HKI( "Trace Symbol Editor" );
 
     wxIcon icon;
     wxIconBundle icon_bundle;
@@ -177,6 +183,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     configureToolbars();
     RecreateToolbars();
 
+    // Listen for auth state changes to update the Account menu
+    AUTH_MANAGER::Instance().Bind( EVT_AUTH_STATE_CHANGED, &SYMBOL_EDIT_FRAME::onAuthStateChanged, this );
+
     UpdateTitle();
     UpdateSymbolMsgPanelInfo();
     RebuildSymbolUnitAndBodyStyleLists();
@@ -195,7 +204,7 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                       .Top().Layer( 6 ) );
 
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" )
                       .Left().Layer( 2 ) );
@@ -288,6 +297,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
 SYMBOL_EDIT_FRAME::~SYMBOL_EDIT_FRAME()
 {
+    // Unbind auth state change handler
+    AUTH_MANAGER::Instance().Unbind( EVT_AUTH_STATE_CHANGED, &SYMBOL_EDIT_FRAME::onAuthStateChanged, this );
+
     // Shutdown all running tools
     if( m_toolManager )
         m_toolManager->ShutdownAllTools();
@@ -2022,7 +2034,7 @@ bool SYMBOL_EDIT_FRAME::replaceLibTableEntry( const wxString& aLibNickname, cons
     wxString normalizedPath = NormalizePath( aLibFile, &envVars, projectPath );
 
     row->SetURI( normalizedPath );
-    row->SetType( "KiCad" );
+    row->SetType( "Trace" );
 
     bool success = true;
 
@@ -2096,4 +2108,39 @@ bool SYMBOL_EDIT_FRAME::GetShowInvisiblePins()
 {
     // Returns the current render option for invisible pins
     return libeditconfig()->m_ShowHiddenPins;
+}
+
+
+void SYMBOL_EDIT_FRAME::onSignIn( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().StartLogin();
+    doReCreateMenuBar();
+}
+
+
+void SYMBOL_EDIT_FRAME::onSignOut( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().SignOut();
+    doReCreateMenuBar();
+}
+
+
+void SYMBOL_EDIT_FRAME::onAuthStateChanged( wxCommandEvent& event )
+{
+    // Auth state changed (e.g., user signed in via browser callback)
+    // Use CallAfter to ensure menu bar update happens on the main thread
+    // and after the event has fully propagated
+    CallAfter( [this]() {
+        doReCreateMenuBar();
+        
+        // Force a visual refresh of the menu bar on macOS
+#ifdef __WXMAC__
+        if( wxMenuBar* menuBar = GetMenuBar() )
+        {
+            menuBar->Refresh();
+        }
+#endif
+    } );
+    
+    event.Skip();  // Allow other handlers to process this event
 }

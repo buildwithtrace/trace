@@ -4,6 +4,7 @@
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -140,6 +141,7 @@ const std::string FILEEXT::LegacySchematicFileExtension( "sch" );
 const std::string FILEEXT::CadstarSchematicFileExtension( "csa" );
 const std::string FILEEXT::CadstarPartsLibraryFileExtension( "lib" );
 const std::string FILEEXT::KiCadSchematicFileExtension( "kicad_sch" );
+const std::string FILEEXT::TraceSchematicFileExtension( "trace_sch" );
 const std::string FILEEXT::SpiceFileExtension( "cir" );
 const std::string FILEEXT::SpiceModelFileExtension( "model" );
 const std::string FILEEXT::SpiceSubcircuitFileExtension( "sub" );
@@ -165,6 +167,7 @@ const std::string FILEEXT::LegacyPcbFileExtension( "brd" );
 const std::string FILEEXT::EaglePcbFileExtension( "brd" );
 const std::string FILEEXT::CadstarPcbFileExtension( "cpa" );
 const std::string FILEEXT::KiCadPcbFileExtension( "kicad_pcb" );
+const std::string FILEEXT::TracePcbFileExtension( "trace_pcb" );
 const std::string FILEEXT::DrawingSheetFileExtension( "kicad_wks" );
 const std::string FILEEXT::DesignRulesFileExtension( "kicad_dru" );
 

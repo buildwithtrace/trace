@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2019 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -141,7 +142,7 @@ wxFileName KICAD_MANAGER_CONTROL::newProjectDirectory( wxString* aFileName, bool
 
 static wxFileName ensureDefaultProjectTemplate()
 {
-    ENV_VAR_MAP_CITER it = Pgm().GetLocalEnvVariables().find( "KICAD_USER_TEMPLATE_DIR" );
+    ENV_VAR_MAP_CITER it = Pgm().GetLocalEnvVariables().find( "TRACE_USER_TEMPLATE_DIR" );
 
     if( it == Pgm().GetLocalEnvVariables().end() || it->second.GetValue() == wxEmptyString )
         return wxFileName();
@@ -202,11 +203,11 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
         return 0;
     }
 
-    KICAD_SETTINGS*                settings = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS*                settings = GetAppSettings<KICAD_SETTINGS>( "trace" );
     std::vector<std::pair<wxString, wxFileName>> titleDirList;
     wxFileName                     templatePath;
 
-    ENV_VAR_MAP_CITER itUser = Pgm().GetLocalEnvVariables().find( "KICAD_USER_TEMPLATE_DIR" );
+    ENV_VAR_MAP_CITER itUser = Pgm().GetLocalEnvVariables().find( "TRACE_USER_TEMPLATE_DIR" );
 
     if( itUser != Pgm().GetLocalEnvVariables().end() && itUser->second.GetValue() != wxEmptyString )
     {
@@ -856,7 +857,7 @@ int KICAD_MANAGER_CONTROL::ShowPluginManager( const TOOL_EVENT& aEvent )
         m_frame->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_RELOAD_PLUGINS, payload );
     }
 
-    KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     if( changed.count( PCM_PACKAGE_TYPE::PT_LIBRARY )
         && ( settings->m_PcmLibAutoAdd || settings->m_PcmLibAutoRemove ) )

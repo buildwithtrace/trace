@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2012 NBEE Embedded Systems, Miguel Angel Ajo <miguelangel@nbee.es>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -225,9 +226,8 @@ bool SCRIPTING::scriptingSetup()
   #ifdef _MSC_VER
     // Under vcpkg/msvc, we need to explicitly set the python home or else it'll start consuming
     // system python registry keys and the like instead of the Python distributed with KiCad.
-    // We are going to follow the "unix" layout for the msvc/vcpkg distributions so executable
-    // files are in the /root/bin path and the Python library files are in the
-    // /root/lib/python3(/Lib,/DLLs) path(s).
+    // For vcpkg builds, Python libraries are in /bin/Lib/ and /bin/DLLs/
+    // So PYTHONHOME should be the /bin/ directory (where Lib/ and DLLs/ subdirs exist)
     wxFileName pyHome;
 
     pyHome.Assign( Pgm().GetExecutablePath() );
@@ -246,8 +246,10 @@ bool SCRIPTING::scriptingSetup()
         wxSetEnv( wxT( "PYTHONPATH" ), wxEmptyString );
         wxSetEnv( wxT( "PYTHONHOME" ), wxEmptyString );
 
-        // Now initialize Python Home via capi
-        Py_SetPythonHome( pyHome.GetFullPath().c_str() );
+        // CRITICAL FIX: Use GetPath() to get the DIRECTORY, not GetFullPath() which includes
+        // the executable filename. PYTHONHOME must be a directory path.
+        // For vcpkg layout: /bin/kicad.exe -> PYTHONHOME should be /bin/ where Lib/ exists
+        Py_SetPythonHome( pyHome.GetPath().c_str() );
     }
 
     // Allow executing the python pip installed scripts on windows easily

@@ -262,6 +262,8 @@ enum class BITMAPS : unsigned int
     hotkeys,
     hv45mode,
     icon_3d,
+    icon_ai_eeschema,
+    icon_ai_pcbnew,
     icon_bitmap2component,
     icon_bitmap2component_16,
     icon_bitmap2component_24,
@@ -307,6 +309,8 @@ enum class BITMAPS : unsigned int
     icon_pcbnew_32,
     icon_pcm,
     icon_pcm_24,
+    icon_send,
+    icon_stop,
     image,
     import,
     import3d,
@@ -693,6 +697,9 @@ enum class BITMAPS : unsigned int
 };
 
 
-inline bool operator!( const BITMAPS& aBitmap ) { return aBitmap == BITMAPS::INVALID_BITMAP; }
+inline bool operator!( const BITMAPS& aBitmap )
+{
+    return aBitmap == BITMAPS::INVALID_BITMAP;
+}
 
 #endif // BITMAPS_PNG_BITMAPS_LIST__H

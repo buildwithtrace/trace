@@ -452,6 +452,7 @@ set( PCBNEW_CLASS_SRCS
     widgets/net_inspector_panel.cpp
     widgets/pcb_net_inspector_panel.cpp
     widgets/vertex_editor_pane.cpp
+    widgets/ai_chat_panel.cpp
 
     component_classes/component_class.cpp
     component_classes/component_class_cache_proxy.cpp

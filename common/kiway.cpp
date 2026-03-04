@@ -158,9 +158,9 @@ const wxString KIWAY::dso_search_path( FACE_T aFaceId )
     if( wxGetEnv( wxT( "KICAD_RUN_FROM_BUILD_DIR" ), nullptr ) )
     {
 #ifdef __WXMAC__
-        // On Mac, all of the kifaces are placed in the kicad.app bundle, even though the individual
+        // On Mac, all of the kifaces are placed in the Trace.app bundle, even though the individual
         // standalone binaries are placed in separate bundles before the make install step runs.
-        // So, we have to jump up to the kicad directory, then the PlugIns section of the kicad
+        // So, we have to jump up to the kicad directory, then the PlugIns section of the Trace
         // bundle.
         fn = wxStandardPaths::Get().GetExecutablePath();
 
@@ -169,7 +169,7 @@ const wxString KIWAY::dso_search_path( FACE_T aFaceId )
         fn.RemoveLastDir();
         fn.RemoveLastDir();
         fn.AppendDir( wxT( "kicad" ) );
-        fn.AppendDir( wxT( "kicad.app" ) );
+        fn.AppendDir( wxT( "Trace.app" ) );
         fn.AppendDir( wxT( "Contents" ) );
         fn.AppendDir( wxT( "PlugIns" ) );
         fn.SetName( name );

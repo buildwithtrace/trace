@@ -4,6 +4,7 @@
  * Copyright (C) 2004-2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008-2015 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,8 +29,8 @@
  * @brief see class PGM_BASE
  */
 
-#ifndef  PGM_BASE_H_
-#define  PGM_BASE_H_
+#ifndef PGM_BASE_H_
+#define PGM_BASE_H_
 
 #include <bs_thread_pool.hpp>
 #include <kicommon.h>
@@ -72,16 +73,16 @@ class KICAD_API_SERVER;
 struct KICOMMON_API LANGUAGE_DESCR
 {
     /// wxWidgets locale identifier (See wxWidgets doc)
-    int         m_WX_Lang_Identifier;
+    int m_WX_Lang_Identifier;
 
     /// KiCad identifier used in menu selection (See id.h)
-    int         m_KI_Lang_Identifier;
+    int m_KI_Lang_Identifier;
 
     /// Labels used in menus
-    wxString    m_Lang_Label;
+    wxString m_Lang_Label;
 
     /// Set to true if the m_Lang_Label must not be translated
-    bool        m_DoNotTranslate;
+    bool m_DoNotTranslate;
 };
 
 
@@ -130,17 +131,11 @@ public:
 
     virtual LIBRARY_MANAGER& GetLibraryManager() const { return *m_library_manager; }
 
-    virtual COMMON_SETTINGS*  GetCommonSettings() const;
+    virtual COMMON_SETTINGS* GetCommonSettings() const;
 
-    virtual BACKGROUND_JOBS_MONITOR& GetBackgroundJobMonitor() const
-    {
-        return *m_background_jobs_monitor;
-    }
+    virtual BACKGROUND_JOBS_MONITOR& GetBackgroundJobMonitor() const { return *m_background_jobs_monitor; }
 
-    virtual NOTIFICATIONS_MANAGER& GetNotificationsManager() const
-    {
-        return *m_notifications_manager;
-    }
+    virtual NOTIFICATIONS_MANAGER& GetNotificationsManager() const { return *m_notifications_manager; }
 
 #ifdef KICAD_IPC_API
     virtual API_PLUGIN_MANAGER& GetPluginManager() const { return *m_plugin_manager; }
@@ -168,30 +163,26 @@ public:
      *          show by default.
      * @return  the full path of the editor, or an empty string if no editor was chosen.
      */
-    virtual const wxString AskUserForPreferredEditor(
-            const wxString& aDefaultEditor = wxEmptyString );
+    virtual const wxString AskUserForPreferredEditor( const wxString& aDefaultEditor = wxEmptyString );
 
-    virtual bool IsKicadEnvVariableDefined() const               { return !m_kicad_env.IsEmpty(); }
+    virtual bool IsKicadEnvVariableDefined() const { return !m_kicad_env.IsEmpty(); }
 
-    virtual const wxString& GetKicadEnvVariable() const          { return m_kicad_env; }
+    virtual const wxString& GetKicadEnvVariable() const { return m_kicad_env; }
 
     virtual const wxString& GetExecutablePath() const;
 
-    virtual wxLocale* GetLocale()                                { return m_locale; }
+    virtual wxLocale* GetLocale() { return m_locale; }
 
-    virtual const wxString& GetPdfBrowserName() const            { return m_pdf_browser; }
+    virtual const wxString& GetPdfBrowserName() const { return m_pdf_browser; }
 
-    virtual void SetPdfBrowserName( const wxString& aFileName )  { m_pdf_browser = aFileName; }
+    virtual void SetPdfBrowserName( const wxString& aFileName ) { m_pdf_browser = aFileName; }
 
     /**
      * @return true if the PDF browser is the default (system) PDF browser and false if the
      *         PDF browser is the preferred (selected) browser, else returns false if there
      *         is no selected browser.
      */
-    virtual bool UseSystemPdfBrowser() const
-    {
-        return m_use_system_pdf_browser || m_pdf_browser.IsEmpty();
-    }
+    virtual bool UseSystemPdfBrowser() const { return m_use_system_pdf_browser || m_pdf_browser.IsEmpty(); }
 
     /**
      * Force the use of system PDF browser, even if a preferred PDF browser is set.
@@ -280,7 +271,7 @@ public:
      *
      * This should return what wxGetApp() returns.
      */
-    virtual wxApp&   App();
+    virtual wxApp& App();
 
     static const wxChar workingDirKey[];
 
@@ -331,8 +322,8 @@ public:
      * @param aCond the condition of the assert.
      * @param aMsg the attached assert message (can be empty).
      */
-    void HandleAssert( const wxString& aFile, int aLine, const wxString& aFunc,
-                       const wxString& aCond, const wxString& aMsg );
+    void HandleAssert( const wxString& aFile, int aLine, const wxString& aFunc, const wxString& aCond,
+                       const wxString& aMsg );
 
     /**
      * Determine if the application is running with a GUI.
@@ -348,10 +339,7 @@ public:
     /**
      * Allow access to the wxSingleInstanceChecker to test for other running KiCads.
      */
-    std::unique_ptr<wxSingleInstanceChecker>& SingleInstance()
-    {
-        return m_pgm_checker;
-    }
+    std::unique_ptr<wxSingleInstanceChecker>& SingleInstance() { return m_pgm_checker; }
 
     /**
      * Starts a background job to preload the global and project design block libraries.
@@ -376,7 +364,7 @@ protected:
     void loadCommonSettings();
 
     /// Trap all changes in here, simplifies debugging.
-    void setLanguageId( int aId )       { m_language_id = aId; }
+    void setLanguageId( int aId ) { m_language_id = aId; }
 
 #ifdef KICAD_USE_SENTRY
     void     sentryInit();
@@ -384,37 +372,37 @@ protected:
 #endif
 
 protected:
-    std::unique_ptr<SETTINGS_MANAGER> m_settings_manager;
-    std::unique_ptr<LIBRARY_MANAGER> m_library_manager;
+    std::unique_ptr<SETTINGS_MANAGER>        m_settings_manager;
+    std::unique_ptr<LIBRARY_MANAGER>         m_library_manager;
     std::unique_ptr<BACKGROUND_JOBS_MONITOR> m_background_jobs_monitor;
-    std::unique_ptr<NOTIFICATIONS_MANAGER> m_notifications_manager;
+    std::unique_ptr<NOTIFICATIONS_MANAGER>   m_notifications_manager;
 
-    std::unique_ptr<SCRIPTING> m_python_scripting;
+    std::unique_ptr<SCRIPTING>                   m_python_scripting;
 
     /// Check if there is another copy of Kicad running at the same time.
     std::unique_ptr<wxSingleInstanceChecker> m_pgm_checker;
 
 #ifdef KICAD_IPC_API
     std::unique_ptr<API_PLUGIN_MANAGER> m_plugin_manager;
-    std::unique_ptr<KICAD_API_SERVER> m_api_server;
+    std::unique_ptr<KICAD_API_SERVER>   m_api_server;
 #endif
 
-    wxString        m_kicad_env;              ///< The KICAD system environment variable.
+    wxString m_kicad_env; ///< The KICAD system environment variable.
 
-    wxLocale*       m_locale;
-    int             m_language_id;
+    wxLocale* m_locale;
+    int       m_language_id;
 
-    bool            m_use_system_pdf_browser;
-    wxString        m_pdf_browser;            ///< Filename of the app selected for browsing PDFs.
+    bool     m_use_system_pdf_browser;
+    wxString m_pdf_browser; ///< Filename of the app selected for browsing PDFs.
 
-    wxString        m_text_editor;
+    wxString m_text_editor;
 
     KICAD_SINGLETON m_singleton;
 
 #ifdef KICAD_USE_SENTRY
-    wxFileName      m_sentry_optin_fn;
-    wxFileName      m_sentry_uid_fn;
-    wxString        m_sentryUid;
+    wxFileName m_sentry_optin_fn;
+    wxFileName m_sentry_uid_fn;
+    wxString   m_sentryUid;
 #endif
 
     /**
@@ -452,4 +440,4 @@ KICOMMON_API extern PGM_BASE* PgmOrNull();
 KICOMMON_API extern void SetPgm( PGM_BASE* pgm );
 
 
-#endif  // PGM_BASE_H_
+#endif // PGM_BASE_H_

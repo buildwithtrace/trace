@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -686,14 +687,43 @@ bool SETTINGS_MANAGER::GetPreviousVersionPaths( std::vector<wxString>* aPaths )
     // for it.
     {
         wxFileName wxGtkPath;
+        // Check for trace paths first (current application)
+        wxGtkPath.AssignDir( wxS( "~/.config/trace" ) );
+        wxGtkPath.MakeAbsolute();
+        base_paths.emplace_back( wxGtkPath );
+
+        // Also check for legacy kicad paths (for migration from KiCad)
         wxGtkPath.AssignDir( wxS( "~/.config/kicad" ) );
         wxGtkPath.MakeAbsolute();
         base_paths.emplace_back( wxGtkPath );
 
         // We also want to pick up regular flatpak if we are nightly
+        wxGtkPath.AssignDir( wxS( "~/.var/app/org.trace.Trace/config/trace" ) );
+        wxGtkPath.MakeAbsolute();
+        base_paths.emplace_back( wxGtkPath );
+
         wxGtkPath.AssignDir( wxS( "~/.var/app/org.kicad.KiCad/config/kicad" ) );
         wxGtkPath.MakeAbsolute();
         base_paths.emplace_back( wxGtkPath );
+    }
+#endif
+
+#ifdef _WIN32
+    // On Windows, also check for paths in AppData\Roaming that might have been created
+    // by previous installations. Check for both trace and legacy kicad paths.
+    {
+        wxString roamingPath = KIPLATFORM::ENV::GetUserConfigPath();
+        wxFileName winPath;
+
+        // Check for trace path (current application)
+        winPath.AssignDir( roamingPath );
+        winPath.AppendDir( wxS( "trace" ) );
+        base_paths.emplace_back( winPath );
+
+        // Also check for legacy kicad path (for migration from old KiCad)
+        winPath.AssignDir( roamingPath );
+        winPath.AppendDir( wxS( "kicad" ) );
+        base_paths.emplace_back( winPath );
     }
 #endif
 
@@ -787,6 +817,16 @@ bool SETTINGS_MANAGER::GetPreviousVersionPaths( std::vector<wxString>* aPaths )
 
                    if( bDirs.empty() )
                        return true;
+
+                   // Prefer trace paths over kicad paths
+                   bool aIsTrace = aPath.GetPath().Lower().Contains( wxS( "trace" ) );
+                   bool bIsTrace = bPath.GetPath().Lower().Contains( wxS( "trace" ) );
+
+                   if( aIsTrace && !bIsTrace )
+                       return true;
+
+                   if( !aIsTrace && bIsTrace )
+                       return false;
 
                    std::string verA = aDirs.back().ToStdString();
                    std::string verB = bDirs.back().ToStdString();

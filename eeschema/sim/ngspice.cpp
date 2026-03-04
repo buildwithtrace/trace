@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2016-2022 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  * @author Maciej Suminski <maciej.suminski@cern.ch>
@@ -541,8 +542,10 @@ void NGSPICE::init_dll()
         wxFileName( stdPaths.GetExecutablePath() ).GetPath().ToStdString() +
                 "/../../../../../Contents/PlugIns/sim/ngspice/scripts"
 #endif
+        "../share/trace",
         "../share/kicad",
         "../share",
+        "../../share/trace",
         "../../share/kicad",
         "../../share"
     };

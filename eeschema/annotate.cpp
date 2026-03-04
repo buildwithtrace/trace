@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -215,7 +216,11 @@ void SCH_EDIT_FRAME::AnnotateSymbols( SCH_COMMIT* aCommit, ANNOTATE_SCOPE_T  aAn
                                       bool aRepairTimestamps, REPORTER& aReporter )
 {
     SCH_SELECTION_TOOL* selTool = m_toolManager->GetTool<SCH_SELECTION_TOOL>();
-    SCH_SELECTION&      selection = selTool->GetSelection();
+    
+    // Null safety: If selection tool is not available, create empty selection
+    // This can happen when called via AI tools before GUI is fully initialized
+    SCH_SELECTION emptySelection;
+    SCH_SELECTION& selection = selTool ? selTool->GetSelection() : emptySelection;
 
     SCH_REFERENCE_LIST  references;
     SCH_SCREENS         screens( Schematic().Root() );

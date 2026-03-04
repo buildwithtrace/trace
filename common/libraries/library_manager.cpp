@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Jon Evans <jon@craftyjon.com>
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -380,8 +381,8 @@ bool LIBRARY_MANAGER::CreateGlobalTable( LIBRARY_TABLE_TYPE aType, bool aPopulat
     {
         LIBRARY_TABLE_ROW& chained = table.InsertRow();
         chained.SetType( LIBRARY_TABLE_ROW::TABLE_TYPE_NAME );
-        chained.SetNickname( wxT( "KiCad" ) );
-        chained.SetDescription( _( "KiCad Default Libraries" ) );
+        chained.SetNickname( wxT( "Trace" ) );
+        chained.SetDescription( _( "Trace Default Libraries" ) );
         chained.SetURI( defaultLib.GetFullPath() );
     }
 
@@ -413,7 +414,7 @@ void LIBRARY_MANAGER::LoadGlobalTables( std::initializer_list<LIBRARY_TABLE_TYPE
     loadTables( PATHS::GetUserSettingsPath(), LIBRARY_TABLE_SCOPE::GLOBAL, aTablesToLoad );
 
     SETTINGS_MANAGER& mgr = Pgm().GetSettingsManager();
-    KICAD_SETTINGS*   settings = mgr.GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS*   settings = mgr.GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     wxCHECK( settings, /* void */ );
 

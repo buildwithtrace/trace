@@ -22,7 +22,7 @@
 #include <lset.h>
 #include <netclass.h>
 #include <project/tuning_profiles.h>
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 #include <settings/parameters.h>
 
 

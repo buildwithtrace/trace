@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2004-2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -330,7 +331,7 @@ static void printHelp( argparse::ArgumentParser& argParser )
 bool PGM_KICAD::OnPgmInit()
 {
     PGM_BASE::BuildArgvUtf8();
-    App().SetAppDisplayName( wxT( "kicad-cli" ) );
+    App().SetAppDisplayName( wxT( "trace-cli" ) );
 
 #if defined( DEBUG )
     wxString absoluteArgv0 = wxStandardPaths::Get().GetExecutablePath();
@@ -358,7 +359,7 @@ bool PGM_KICAD::OnPgmInit()
 
 int PGM_KICAD::OnPgmRun()
 {
-    argparse::ArgumentParser argParser( std::string( "kicad-cli" ), GetMajorMinorVersion().ToStdString(),
+    argparse::ArgumentParser argParser( std::string( "trace-cli" ), GetMajorMinorVersion().ToStdString(),
                                         argparse::default_arguments::none );
 
     argParser.add_argument( "-v", ARG_VERSION )
@@ -502,7 +503,7 @@ void PGM_KICAD::OnPgmExit()
 void PGM_KICAD::MacOpenFile( const wxString& aFileName )
 {
 #if defined( __WXMAC__ )
-    wxFAIL_MSG( "kicad-cli should not call MacOpenFile" );
+    wxFAIL_MSG( "trace-cli should not call MacOpenFile" );
 #endif
 }
 
@@ -525,9 +526,9 @@ static PGM_KICAD program;
 /**
  * Not publicly visible because most of the action is in #PGM_KICAD these days.
  */
-struct APP_KICAD_CLI : public wxAppConsole
+struct APP_TRACE_CLI : public wxAppConsole
 {
-    APP_KICAD_CLI() : wxAppConsole()
+    APP_TRACE_CLI() : wxAppConsole()
     {
         SetPgm( &program );
 
@@ -636,7 +637,7 @@ struct APP_KICAD_CLI : public wxAppConsole
 #endif
 };
 
-IMPLEMENT_APP_CONSOLE( APP_KICAD_CLI )
+IMPLEMENT_APP_CONSOLE( APP_TRACE_CLI )
 
 
 // The C++ project manager supports one open PROJECT, so Prj() calls within

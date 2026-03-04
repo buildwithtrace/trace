@@ -2,6 +2,7 @@
 * This program source code file is part of KiCad, a free EDA CAD application.
 *
 * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
 *
 * This program is free software: you can redistribute it and/or modify it
 * under the terms of the GNU General Public License as published by the
@@ -56,6 +57,12 @@ namespace KIPLATFORM
             }
 
             return result;
+        }
+
+        bool EraseSecret( const wxString& aService, const wxString& aKey )
+        {
+            wxString display = aService + wxS( ":" ) + aKey;
+            return CredDeleteW( display.wc_str(), CRED_TYPE_GENERIC, 0 );
         }
     }
 }

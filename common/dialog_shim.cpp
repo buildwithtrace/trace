@@ -59,7 +59,7 @@
 
 #include <algorithm>
 #include <functional>
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 #include <typeinfo>
 
 BEGIN_EVENT_TABLE( DIALOG_SHIM, wxDialog )

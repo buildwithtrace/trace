@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -126,6 +127,26 @@ public:
     void OnImportEasyEdaProFiles( wxCommandEvent& event );
 
     /**
+     *  Handle Account Sign In menu action.
+     */
+    void OnAccountSignIn( wxCommandEvent& event );
+
+    /**
+     *  Handle Account Sign Out menu action.
+     */
+    void OnAccountSignOut( wxCommandEvent& event );
+    
+    /**
+     *  Handle auth state changes (e.g., user signed in via browser callback).
+     */
+    void OnAuthStateChanged( wxCommandEvent& event );
+    
+    /**
+     * Handle auth polling timer events to detect when user signs in via browser callback.
+     */
+    void OnAuthPollTimer( wxTimerEvent& event );
+
+    /**
      * Prints the current working directory name and the project name on the text panel.
      */
     void PrintPrjInfo();
@@ -232,6 +253,11 @@ private:
     void updatePcmButtonBadge();
 
 private:
+    enum
+    {
+        ID_AUTH_POLL_TIMER = wxID_HIGHEST + 100
+    };
+
     bool                  m_openSavedWindows;
     int                   m_leftWinWidth;
     bool                  m_active_project;
@@ -247,6 +273,9 @@ private:
     BITMAP_BUTTON*                          m_pcmButton;
     int                                     m_pcmUpdateCount;
     std::unique_ptr<UPDATE_MANAGER>         m_updateManager;
+    
+    wxTimer               m_authPollTimer;       ///< Timer to poll for auth state changes
+    int                   m_lastKnownAuthState;  ///< Last known auth state for polling comparison
 };
 
 

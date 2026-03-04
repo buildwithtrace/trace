@@ -4,6 +4,7 @@
  * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -80,7 +81,7 @@ void SYMBOL_EDIT_FRAME::UpdateTitle()
         title = _( "[no symbol loaded]" );
     }
 
-    title += wxT( " \u2014 " ) + _( "Symbol Editor" );
+    title += wxT( " \u2014 " ) + _( "Trace Symbol Editor" );
     SetTitle( title );
 }
 

@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,8 +39,10 @@ enum class TREE_FILE_TYPE
     JSON_PROJECT,           // JSON formatted project file (.kicad_pro)
     LEGACY_SCHEMATIC,       // Schematic file (.sch)
     SEXPR_SCHEMATIC,        // Schematic file (.kicad_sch)
+    TRACE_SCHEMATIC,        // Trace schematic file (.trace_sch)
     LEGACY_PCB,             // board file (.brd) legacy format
     SEXPR_PCB,              // board file (.kicad_brd) new s expression format
+    TRACE_PCB,              // Trace PCB file (.trace_pcb)
     GERBER,                 // Gerber  file (.pho, .g*)
     GERBER_JOB_FILE,        // Gerber  file (.gbrjob)
     HTML,                   // HTML file (.htm, *.html)

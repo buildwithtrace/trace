@@ -31,7 +31,7 @@
 #include <settings/grid_settings.h>
 #include <settings/parameters.h>
 
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 #include <zoom_defines.h>
 
 

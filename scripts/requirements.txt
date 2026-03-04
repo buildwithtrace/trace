@@ -1,0 +1,18 @@
+# Requirements for KiCad AI Chat System
+# Install with: pip install -r requirements.txt
+
+# Backend server dependencies
+fastapi
+uvicorn
+pydantic
+pydantic_ai
+python-dotenv
+
+# Local client dependencies (required for ai_local_client.py)
+requests>=2.28.0
+httpx>=0.24.0
+httpx-sse>=0.3.0
+
+# Optional dependencies (uncomment based on your AI provider)
+# openai>=1.0.0
+# anthropic>=0.18.0

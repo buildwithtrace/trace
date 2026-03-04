@@ -4,6 +4,7 @@
  * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2009 Wayne Stambaugh <stambaughw@verizon.net>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * Copyright (C) 2019 CERN
  *
  * This program is free software; you can redistribute it and/or
@@ -45,6 +46,7 @@
 #include <wx/dir.h>
 #include <wx/utils.h>
 #include <local_history.h>
+#include <auth/auth_manager.h>
 
 
 void KICAD_MANAGER_FRAME::doReCreateMenuBar()
@@ -119,7 +121,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
 
     //Import Sub-menu
     ACTION_MENU* importMenu = new ACTION_MENU( false, controlTool );
-    importMenu->SetTitle( _( "Import Non-KiCad Project..." ) );
+    importMenu->SetTitle( _( "Import External Project..." ) );
     importMenu->SetIcon( BITMAPS::import_project );
 
     importMenu->Add( _( "Altium Project..." ),
@@ -152,7 +154,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     fileMenu->Add( KICAD_MANAGER_ACTIONS::unarchiveProject );
 
     fileMenu->AppendSeparator();
-    fileMenu->AddQuitOrClose( nullptr, wxS( "KiCad" ) );
+    fileMenu->AddQuitOrClose( nullptr, wxS( "Trace" ) );
 
     //-- Edit menu -----------------------------------------------------------
     //
@@ -226,6 +228,30 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
                     ID_EDIT_LOCAL_FILE_IN_TEXT_EDITOR,
                     BITMAPS::editor );
 
+    //-- Account menu -----------------------------------------------
+    //
+    ACTION_MENU* accountMenu = new ACTION_MENU( false, controlTool );
+    
+    bool isSignedIn = AUTH_MANAGER::Instance().IsAuthenticated();
+    
+    if( isSignedIn )
+    {
+        AUTH_USER user = AUTH_MANAGER::Instance().GetCurrentUser();
+        wxString userLabel = user.fullName.IsEmpty() ? user.email : user.fullName;
+        
+        wxMenuItem* userItem = accountMenu->Add( userLabel, wxEmptyString, wxID_ANY, BITMAPS::icon_kicad );
+        userItem->Enable( false );
+        
+        accountMenu->AppendSeparator();
+        accountMenu->Add( _( "Sign Out" ), _( "Sign out of your Trace account" ),
+                         ID_ACCOUNT_SIGN_OUT, BITMAPS::exit );
+    }
+    else
+    {
+        accountMenu->Add( _( "Sign In" ), _( "Sign in to your Trace account" ),
+                         ID_ACCOUNT_SIGN_IN, BITMAPS::icon_kicad );
+    }
+
     //-- Preferences menu -----------------------------------------------
     //
     ACTION_MENU* prefsMenu = new ACTION_MENU( false, controlTool );
@@ -246,6 +272,7 @@ void KICAD_MANAGER_FRAME::doReCreateMenuBar()
     menuBar->Append( editMenu,  _( "&Edit" ) );
     menuBar->Append( viewMenu,  _( "&View" ) );
     menuBar->Append( toolsMenu, _( "&Tools" ) );
+    menuBar->Append( accountMenu, _( "&Account" ) );
     menuBar->Append( prefsMenu, _( "&Preferences" ) );
     AddStandardHelpMenu( menuBar );
 

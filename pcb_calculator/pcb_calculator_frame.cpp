@@ -3,6 +3,7 @@
  *
  * Copyright (C) 1992-2015 jean-pierre.charras
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -66,7 +67,7 @@ PCB_CALCULATOR_FRAME::PCB_CALCULATOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                   wxT( "calculator_tools" ), unityScale ),
     m_lastNotebookPage( -1 )
 {
-    m_aboutTitle = _HKI( "KiCad Calculator Tools" );
+    m_aboutTitle = _HKI( "Trace Calculator Tools" );
 
     SHAPE_POLY_SET dummy;   // A ugly trick to force the linker to include
                             // some methods in code and avoid link errors

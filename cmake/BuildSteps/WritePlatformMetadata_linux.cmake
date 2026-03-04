@@ -38,12 +38,12 @@ include( ${KICAD_CMAKE_MODULE_PATH}/KiCadFullVersion.cmake )
 # Create the date of the configure
 string( TIMESTAMP KICAD_CONFIG_TIMESTAMP "%Y-%m-%d" )
 
-# Configure the KiCad metainfo file
-configure_file( ${SRC_PATH}/resources/linux/metainfo/org.kicad.kicad.metainfo.xml.in
-                ${BUILD_PATH}/resources/linux/metainfo/org.kicad.kicad.metainfo.xml.in
+# Configure the Trace metainfo file
+configure_file( ${SRC_PATH}/resources/linux/metainfo/org.trace.trace.metainfo.xml.in
+                ${BUILD_PATH}/resources/linux/metainfo/org.trace.trace.metainfo.xml.in
                 @ONLY )
 
 # Ensure the file was configured successfully
-if( NOT EXISTS ${BUILD_PATH}/resources/linux/metainfo/org.kicad.kicad.metainfo.xml.in )
-    message( FATAL_ERROR "Configuration failed to write file org.kicad.kicad.metainfo.xml.in" )
+if( NOT EXISTS ${BUILD_PATH}/resources/linux/metainfo/org.trace.trace.metainfo.xml.in )
+    message( FATAL_ERROR "Configuration failed to write file org.trace.trace.metainfo.xml.in" )
 endif()

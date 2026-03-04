@@ -27,7 +27,7 @@ DIALOG_UPDATE_NOTICE_BASE::DIALOG_UPDATE_NOTICE_BASE( wxWindow* parent, wxWindow
 	wxBoxSizer* bSizer4;
 	bSizer4 = new wxBoxSizer( wxVERTICAL );
 
-	m_messageLine1 = new wxStaticText( this, wxID_ANY, _("A new version of KiCad is available!"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_messageLine1 = new wxStaticText( this, wxID_ANY, _("A new version of Trace is available!"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_messageLine1->Wrap( -1 );
 	m_messageLine1->SetFont( wxFont( wxNORMAL_FONT->GetPointSize(), wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD, false, wxEmptyString ) );
 

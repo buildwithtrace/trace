@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -1780,6 +1781,16 @@ void SCHEMATIC::CreateDefaultScreens()
 {
     Reset();
 
+    // Generate a unique untitled filename using a static counter
+    // This gives Word-like behavior: "Untitled", "Untitled 1", "Untitled 2", etc.
+    static int s_untitledCounter = 0;
+    wxString untitledName;
+    if( s_untitledCounter == 0 )
+        untitledName = wxT( "Untitled.kicad_sch" );
+    else
+        untitledName = wxString::Format( wxT( "Untitled %d.kicad_sch" ), s_untitledCounter );
+    s_untitledCounter++;
+
     // Create virtual root with niluuid and a screen to hold top-level sheets
     SCH_SHEET* virtualRoot = new SCH_SHEET( this );
     const_cast<KIID&>( virtualRoot->m_Uuid ) = niluuid;
@@ -1791,7 +1802,7 @@ void SCHEMATIC::CreateDefaultScreens()
 
     const_cast<KIID&>( rootSheet->m_Uuid ) = rootScreen->GetUuid();
     rootSheet->SetScreen( rootScreen );
-    rootScreen->SetFileName( "untitled.kicad_sch" );  // Set default filename to avoid conflicts
+    rootScreen->SetFileName( untitledName );  // Use unique untitled filename
     rootScreen->SetPageNumber( wxT( "1" ) );
 
     // Set parent to virtual root

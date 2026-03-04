@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2018 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * @author Jon Evans <jon@craftyjon.com>
  *
@@ -25,6 +26,7 @@
 #include <future>
 #include <vector>
 #include <unordered_map>
+#include <iostream>
 #include <app_monitor.h>
 #include <core/profile.h>
 #include <core/kicad_algo.h>
@@ -158,11 +160,15 @@ bool CONNECTION_SUBGRAPH::ResolveDrivers( bool aCheckMultipleDrivers )
             SCH_PIN* pin = static_cast<SCH_PIN*>( item );
 
             if( !static_cast<SCH_SYMBOL*>( pin->GetParentSymbol() )->IsInNetlist() )
+            {
                 continue;
+            }
         }
 
         if( item_priority >= PRIORITY::HIER_LABEL )
+        {
             strong_drivers.insert( item );
+        }
 
         if( item_priority > highest_priority )
         {
@@ -255,10 +261,71 @@ bool CONNECTION_SUBGRAPH::ResolveDrivers( bool aCheckMultipleDrivers )
         std::sort( candidates.begin(), candidates.end(), candidate_cmp );
 
         m_driver = candidates.front();
+        
+        // Check if the selected driver has an empty name, and if so, try to find a fallback
+        wxString driver_name = GetNameForDriver( m_driver );
+        if( driver_name.IsEmpty() )
+        {
+            // Try to find a driver with a non-empty name, starting with same priority candidates
+            SCH_ITEM* fallback_driver = nullptr;
+            PRIORITY fallback_priority = PRIORITY::INVALID;
+            
+            // First, check other candidates with the same priority
+            for( size_t i = 1; i < candidates.size(); i++ )
+            {
+                wxString candidate_name = GetNameForDriver( candidates[i] );
+                if( !candidate_name.IsEmpty() )
+                {
+                    fallback_driver = candidates[i];
+                    fallback_priority = highest_priority;
+                    break;
+                }
+            }
+            
+            // If no fallback found in same priority, check all drivers for any with a non-empty name
+            if( !fallback_driver )
+            {
+                for( SCH_ITEM* item : m_drivers )
+                {
+                    PRIORITY item_priority = GetDriverPriority( item );
+                    
+                    // Skip if this item is already the selected driver or has invalid priority
+                    if( item == m_driver || item_priority == PRIORITY::INVALID || item_priority == PRIORITY::NONE )
+                        continue;
+                    
+                    // Skip pins not in netlist
+                    if( item_priority == PRIORITY::PIN )
+                    {
+                        SCH_PIN* pin = static_cast<SCH_PIN*>( item );
+                        if( !static_cast<SCH_SYMBOL*>( pin->GetParentSymbol() )->IsInNetlist() )
+                            continue;
+                    }
+                    
+                    wxString candidate_name = GetNameForDriver( item );
+                    if( !candidate_name.IsEmpty() )
+                    {
+                        // Prefer higher priority, but accept any valid name
+                        if( !fallback_driver || item_priority > fallback_priority )
+                        {
+                            fallback_driver = item;
+                            fallback_priority = item_priority;
+                        }
+                    }
+                }
+            }
+            
+            if( fallback_driver )
+            {
+                m_driver = fallback_driver;
+                driver_name = GetNameForDriver( m_driver );
+            }
+        }
     }
 
     if( strong_drivers.size() > 1 )
+    {
         m_multiple_drivers = true;
+    }
 
     // Drop weak drivers
     if( m_strong_driver )
@@ -271,7 +338,9 @@ bool CONNECTION_SUBGRAPH::ResolveDrivers( bool aCheckMultipleDrivers )
     if( m_driver )
     {
         m_driver_connection = m_driver->Connection( &m_sheet );
-        m_driver_connection->ConfigureFromLabel( GetNameForDriver( m_driver ) );
+        // Get the driver name (may have been set during fallback logic above)
+        wxString final_driver_name = GetNameForDriver( m_driver );
+        m_driver_connection->ConfigureFromLabel( final_driver_name );
         m_driver_connection->SetDriver( m_driver );
         m_driver_connection->ClearDirty();
     }
@@ -498,6 +567,7 @@ void CONNECTION_SUBGRAPH::Absorb( CONNECTION_SUBGRAPH* aOther )
 {
     wxCHECK( m_sheet == aOther->m_sheet, /* void */ );
 
+
     for( SCH_ITEM* item : aOther->m_items )
     {
         item->Connection( &m_sheet )->SetSubgraphCode( m_code );
@@ -535,8 +605,13 @@ void CONNECTION_SUBGRAPH::AddItem( SCH_ITEM* aItem )
 {
     m_items.insert( aItem );
 
-    if( aItem->Connection( &m_sheet )->IsDriver() )
+    SCH_CONNECTION* conn = aItem->Connection( &m_sheet );
+    bool is_driver = conn ? conn->IsDriver() : false;
+    
+    if( is_driver )
+    {
         m_drivers.insert( aItem );
+    }
 
     if( aItem->Type() == SCH_SHEET_PIN_T )
         m_hier_pins.insert( static_cast<SCH_SHEET_PIN*>( aItem ) );
@@ -548,14 +623,18 @@ void CONNECTION_SUBGRAPH::AddItem( SCH_ITEM* aItem )
 void CONNECTION_SUBGRAPH::UpdateItemConnections()
 {
     if( !m_driver_connection )
+    {
         return;
+    }
 
     for( SCH_ITEM* item : m_items )
     {
         SCH_CONNECTION* item_conn = item->GetOrInitConnection( m_sheet, m_graph );
 
         if( !item_conn )
+        {
             continue;
+        }
 
         if( ( m_driver_connection->IsBus() && item_conn->IsNet() ) ||
             ( m_driver_connection->IsNet() && item_conn->IsBus() ) )
@@ -1478,6 +1557,7 @@ void CONNECTION_GRAPH::updateItemConnectivity( const SCH_SHEET_PATH& aSheet,
 
 void CONNECTION_GRAPH::buildItemSubGraphs()
 {
+    
     // Recache all bus aliases for later use
     wxCHECK_RET( m_schematic, wxS( "Connection graph cannot be built without schematic pointer" ) );
 
@@ -1601,7 +1681,9 @@ void CONNECTION_GRAPH::resolveAllDrivers()
                         auto pin = static_cast<SCH_PIN*>( item );
 
                         if( pin->GetType() == ELECTRICAL_PINTYPE::PT_NC )
+                        {
                             subgraph->m_no_connect = item;
+                        }
 
                         break;
                     }
@@ -1611,7 +1693,7 @@ void CONNECTION_GRAPH::resolveAllDrivers()
                     }
                 }
 
-                subgraph->ResolveDrivers( true );
+                bool resolved = subgraph->ResolveDrivers( true );
                 subgraph->m_dirty = false;
 
                 return 1;
@@ -2225,11 +2307,8 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
      */
 
     resolveAllDrivers();
-
     collectAllDriverValues();
-
     generateGlobalPowerPinSubGraphs();
-
     generateBusAliasMembers();
 
     PROF_TIMER proc_sub_graph( "ProcessSubGraphs" );
@@ -2239,10 +2318,12 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
         proc_sub_graph.Show();
 
     // Absorbed subgraphs should no longer be considered
+    size_t before_erase = m_driver_subgraphs.size();
     std::erase_if( m_driver_subgraphs, [&]( const CONNECTION_SUBGRAPH* candidate ) -> bool
                                         {
                                             return candidate->m_absorbed;
                                         } );
+    size_t after_erase = m_driver_subgraphs.size();
 
     // Store global subgraphs for later reference
     std::vector<CONNECTION_SUBGRAPH*> global_subgraphs;
@@ -2611,6 +2692,7 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
             netSettings->SetNetclassLabelAssignment( netname, netclasses );
         }
     }
+    
 }
 
 
@@ -3214,6 +3296,13 @@ CONNECTION_SUBGRAPH* CONNECTION_GRAPH::FindFirstSubgraphByName( const wxString& 
 
 CONNECTION_SUBGRAPH* CONNECTION_GRAPH::GetSubgraphForItem( SCH_ITEM* aItem ) const
 {
+    std::string item_desc = aItem->GetTypeDesc().ToStdString();
+    if( aItem->Type() == SCH_LABEL_T || aItem->Type() == SCH_GLOBAL_LABEL_T || aItem->Type() == SCH_HIER_LABEL_T )
+    {
+        SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( aItem );
+        item_desc += " '" + label->GetText().ToStdString() + "'";
+    }
+    
     auto                 it  = m_item_to_subgraph_map.find( aItem );
     CONNECTION_SUBGRAPH* ret = it != m_item_to_subgraph_map.end() ? it->second : nullptr;
 

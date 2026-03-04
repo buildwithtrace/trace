@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2010 Jean-Pierre Charras, jp.charras@wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,6 +27,8 @@
 #include <mail_type.h>
 #include <settings/app_settings.h>
 #include <variant>
+#include <set>
+#include <nlohmann/json_fwd.hpp>
 
 class ACTION_PLUGIN;
 class PCB_SCREEN;
@@ -61,6 +64,23 @@ class ACTION_MENU;
 class TOOL_ACTION;
 class DIALOG_BOARD_SETUP;
 class PCB_DESIGN_BLOCK_PANE;
+class AI_CHAT_PANEL;
+struct DIFF_RESULT;
+
+
+/**
+ * Captures PCB edit state for incremental updates.
+ * Used to preserve selection, viewport, and zoom during AI edits.
+ */
+struct PcbEditState
+{
+    std::set<KIID> selectedItems;   ///< UUIDs of currently selected items
+    VECTOR2D       viewportCenter;  ///< Current viewport center
+    double         zoomLevel;       ///< Current zoom level
+
+    PcbEditState() : zoomLevel( 1.0 ) {}
+};
+
 
 #ifdef KICAD_IPC_API
 class KICAD_API_SERVER;
@@ -93,6 +113,10 @@ public:
     void LoadFootprints( NETLIST& aNetlist, REPORTER& aReporter );
 
     void OnQuit( wxCommandEvent& event );
+
+    void onSignIn( wxCommandEvent& event );
+    void onSignOut( wxCommandEvent& event );
+    void onAuthStateChanged( wxCommandEvent& event );
 
     /**
      * Get if the current board has been modified but not saved.
@@ -309,6 +333,8 @@ public:
 
     void ToggleNetInspector();
 
+    void ToggleAIChat();
+
     void ToggleSearch();
 
     bool IsSearchPaneShown() { return m_auimgr.GetPane( SearchPaneName() ).IsShown(); }
@@ -357,6 +383,55 @@ public:
                          bool aForceFileDialog = false );
      */
     bool OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl = 0 ) override;
+
+    /**
+     * Reload board from file. Used by AI chat panel to refresh board after AI edits.
+     *
+     * @param aFileName The file name to reload from.
+     * @return true if reload was successful, false otherwise.
+     */
+    bool ReloadBoardFromFile( const wxString& aFileName );
+
+    /**
+     * Capture board state before AI edit. Stores copies of all board items by UUID.
+     *
+     * @param aTracePcbPath Path to the trace_pcb file being edited.
+     * @return true if state was captured successfully, false otherwise.
+     */
+    bool CaptureBoardStateForAIEdit( const wxString& aTracePcbPath );
+
+    /**
+     * Compare before and after states and create undo entries for changes.
+     * This should be called after ReloadBoardFromFile() completes.
+     *
+     * @return true if changes were found and undo entries created, false otherwise.
+     */
+    bool CompareAndCreateAIEditUndoEntries();
+
+    /**
+     * Capture current PCB edit state (selection, viewport, zoom).
+     * Used before applying incremental diffs to preserve user context.
+     *
+     * @return Current edit state
+     */
+    PcbEditState CaptureEditState();
+
+    /**
+     * Restore PCB edit state (selection, viewport, zoom).
+     * Used after applying incremental diffs to restore user context.
+     *
+     * @param aState The state to restore
+     */
+    void RestoreEditState( const PcbEditState& aState );
+
+    /**
+     * Apply an incremental diff to the PCB without full reload.
+     * This preserves selection, viewport, and undo stack for simple edits.
+     *
+     * @param aDiff Diff result containing added/removed/modified elements
+     * @return true if diff was applied successfully, false if full reload needed
+     */
+    bool ApplyIncrementalDiff( const DIFF_RESULT& aDiff );
 
     /**
      * Write the board data structures to \a a aFileName.
@@ -834,6 +909,24 @@ public:
     void StartCrossProbeFlash( const std::vector<BOARD_ITEM*>& aItems );
     void OnCrossProbeFlashTimer( wxTimerEvent& aEvent );
 
+    /**
+     * Serialize current DRC violations to JSON.
+     * @return JSON array of DRC violations.
+     */
+    nlohmann::json serializeDrcViolations();
+
+    /**
+     * Run DRC and return violations as JSON.
+     * This triggers a full DRC run and serializes the resulting markers.
+     * @return JSON array of DRC violations.
+     */
+    nlohmann::json runDrcAndSerialize();
+
+    /**
+     * Helper to convert severity enum to string.
+     */
+    std::string severityToString( SEVERITY aSeverity );
+
 private:
     friend struct PCB::IFACE;
     friend class APPEARANCE_CONTROLS;
@@ -856,6 +949,7 @@ private:
 
     std::vector<LIB_ID>    m_designBlockHistoryList;
     PCB_DESIGN_BLOCK_PANE* m_designBlocksPane;
+    AI_CHAT_PANEL*         m_aiChatPanel;
 
     const std::map<std::string, UTF8>* m_importProperties; // Properties used for non-KiCad import.
 
@@ -865,6 +959,10 @@ private:
     BOX2D        m_lastNetnamesViewport;
 
     wxTimer*     m_eventCounterTimer;
+
+    // AI edit undo/redo state tracking
+    std::map<KIID, std::unique_ptr<BOARD_ITEM>>  m_aiEditBeforeState;  ///< Map of UUID to BOARD_ITEM copy for items before AI edit
+    wxString                                    m_aiEditTracePcbBackupPath;  ///< Path to backup of trace_pcb file
 
 #ifdef KICAD_IPC_API
     std::unique_ptr<API_HANDLER_PCB> m_apiHandler;

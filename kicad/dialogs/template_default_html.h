@@ -1,15 +1,15 @@
 /*
- * KiCad Project Template HTML defaults
+ * Trace Project Template HTML defaults
  * Extracted from dialog_template_selector.cpp to allow reuse and to provide
  * a styled fallback page when a template does not supply an info.html.
  */
 
-#ifndef KICAD_TEMPLATE_DEFAULT_HTML_H
-#define KICAD_TEMPLATE_DEFAULT_HTML_H
+#ifndef TRACE_TEMPLATE_DEFAULT_HTML_H
+#define TRACE_TEMPLATE_DEFAULT_HTML_H
 
 #include <wx/string.h>
 
-// Uses _() translation macro which is defined globally in KiCad builds.
+// Uses _() translation macro which is defined globally in Trace builds.
 
 // Welcome (no template selected) page.
 inline wxString GetWelcomeHtml()
@@ -20,7 +20,7 @@ inline wxString GetWelcomeHtml()
         "<head>"
         "<meta charset=\"UTF-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-        "<title>KiCad Project Template Selector</title>"
+        "<title>Trace Project Template Selector</title>"
         "<style>"
         "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #333; min-height: 100vh; box-sizing: border-box; }"
         ".container { max-width: 800px; margin: 0 auto; background: rgba(255, 255, 255, 0.95); border-radius: 12px; padding: 30px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); backdrop-filter: blur(10px); }"
@@ -54,7 +54,7 @@ inline wxString GetWelcomeHtml()
         "<body>"
         "<div class=\"container\">"
         "<div class=\"header\">"
-        "<div class=\"logo\">KiCad 📑</div>"
+        "<div class=\"logo\">Trace 📑</div>"
         "<div class=\"subtitle\">" + _( "Project Template Selector" ) + "</div>"
         "</div>"
         "<div class=\"welcome-card\">"
@@ -111,7 +111,7 @@ inline wxString GetTemplateInfoHtml( const wxString& aTemplateName )
         "<head>"
         "<meta charset=\"UTF-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-        "<title>" + aTemplateName + " - KiCad Template</title>"
+        "<title>" + aTemplateName + " - Trace Template</title>"
         "<style>"
         "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; margin:0; padding:20px; background:#edf2f7; color:#2d3748; }"
         ".container { max-width: 780px; margin:0 auto; background:#ffffff; border-radius:12px; padding:32px; box-shadow:0 6px 24px rgba(0,0,0,0.08); }"
@@ -132,7 +132,7 @@ inline wxString GetTemplateInfoHtml( const wxString& aTemplateName )
         "<div class=\"cta\">"
         "<strong>" + _( "To use this template:" ) + "</strong>"
         "<div class=\"steps\">"
-        "<div class=\"step\"><h3>1. " + _( "Create the project" ) + "</h3><p>" + _( "Click OK below. KiCad will create a new project folder populated with the contents of this template." ) + "</p></div>"
+        "<div class=\"step\"><h3>1. " + _( "Create the project" ) + "</h3><p>" + _( "Click OK below. Trace will create a new project folder populated with the contents of this template." ) + "</p></div>"
         "<div class=\"step\"><h3>2. " + _( "Open schematic and PCB" ) + "</h3><p>" + _( "Use the Project Manager tree or launch Schematic and PCB editors to begin designing." ) + "</p></div>"
         "<div class=\"step\"><h3>3. " + _( "Review libraries & settings" ) + "</h3><p>" + _( "Confirm symbol/footprint libraries, design rules, and board stackup match your needs." ) + "</p></div>"
         "</div>"  // steps
@@ -155,7 +155,7 @@ inline wxString GetNoTemplatesHtml()
         "<head>"
         "<meta charset=\"UTF-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-        "<title>No Templates - KiCad</title>"
+        "<title>No Templates - Trace</title>"
         "<style>"
         "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #333; min-height: 100vh; box-sizing: border-box; }"
         ".container { max-width: 600px; margin: 0 auto; background: rgba(255, 255, 255, 0.98); border-radius: 12px; padding: 40px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15); }"
@@ -198,4 +198,4 @@ inline wxString GetNoTemplatesHtml()
     );
 }
 
-#endif // KICAD_TEMPLATE_DEFAULT_HTML_H
+#endif // TRACE_TEMPLATE_DEFAULT_HTML_H

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -55,7 +56,7 @@ public:
     // Generated library nickname prefix
     wxString m_PcmLibPrefix;
 
-    bool     m_KiCadUpdateCheck;
+    bool     m_TraceUpdateCheck;
     wxString m_lastUpdateCheckTime;
     wxString m_lastReceivedUpdate;
 

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2007-2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -49,6 +50,7 @@
 #include <math/util.h>      // for KiROUND
 #include <pcbnew_settings.h>
 #include <string_utils.h>
+#include <richio.h>
 
 using namespace DSN;
 
@@ -596,6 +598,21 @@ bool ImportSpecctraSession( BOARD* aBoard, const wxString& fullFileName )
     LOCALE_IO   toggle;
 
     db.LoadSESSION( fullFileName );
+    db.FromSESSION( aBoard );
+
+    aBoard->GetConnectivity()->ClearRatsnest();
+    aBoard->BuildConnectivity();
+
+    return true;
+}
+
+
+bool ImportSpecctraSessionFromString( BOARD* aBoard, const std::string& aSesContent )
+{
+    SPECCTRA_DB db;
+    LOCALE_IO   toggle;
+
+    db.LoadSESSIONFromString( aSesContent );
     db.FromSESSION( aBoard );
 
     aBoard->GetConnectivity()->ClearRatsnest();

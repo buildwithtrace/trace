@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2015 Mark Roszko <mark.roszko@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -164,7 +165,7 @@ KICAD_CURL_EASY::KICAD_CURL_EASY() :
         curl_easy_setopt( m_CURL, CURLOPT_VERBOSE, 1L );
     }
 
-    wxString application( wxS( "KiCad" ) );
+    wxString application( wxS( "Trace" ) );
     wxString version( GetBuildVersion() );
     wxString platform = wxS( "(" ) + wxGetOsDescription() + wxS( ";" ) + GetPlatformGetBitnessName();
 
@@ -180,7 +181,7 @@ KICAD_CURL_EASY::KICAD_CURL_EASY() :
 
     platform << wxS( ")" );
 
-    wxString user_agent = wxS( "KiCad/" ) + version + wxS( " " ) + platform + wxS( " " ) + application;
+    wxString user_agent = wxS( "Trace/" ) + version + wxS( " " ) + platform + wxS( " " ) + application;
 
     user_agent << wxS( "/" ) << GetBuildDate();
     setOption<const char*>( CURLOPT_USERAGENT, user_agent.ToStdString().c_str() );

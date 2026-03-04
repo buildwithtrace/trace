@@ -1,12 +1,12 @@
 To run these tests manually, you may need to set some or all of
 the following environment variables:
 
-# Replace with the path to kicad-cli in your build environment
-KICAD_CLI=/path/to/kicad/cmake-build-debug/kicad/KiCad.app/Contents/MacOS/kicad-cli
+# Replace with the path to trace-cli in your build environment
+TRACE_CLI=/path/to/kicad/cmake-build-debug/kicad/Trace.app/Contents/MacOS/trace-cli
 KICAD_RUN_FROM_BUILD_DIR=1
 
 On macOS you will also need to take the following steps if you want to
-test kicad-cli from the build dir:
+test trace-cli from the build dir:
 
 1) Symlink the contents of the folder:
 
@@ -14,9 +14,9 @@ test kicad-cli from the build dir:
 
    from your kicad-mac-builder folder into the folder:
 
-   /path/to/kicad/cmake-build-debug/kicad/KiCad.app/Contents/Frameworks/Python.framework/Versions/3.9/
+   /path/to/kicad/cmake-build-debug/kicad/Trace.app/Contents/Frameworks/Python.framework/Versions/3.9/
 
-   inside your KiCad build directory.
+   inside your Trace build directory.
 
 2) Set the following environment variable so that the Python dll is found:
 

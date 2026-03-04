@@ -37,12 +37,6 @@
 enum class IMAGES {
     INFORMATION,
     VERSION,
-    DEVELOPERS,
-    DOCWRITERS,
-    LIBRARIANS,
-    ARTISTS,
-    TRANSLATORS,
-    PACKAGERS,
     LICENSE
 };
 

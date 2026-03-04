@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2019-2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -45,6 +46,7 @@
 #include <netlist_exporters/netlist_exporter_spice.h>
 #include <paths.h>
 #include <pgm_base.h>
+#include <gestfich.h>
 #include <project/project_file.h>
 #include <project/net_settings.h>
 #include <project_sch.h>
@@ -2680,6 +2682,13 @@ int SCH_EDITOR_CONTROL::ToggleRemoteSymbolPanel( const TOOL_EVENT& aEvent )
 }
 
 
+int SCH_EDITOR_CONTROL::ToggleAIChat( const TOOL_EVENT& aEvent )
+{
+    getEditFrame<SCH_EDIT_FRAME>()->ToggleAIChat();
+    return 0;
+}
+
+
 int SCH_EDITOR_CONTROL::ToggleHiddenPins( const TOOL_EVENT& aEvent )
 {
     EESCHEMA_SETTINGS* cfg = m_frame->eeconfig();
@@ -3199,6 +3208,7 @@ void SCH_EDITOR_CONTROL::setTransitions()
     Go( &SCH_EDITOR_CONTROL::ToggleLibraryTree,       SCH_ACTIONS::showDesignBlockPanel.MakeEvent() );
     Go( &SCH_EDITOR_CONTROL::ToggleLibraryTree,       SCH_ACTIONS::showDesignBlockPanel.MakeEvent() );
     Go( &SCH_EDITOR_CONTROL::ToggleRemoteSymbolPanel, SCH_ACTIONS::showRemoteSymbolPanel.MakeEvent() );
+    Go( &SCH_EDITOR_CONTROL::ToggleAIChat,            SCH_ACTIONS::showAIChat.MakeEvent() );
 
     Go( &SCH_EDITOR_CONTROL::ToggleHiddenPins,        SCH_ACTIONS::toggleHiddenPins.MakeEvent() );
     Go( &SCH_EDITOR_CONTROL::ToggleHiddenFields,      SCH_ACTIONS::toggleHiddenFields.MakeEvent() );

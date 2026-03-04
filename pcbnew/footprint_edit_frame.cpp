@@ -5,6 +5,7 @@
  * Copyright (C) 2015 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright (C) 2015-2016 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,6 +37,7 @@
 #include "tools/pcb_selection_tool.h"
 #include <python/scripting/pcb_scripting_tool.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
+#include <auth/auth_manager.h>
 #include <bitmaps.h>
 #include <board.h>
 #include <footprint.h>
@@ -95,6 +97,10 @@ BEGIN_EVENT_TABLE( FOOTPRINT_EDIT_FRAME, PCB_BASE_FRAME )
     // Drop files event
     EVT_DROP_FILES( FOOTPRINT_EDIT_FRAME::OnDropFiles )
 
+    // Account menu
+    EVT_MENU( ID_ACCOUNT_SIGN_IN_PCB, FOOTPRINT_EDIT_FRAME::onSignIn )
+    EVT_MENU( ID_ACCOUNT_SIGN_OUT_PCB, FOOTPRINT_EDIT_FRAME::onSignOut )
+
 END_EVENT_TABLE()
 
 
@@ -105,7 +111,7 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_show_layer_manager_tools( true )
 {
     m_showBorderAndTitleBlock = false;   // true to show the frame references
-    m_aboutTitle = _HKI( "KiCad Footprint Editor" );
+    m_aboutTitle = _HKI( "Trace Footprint Editor" );
     m_editorSettings = nullptr;
 
     // Give an icon
@@ -173,6 +179,9 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     ReCreateMenuBar();
 
+    // Listen for auth state changes to update the Account menu
+    AUTH_MANAGER::Instance().Bind( EVT_AUTH_STATE_CHANGED, &FOOTPRINT_EDIT_FRAME::onAuthStateChanged, this );
+
     m_selectionFilterPanel = new PANEL_SELECTION_FILTER( this );
     m_appearancePanel = new APPEARANCE_CONTROLS( this, GetCanvas(), true );
     m_propertiesPanel = new PCB_PROPERTIES_PANEL( this, this );
@@ -221,7 +230,7 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                       .Top().Layer( 6 ) );
 
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     // Columns; layers 1 - 3
     m_auimgr.AddPane( m_treePane, EDA_PANE().Palette().Name( "Footprints" )
@@ -326,6 +335,9 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
 FOOTPRINT_EDIT_FRAME::~FOOTPRINT_EDIT_FRAME()
 {
+    // Unbind auth state change handler
+    AUTH_MANAGER::Instance().Unbind( EVT_AUTH_STATE_CHANGED, &FOOTPRINT_EDIT_FRAME::onAuthStateChanged, this );
+
     // Shutdown all running tools
     if( m_toolManager )
         m_toolManager->ShutdownAllTools();
@@ -1560,4 +1572,26 @@ void FOOTPRINT_EDIT_FRAME::OnSaveFootprintAsPng( wxCommandEvent& event )
     // to refresh the screen before creating the PNG or JPEG image from screen
     wxYield();
     this->SaveCanvasImageToFile( dlg.GetPath(), BITMAP_TYPE::PNG );
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onSignIn( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().StartLogin();
+    doReCreateMenuBar();
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onSignOut( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().SignOut();
+    doReCreateMenuBar();
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onAuthStateChanged( wxCommandEvent& event )
+{
+    // Auth state changed (e.g., user signed in via browser callback)
+    // Update the Account menu to reflect the new state
+    doReCreateMenuBar();
 }

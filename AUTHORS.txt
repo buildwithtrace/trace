@@ -1,3 +1,11 @@
+# KiCad Authors and Contributors
+#
+# This file lists the original KiCad contributors whose work is included in Trace.
+# Trace is a fork of KiCad - see https://gitlab.com/kicad/code/kicad for the original project.
+# For Trace-specific contributors, see TRACE_AUTHORS.txt.
+#
+# Original source: https://gitlab.com/kicad/code/kicad/-/blob/master/AUTHORS.txt
+
  김랑기
  킴슨김랑기
  Camille 019

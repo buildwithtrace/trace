@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -71,7 +72,7 @@ PANEL_SCH_DATA_SOURCES::PANEL_SCH_DATA_SOURCES( wxWindow* aParent, EDA_BASE_FRAM
 
 bool PANEL_SCH_DATA_SOURCES::TransferDataToWindow()
 {
-    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
         m_pcm->SetRepositoryList( cfg->m_PcmRepositories );
 
     populateInstalledSources();

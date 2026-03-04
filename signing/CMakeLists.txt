@@ -2,12 +2,36 @@ if (APPLE AND KICAD_OSX_CODESIGN )
     install( CODE "
         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/SignMacOS.cmake )
 
-        # InstallMacOS.cmake pulls in all the dynamic dependencies of Python into the Python framework dir.
-        # We don't want this because it makes signing fail, and they are not needed either.
-        # I can't figure out how to keep it from happening, so for now, just clean them up
-        message( STATUS \"Cleaning up Python.framework...\" )
-        file( GLOB _PYTHON_TO_REMOVE ${OSX_BUNDLE_INSTALL_LIB_DIR}/Python.framework/* )
-        file( REMOVE \${_PYTHON_TO_REMOVE} )
+        # Clean up any stray dylibs that got copied into Python.framework root (not the Versions subdir)
+        message( STATUS \"Cleaning up Python.framework stray files...\" )
+        file( GLOB _PYTHON_STRAY_DYLIBS ${OSX_BUNDLE_INSTALL_LIB_DIR}/Python.framework/*.dylib )
+        if( _PYTHON_STRAY_DYLIBS )
+            file( REMOVE \${_PYTHON_STRAY_DYLIBS} )
+        endif()
+
+        # Ensure Python.framework has valid Versions/Current symlink pointing to complete version
+        set( _PYTHON_VERSIONS_DIR \"${OSX_BUNDLE_INSTALL_LIB_DIR}/Python.framework/Versions\" )
+        set( _NEED_CURRENT_SYMLINK FALSE )
+        if( NOT EXISTS \"\${_PYTHON_VERSIONS_DIR}/Current\" )
+            set( _NEED_CURRENT_SYMLINK TRUE )
+        else()
+            # Check if Current points to a complete Python (has Python binary)
+            if( NOT EXISTS \"\${_PYTHON_VERSIONS_DIR}/Current/Python\" )
+                set( _NEED_CURRENT_SYMLINK TRUE )
+            endif()
+        endif()
+        if( _NEED_CURRENT_SYMLINK )
+            # Find version directory that has the Python binary (complete framework)
+            file( GLOB _PYTHON_VERSION_DIRS \"\${_PYTHON_VERSIONS_DIR}/3.*\" )
+            foreach( _VERSION_DIR \${_PYTHON_VERSION_DIRS} )
+                if( EXISTS \"\${_VERSION_DIR}/Python\" )
+                    get_filename_component( _VERSION_NAME \${_VERSION_DIR} NAME )
+                    message( STATUS \"Creating Python.framework Versions/Current -> \${_VERSION_NAME}\" )
+                    execute_process( COMMAND ln -sf \${_VERSION_NAME} \"\${_PYTHON_VERSIONS_DIR}/Current\" )
+                    break()
+                endif()
+            endforeach()
+        endif()
 
         message( STATUS \"Signing bundles...\" )
         sign_kicad_bundle( \"${OSX_BUNDLE_INSTALL_DIR}\" \"\${KICAD_OSX_SIGNING_ID}\" \"\${KICAD_OSX_SIGNING_USE_SECURE_TIMESTAMP}\" \"\${KICAD_OSX_SIGNING_USE_HARDENED_RUNTIME}\" \"\${KICAD_OSX_SIGNING_ENTITLEMENTS_FILE}\" )

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 1992-2010 jean-pierre.charras
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -152,7 +153,7 @@ BITMAP2CMP_FRAME::BITMAP2CMP_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_panel( nullptr ),
         m_statusBar( nullptr )
 {
-    m_aboutTitle = _HKI( "KiCad Image Converter" );
+    m_aboutTitle = _HKI( "Trace Image Converter" );
 
     // Give an icon
     wxIcon icon;

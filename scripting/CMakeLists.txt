@@ -101,3 +101,135 @@ install( DIRECTORY ${PROJECT_SOURCE_DIR}/scripting/kicad_pyshell/
     DESTINATION ${KICAD_DATA}/scripting/kicad_pyshell
     FILE_PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
 )
+
+# Note: ai_local_client.py has been removed - replaced by AI_BACKEND_CLIENT C++ class
+# Backend communication is now handled natively in C++ via ai_backend_client.cpp
+
+# Copy requirements.txt for reference
+configure_file( ${PROJECT_SOURCE_DIR}/scripts/requirements.txt 
+               ${CMAKE_BINARY_DIR}/scripting/requirements.txt 
+               COPYONLY )
+
+# Copy trace module to build directory for development
+file( COPY ${PROJECT_SOURCE_DIR}/trace/
+      DESTINATION ${CMAKE_BINARY_DIR}/scripting/trace/
+      FILES_MATCHING PATTERN "*.py"
+      PATTERN ".gitignore" EXCLUDE
+      PATTERN "__pycache__" EXCLUDE
+      PATTERN "*.pyc" EXCLUDE )
+
+# Enhanced Python management for Windows vcpkg compatibility
+if( WIN32 AND VCPKG_INSTALLED_DIR )
+    set( VCPKG_PYTHON_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/python3" )
+    
+    # Check if vcpkg Python exists and lacks pip
+    if( EXISTS "${VCPKG_PYTHON_DIR}/python.exe" )
+        message( STATUS "Found vcpkg Python at: ${VCPKG_PYTHON_DIR}" )
+        
+        # Pre-install Python packages during build to avoid runtime dependency issues
+        # Find system Python with pip for package installation
+        find_program( SYSTEM_PYTHON_WITH_PIP 
+            NAMES python python3 python.exe python3.exe
+            HINTS "C:/Python*" "$ENV{LOCALAPPDATA}/Programs/Python/Python*" 
+                  "$ENV{APPDATA}/Python/Python*" "$ENV{PROGRAMFILES}/Python*"
+        )
+        
+        if( SYSTEM_PYTHON_WITH_PIP )
+            # Test if system Python has pip
+            execute_process(
+                COMMAND "${SYSTEM_PYTHON_WITH_PIP}" -m pip --version
+                RESULT_VARIABLE PIP_TEST_RESULT
+                OUTPUT_QUIET ERROR_QUIET
+            )
+            
+            if( PIP_TEST_RESULT EQUAL 0 )
+                message( STATUS "System Python with pip found: ${SYSTEM_PYTHON_WITH_PIP}" )
+                
+                # Install packages to a local directory that we can bundle
+                set( LOCAL_PACKAGES_DIR "${CMAKE_BINARY_DIR}/python_packages" )
+                
+                execute_process(
+                    COMMAND "${SYSTEM_PYTHON_WITH_PIP}" -m pip install 
+                        --target "${LOCAL_PACKAGES_DIR}"
+                        --quiet python-dotenv httpx httpx-sse
+                    RESULT_VARIABLE BUNDLE_INSTALL_RESULT
+                    OUTPUT_QUIET ERROR_QUIET
+                )
+                
+                if( BUNDLE_INSTALL_RESULT EQUAL 0 )
+                    message( STATUS "Pre-installed Python packages to: ${LOCAL_PACKAGES_DIR}" )
+                    
+                    # Install the bundled packages
+                    install( DIRECTORY "${LOCAL_PACKAGES_DIR}/"
+                        DESTINATION ${KICAD_DATA}/scripting/python_packages
+                        FILES_MATCHING 
+                        PATTERN "*.py"
+                        PATTERN "*.pyd" 
+                        PATTERN "*.dll"
+                        PATTERN "__pycache__" EXCLUDE
+                        PATTERN "*.pyc" EXCLUDE
+                    )
+                else()
+                    message( WARNING "Failed to pre-install Python packages for bundling" )
+                endif()
+            endif()
+        endif()
+    endif()
+endif()
+
+install( CODE "
+    message( STATUS \"Installing Python dependencies for local client...\" )
+    
+    # Try to install dependencies with available Python
+    set( PYTHON_CANDIDATES \"${PYTHON_EXECUTABLE}\" )
+    if( WIN32 )
+        list( APPEND PYTHON_CANDIDATES \"python\" \"python3\" )
+    endif()
+    
+    set( PIP_INSTALL_SUCCESS FALSE )
+    foreach( PYTHON_CMD IN LISTS PYTHON_CANDIDATES )
+        execute_process(
+            COMMAND \${PYTHON_CMD} -m pip --version
+            RESULT_VARIABLE PIP_CHECK_RESULT
+            OUTPUT_QUIET ERROR_QUIET
+        )
+        
+        if( PIP_CHECK_RESULT EQUAL 0 )
+            execute_process(
+                COMMAND \${PYTHON_CMD} -m pip install --quiet python-dotenv httpx httpx-sse
+                RESULT_VARIABLE PIP_INSTALL_RESULT
+                OUTPUT_QUIET ERROR_QUIET
+            )
+            
+            if( PIP_INSTALL_RESULT EQUAL 0 )
+                message( STATUS \"  ✓ Installed python-dotenv, httpx, httpx-sse using \${PYTHON_CMD}\" )
+                set( PIP_INSTALL_SUCCESS TRUE )
+                break()
+            endif()
+        endif()
+    endforeach()
+    
+    if( NOT PIP_INSTALL_SUCCESS )
+        message( WARNING \"Failed to install Python dependencies - AI features may require manual dependency installation\" )
+        message( STATUS \"  Required packages: python-dotenv, httpx, httpx-sse\" )
+        message( STATUS \"  Install with: pip install python-dotenv httpx httpx-sse\" )
+    endif()
+" )
+
+# Trace converter installation (for AI tool execution - trace to KiCad format conversion)
+install( DIRECTORY ${PROJECT_SOURCE_DIR}/trace/
+    DESTINATION ${KICAD_DATA}/scripting/trace
+    FILE_PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
+    PATTERN ".gitignore" EXCLUDE
+    PATTERN "__pycache__" EXCLUDE
+    PATTERN "*.pyc" EXCLUDE
+    PATTERN "*.log" EXCLUDE
+    PATTERN "output.*" EXCLUDE
+)
+
+# TODO: Python bytecode compilation (.pyc) for distribution
+# Currently disabled due to codesigning/install order issues
+# The compiled .pyc files are being deleted during the install/signing process
+# For now, source .py files are shipped with path validation security in place
+
+

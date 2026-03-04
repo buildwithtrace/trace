@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -42,7 +43,7 @@ void PATHS::getUserDocumentPath( wxFileName& aPath )
         aPath.AssignDir( KIPLATFORM::ENV::GetDocumentsPath() );
 
     aPath.AppendDir( KICAD_PATH_STR );
-    aPath.AppendDir( GetMajorMinorVersion().ToStdString() );
+    aPath.AppendDir( GetTraceMajorMinorVersion().ToStdString() );
 }
 
 
@@ -219,7 +220,7 @@ wxString PATHS::GetStockDataPath( bool aRespectRunFromBuildDir )
 #if defined( __WXMAC__ )
         path = GetOSXKicadDataDir();
 #elif defined( __WXMSW__ )
-        path = getWindowsKiCadRoot() + wxT( "share/kicad" );
+        path = getWindowsKiCadRoot() + wxT( "share/trace" );
 #else
         path = wxString::FromUTF8Unchecked( KICAD_DATA );
 #endif
@@ -246,7 +247,9 @@ wxString PATHS::GetStockEDALibraryPath()
 #if defined( __WXMAC__ )
     path = GetOSXKicadMachineDataDir();
 #elif defined( __WXMSW__ )
-    path = GetStockDataPath( false );
+    // Windows: Use Trace's bundled libraries at share/trace
+    // This matches where CMake installs libraries via FetchContent
+    path = getWindowsKiCadRoot() + wxT( "share/trace" );
 #else
     path = wxString::FromUTF8Unchecked( KICAD_LIBRARY_DATA );
 #endif
@@ -309,7 +312,7 @@ wxString PATHS::GetStockTemplatesPath()
 {
     wxString path;
 
-    path = GetStockEDALibraryPath() + wxT( "/template" );
+    path = GetStockDataPath() + wxT( "/template" );
 
     return path;
 }
@@ -432,7 +435,7 @@ wxString PATHS::GetUserCachePath()
     }
 
     tmp.AppendDir( KICAD_PATH_STR );
-    tmp.AppendDir( GetMajorMinorVersion().ToStdString() );
+    tmp.AppendDir( GetTraceMajorMinorVersion().ToStdString() );
 
     return tmp.GetPathWithSep();
 }
@@ -445,7 +448,7 @@ wxString PATHS::GetDocumentationPath()
 #if defined( __WXMAC__ )
     path = GetOSXKicadDataDir();
 #elif defined( __WXMSW__ )
-    path = getWindowsKiCadRoot() + wxT( "share/doc/kicad" );
+    path = getWindowsKiCadRoot() + wxT( "share/doc/trace" );
 #else
     path = wxString::FromUTF8Unchecked( KICAD_DOCS );
 #endif
@@ -458,7 +461,7 @@ wxString PATHS::GetInstanceCheckerPath()
 {
     wxFileName path;
     path.AssignDir( wxStandardPaths::Get().GetTempDir() );
-    path.AppendDir( "org.kicad.kicad" );
+    path.AppendDir( "org.trace.trace" );
     path.AppendDir( "instances" );
     return path.GetPathWithSep();
 }
@@ -522,10 +525,10 @@ void PATHS::EnsureUserPathsExist()
     if( !tmp.DirExists() )
     {
         wxString msg = wxString::Format(
-                _( "KiCad was unable to use '%s'.\n"
+                _( "Trace was unable to use '%s'.\n"
                    "\n"
                    "1. Disable 'Controlled folder access' in Windows settings or Group Policy\n"
-                   "2. Make sure no other antivirus software interferes with KiCad\n"
+                   "2. Make sure no other antivirus software interferes with Trace\n"
                    "3. Make sure you have correct permissions set up" ),
                 tmp.GetPath() );
 
@@ -543,9 +546,9 @@ wxString PATHS::GetOSXKicadUserDataDir()
     wxFileName udir( wxStandardPaths::Get().GetUserDataDir(), wxEmptyString );
 
     // Since appname is different if started via launcher or standalone binary
-    // map all to "kicad" here
+    // map all to "trace" here
     udir.RemoveLastDir();
-    udir.AppendDir(  wxT( "kicad" ) );
+    udir.AppendDir(  wxT( "trace" ) );
 
     return udir.GetPath();
 }
@@ -640,7 +643,7 @@ wxString PATHS::CalculateUserSettingsPath( bool aIncludeVer, bool aUseEnv )
     }
 
     if( aIncludeVer )
-        cfgpath.AppendDir( GetMajorMinorVersion().ToStdString() );
+        cfgpath.AppendDir( GetTraceMajorMinorVersion().ToStdString() );
 
     return cfgpath.GetPath();
 }
@@ -656,14 +659,14 @@ const wxString& PATHS::GetExecutablePath()
 
 #ifdef __WXMAC__
         // On OSX GetExecutablePath() will always point to main
-        // bundle directory, e.g., /Applications/kicad.app/
+        // bundle directory, e.g., /Applications/Trace.app/
 
         wxFileName fn( bin_dir );
         WX_FILENAME::ResolvePossibleSymlinks( fn );
 
-        if( fn.GetName() == wxT( "kicad" ) || fn.GetName() == wxT( "kicad-cli" ) )
+        if( fn.GetName() == wxT( "trace" ) || fn.GetName() == wxT( "kicad-cli" ) )
         {
-            // kicad launcher, so just remove the Contents/MacOS part
+            // trace launcher, so just remove the Contents/MacOS part
             fn.RemoveLastDir();
             fn.RemoveLastDir();
         }

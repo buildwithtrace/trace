@@ -6,6 +6,7 @@
  * Copyright (C) 2011 Wayne Stambaugh <stambaughw@gmail.com>
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,6 +28,7 @@
 
 #include <iterator>
 #include <algorithm>
+#include <iostream>
 
 #include <wx/log.h>
 
@@ -1043,12 +1045,32 @@ bool BOARD::IsFootprintLayerVisible( PCB_LAYER_ID aLayer ) const
 
 BOARD_DESIGN_SETTINGS& BOARD::GetDesignSettings() const
 {
+    // Defensive check: m_designSettings should always be initialized in the constructor,
+    // but if it's null, create a default one to prevent crashes
+    if( !m_designSettings )
+    {
+        // This should never happen in normal operation, but we handle it defensively
+        std::cerr << "ERROR: BOARD::GetDesignSettings() - m_designSettings is null! Creating default." << std::endl;
+        
+        // Cast away const to fix the issue - this is safe because we're initializing
+        // a member that should have been initialized in the constructor
+        BOARD* nonConstThis = const_cast<BOARD*>( this );
+        nonConstThis->m_designSettings.reset( new BOARD_DESIGN_SETTINGS( nullptr, "board.design_settings" ) );
+    }
+    
     return *m_designSettings;
 }
 
 
 void BOARD::SetDesignSettings( const BOARD_DESIGN_SETTINGS& aSettings )
 {
+    // Defensive check: m_designSettings should always be initialized
+    if( !m_designSettings )
+    {
+        std::cerr << "ERROR: BOARD::SetDesignSettings() - m_designSettings is null! Creating default." << std::endl;
+        m_designSettings.reset( new BOARD_DESIGN_SETTINGS( nullptr, "board.design_settings" ) );
+    }
+    
     *m_designSettings = aSettings;
 }
 

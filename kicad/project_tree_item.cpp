@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -36,6 +37,7 @@
 #include <kiway.h>
 #include <tool/tool_manager.h>
 #include <tools/kicad_manager_actions.h>
+#include <wildcards_and_files_ext.h>
 #include <wx/msgdlg.h>
 
 #include "kicad_manager_frame.h"
@@ -80,8 +82,10 @@ bool PROJECT_TREE_ITEM::CanDelete() const
         || m_type == TREE_FILE_TYPE::JSON_PROJECT
         || m_type == TREE_FILE_TYPE::LEGACY_SCHEMATIC
         || m_type == TREE_FILE_TYPE::SEXPR_SCHEMATIC
+        || m_type == TREE_FILE_TYPE::TRACE_SCHEMATIC
         || m_type == TREE_FILE_TYPE::LEGACY_PCB
         || m_type == TREE_FILE_TYPE::SEXPR_PCB
+        || m_type == TREE_FILE_TYPE::TRACE_PCB
         || m_type == TREE_FILE_TYPE::DRAWING_SHEET
         || m_type == TREE_FILE_TYPE::FOOTPRINT_FILE
         || m_type == TREE_FILE_TYPE::SCHEMATIC_LIBFILE
@@ -212,6 +216,33 @@ void PROJECT_TREE_ITEM::Activate( PROJECT_TREE_PANE* aTreePrjFrame )
 
         break;
 
+    case TREE_FILE_TYPE::TRACE_SCHEMATIC:
+        // Convert trace_sch path to kicad_sch and open it
+        {
+            wxFileName kicadSchFile( fullFileName );
+            kicadSchFile.SetExt( FILEEXT::KiCadSchematicFileExtension );
+            wxString kicadSchPath = kicadSchFile.GetFullPath();
+            
+            // If kicad_sch doesn't exist, convert from trace_sch
+            if( !wxFileName::FileExists( kicadSchPath ) && wxFileName::FileExists( fullFileName ) )
+            {
+                if( !ConvertTraceSchToKicadSch( fullFileName ) )
+                {
+                    wxMessageBox( wxString::Format( _( "Failed to convert %s to %s" ),
+                                                    fullFileName, kicadSchPath ),
+                                 _( "Conversion Error" ), wxOK | wxICON_ERROR, frame );
+                    break;
+                }
+            }
+            
+            // Open the corresponding kicad_sch file
+            if( kicadSchPath == frame->SchFileName() || kicadSchPath == frame->SchLegacyFileName() )
+                toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editSchematic );
+            else
+                toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherSch, &kicadSchPath );
+        }
+        break;
+
     case TREE_FILE_TYPE::LEGACY_PCB:
     case TREE_FILE_TYPE::SEXPR_PCB:
         // Boards not part of the project are opened in a separate process.
@@ -220,6 +251,21 @@ void PROJECT_TREE_ITEM::Activate( PROJECT_TREE_PANE* aTreePrjFrame )
         else
             toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherPCB, &fullFileName );
 
+        break;
+
+    case TREE_FILE_TYPE::TRACE_PCB:
+        // Convert trace_pcb path to kicad_pcb and open it
+        {
+            wxFileName kicadPcbFile( fullFileName );
+            kicadPcbFile.SetExt( FILEEXT::KiCadPcbFileExtension );
+            wxString kicadPcbPath = kicadPcbFile.GetFullPath();
+            
+            // Open the corresponding kicad_pcb file
+            if( kicadPcbPath == frame->PcbFileName() || kicadPcbPath == frame->PcbLegacyFileName() )
+                toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editPCB );
+            else
+                toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherPCB, &kicadPcbPath );
+        }
         break;
 
     case TREE_FILE_TYPE::GERBER:

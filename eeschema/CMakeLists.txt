@@ -280,6 +280,7 @@ set( EESCHEMA_SIM_SRCS
     )
 
 set( EESCHEMA_WIDGETS
+    widgets/ai_chat_panel.cpp
     widgets/hierarchy_pane.cpp
     widgets/panel_sch_selection_filter_base.cpp
     widgets/panel_sch_selection_filter.cpp
@@ -708,12 +709,16 @@ if( APPLE )
     # bundle libngspice and codemodels
     get_filename_component( ABS_LIBNGSPICE ${NGSPICE_LIBRARY} ABSOLUTE )
     get_filename_component( LIBNGSPICE_PATH ${ABS_LIBNGSPICE} DIRECTORY )
+    # Resolve symlink to get actual library file
+    get_filename_component( REAL_LIBNGSPICE ${ABS_LIBNGSPICE} REALPATH )
 
-    install( DIRECTORY "${LIBNGSPICE_PATH}/"
-            DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim"
-            FILES_MATCHING PATTERN "*.dylib")
-    install( DIRECTORY "${LIBNGSPICE_PATH}/ngspice"
-             DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim" )
+    # Install the actual libngspice dylib (resolved from symlink)
+    install( FILES "${REAL_LIBNGSPICE}" DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim" RENAME "libngspice.dylib" )
+
+    # Install ngspice code models directory (resolve symlink to actual directory)
+    get_filename_component( REAL_NGSPICE_DIR "${LIBNGSPICE_PATH}/ngspice" REALPATH )
+    install( DIRECTORY "${REAL_NGSPICE_DIR}/"
+             DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim/ngspice" )
 
     install( CODE [[
         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )

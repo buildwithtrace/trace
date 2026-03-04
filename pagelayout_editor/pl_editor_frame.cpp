@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Jean-Pierre Charras, jp.charras at wanadoo.fr
  *
  * This program is free software; you can redistribute it and/or
@@ -102,7 +103,7 @@ PL_EDITOR_FRAME::PL_EDITOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_showBorderAndTitleBlock   = true; // true for reference drawings.
     DS_DATA_MODEL::GetTheInstance().m_EditMode = true;
-    m_aboutTitle = _HKI( "KiCad Drawing Sheet Editor" );
+    m_aboutTitle = _HKI( "Trace Drawing Sheet Editor" );
 
     // Give an icon
     wxIcon icon;
@@ -189,7 +190,7 @@ PL_EDITOR_FRAME::PL_EDITOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" )
                       .Left().Layer( 3 ) );
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     // Columns; layers 1 - 3
     m_auimgr.AddPane( m_tbRight, EDA_PANE().VToolbar().Name( "RightToolbar" )

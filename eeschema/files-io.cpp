@@ -5,6 +5,7 @@
  * Copyright (C) 2013 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright (C) 2013-2023 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -53,8 +54,10 @@
 #include <sch_io/kicad_legacy/sch_io_kicad_legacy.h>
 #include <sch_file_versions.h>
 #include <sch_line.h>
+#include <sch_screen.h>
 #include <sch_sheet.h>
 #include <sch_sheet_path.h>
+#include <sch_symbol.h>
 #include <schematic.h>
 #include <settings/settings_manager.h>
 #include <sim/simulator_frame.h>
@@ -70,6 +73,7 @@
 #include <drawing_sheet/ds_data_model.h>
 #include <wx/app.h>
 #include <wx/ffile.h>
+#include <wx/file.h>
 #include <wx/filedlg.h>
 #include <wx/log.h>
 #include <wx/richmsgdlg.h>
@@ -80,6 +84,7 @@
 #include <wx_filename.h>  // For ::ResolvePossibleSymlinks
 #include <widgets/wx_progress_reporters.h>
 #include <widgets/wx_html_report_box.h>
+#include <gestfich.h>
 
 #include <kiplatform/io.h>
 
@@ -107,6 +112,15 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     wxString   fullFileName( aFileSet[0] );
     wxFileName wx_filename( fullFileName );
+    
+    // Convert trace_sch files to kicad_sch before processing
+    if( wx_filename.GetExt() == FILEEXT::TraceSchematicFileExtension )
+    {
+        wx_filename.SetExt( FILEEXT::KiCadSchematicFileExtension );
+        fullFileName = wx_filename.GetFullPath();
+        wx_filename = wxFileName( fullFileName );
+    }
+    
     Kiway().LocalHistory().Init( wx_filename.GetPath() );
 
     // We insist on caller sending us an absolute path, if it does not, we say it's a bug.
@@ -133,17 +147,38 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
     wxFileName pro = fullFileName;
     pro.SetExt( FILEEXT::ProjectFileExtension );
 
+    // If kicad_sch doesn't exist but trace_sch does, convert it automatically
+    wxFileName fullFile( fullFileName );
+    if( !wxFileName::IsFileReadable( fullFileName ) && 
+        fullFile.GetExt() == FILEEXT::KiCadSchematicFileExtension )
+    {
+        wxFileName traceSchFile( fullFile );
+        traceSchFile.SetExt( FILEEXT::TraceSchematicFileExtension );
+        wxString traceSchPath = traceSchFile.GetFullPath();
+        
+        if( wxFileName::FileExists( traceSchPath ) )
+        {
+            // Convert trace_sch to kicad_sch automatically
+            if( ConvertTraceSchToKicadSch( traceSchPath ) )
+            {
+                wxLogMessage( wxT( "Automatically converted %s to %s" ), traceSchPath, fullFileName );
+            }
+            else
+            {
+                wxLogWarning( wxT( "Failed to convert %s to %s" ), traceSchPath, fullFileName );
+            }
+        }
+    }
+
     bool is_new = !wxFileName::IsFileReadable( fullFileName );
 
-    // If its a non-existent schematic and caller thinks it exists
+    // If its a non-existent schematic, automatically create it (no dialog)
+    // This allows opening the schematic editor to always work, creating a new schematic if needed
     if( is_new && !( aCtl & KICTL_CREATE ) )
     {
-        // notify user that fullFileName does not exist, ask if user wants to create it.
-        msg.Printf( _( "Schematic '%s' does not exist.  Do you wish to create it?" ),
-                    fullFileName );
-
-        if( !IsOK( this, msg ) )
-            return false;
+        // Automatically create new schematic without asking
+        // This is the expected behavior when opening the schematic editor
+        // The file will be created as an empty schematic below
     }
 
     wxCommandEvent e( EDA_EVT_SCHEMATIC_CHANGING );
@@ -225,7 +260,14 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     if( Kiface().IsSingle() )
     {
+        // Don't register untitled files for app restart - they should not persist across sessions
+        // This gives Word-like behavior where untitled documents are ephemeral
+        wxFileName fn( fullFileName );
+        wxString nameLower = fn.GetName().Lower();
+        if( !nameLower.StartsWith( "untitled" ) )
+        {
         KIPLATFORM::APP::RegisterApplicationRestart( fullFileName );
+        }
     }
 
     if( is_new || schFileType == SCH_IO_MGR::SCH_FILE_T::SCH_FILE_UNKNOWN )
@@ -282,6 +324,29 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                             sheetFileName.SetExt( FILEEXT::LegacySchematicFileExtension );
 
                         wxString sheetPath = sheetFileName.GetFullPath();
+
+                        // If kicad_sch doesn't exist but trace_sch does, convert it
+                        if( !wxFileName::FileExists( sheetPath ) && 
+                            sheetFileName.GetExt() == FILEEXT::KiCadSchematicFileExtension )
+                        {
+                            wxFileName traceSchFile( sheetFileName );
+                            traceSchFile.SetExt( FILEEXT::TraceSchematicFileExtension );
+                            wxString traceSchPath = traceSchFile.GetFullPath();
+                            
+                            if( wxFileName::FileExists( traceSchPath ) )
+                            {
+                                // Convert trace_sch to kicad_sch
+                                if( ConvertTraceSchToKicadSch( traceSchPath ) )
+                                {
+                                    wxLogMessage( wxT( "Converted %s to %s" ), traceSchPath, sheetPath );
+                                }
+                                else
+                                {
+                                    wxLogWarning( wxT( "Failed to convert %s to %s" ), traceSchPath, sheetPath );
+                                    continue;
+                                }
+                            }
+                        }
 
                         if( !wxFileName::FileExists( sheetPath ) )
                         {
@@ -731,7 +796,890 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     m_remoteSymbolPane->BindWebViewLoaded();
 
+    // Deferred auto-conversion: Convert kicad_sch to trace_sch AFTER UI is fully initialized
+    // This prevents the synchronous wxExecute from interfering with toolbar creation
+    wxFileName loadedFile( fullFileName );
+    if( loadedFile.GetExt() == FILEEXT::KiCadSchematicFileExtension )
+    {
+        wxString kicadSchPath = fullFileName;
+        CallAfter( [kicadSchPath]()
+        {
+            wxFileName traceSchFile( kicadSchPath );
+            traceSchFile.SetExt( FILEEXT::TraceSchematicFileExtension );
+
+            // Only convert if trace_sch doesn't exist (don't overwrite existing trace files)
+            if( !wxFileName::FileExists( traceSchFile.GetFullPath() ) )
+            {
+                if( ConvertKicadSchToTraceSch( kicadSchPath ) )
+                {
+                    wxMessageBox( wxString::Format( 
+                        _( "Automatically converted %s to Trace format: %s" ),
+                        wxFileName( kicadSchPath ).GetFullName(),
+                        traceSchFile.GetFullName() ),
+                        _( "Trace Information" ), wxOK | wxICON_INFORMATION );
+                }
+            }
+        });
+    }
+
     return true;
+}
+
+
+bool SCH_EDIT_FRAME::ReloadSchematicFromFile( const wxString& aFileName, bool aSilent )
+{
+    wxString msg;
+    wxString fullFileName = aFileName;
+    wxFileName wx_filename( fullFileName );
+
+    // Ensure absolute path
+    if( !wx_filename.IsAbsolute() )
+    {
+        wx_filename.MakeAbsolute();
+        fullFileName = wx_filename.GetFullPath();
+    }
+
+    // Validate file exists and is readable
+    if( !wxFileName::IsFileReadable( fullFileName ) )
+    {
+        msg.Printf( _( "Schematic file '%s' does not exist or is not readable." ), fullFileName );
+        DisplayErrorMessage( this, msg );  // Always show - critical error
+        return false;
+    }
+
+    // Preserve current sheet path before reload
+    SCH_SHEET_PATH savedSheetPath = GetCurrentSheet();
+
+    wxCommandEvent e( EDA_EVT_SCHEMATIC_CHANGING );
+    ProcessEventLocally( e );
+
+    // Reset inspection tool but DO NOT clear undo/redo stack
+    SetScreen( nullptr );
+    m_toolManager->GetTool<SCH_INSPECTION_TOOL>()->Reset( TOOL_BASE::SUPERMODEL_RELOAD );
+
+    SetStatusText( wxEmptyString );
+    m_infoBar->Dismiss();
+
+    // Use progress reporter only in non-silent mode
+    std::unique_ptr<WX_PROGRESS_REPORTER> progressReporter;
+    if( !aSilent )
+        progressReporter = std::make_unique<WX_PROGRESS_REPORTER>( this, _( "Reload Schematic" ), 1, PR_CAN_ABORT );
+
+    // Determine file type
+    SCH_IO_MGR::SCH_FILE_T schFileType = SCH_IO_MGR::GuessPluginTypeFromSchPath( fullFileName,
+                                                                                 KICTL_KICAD_ONLY );
+
+    // Handle legacy symbol libraries if needed
+    if( schFileType == SCH_IO_MGR::SCH_LEGACY )
+    {
+        if( !Prj().GetElem( PROJECT::ELEM::LEGACY_SYMBOL_LIBS ) )
+        {
+            Prj().SetElem( PROJECT::ELEM::LEGACY_SYMBOL_LIBS, nullptr );
+            PROJECT_SCH::LegacySchLibs( &Prj() );
+        }
+    }
+    else
+    {
+        Prj().SetElem( PROJECT::ELEM::LEGACY_SYMBOL_LIBS, nullptr );
+    }
+
+    // Create new schematic object to load into
+    std::unique_ptr<SCHEMATIC> newSchematic = std::make_unique<SCHEMATIC>( &Prj() );
+    bool failedLoad = false;
+
+    SetScreen( nullptr );
+
+    IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( schFileType ) );
+    if( progressReporter )
+        pi->SetProgressReporter( progressReporter.get() );
+
+    try
+    {
+        {
+            wxBusyCursor    busy;
+            WINDOW_DISABLER raii( this );
+
+            // Check if project file has top-level sheets defined
+            PROJECT_FILE& projectFile = Prj().GetProjectFile();
+            const std::vector<TOP_LEVEL_SHEET_INFO>& topLevelSheets = projectFile.GetTopLevelSheets();
+
+            if( !topLevelSheets.empty() )
+            {
+                // New multi-root format: Load all top-level sheets
+                for( const TOP_LEVEL_SHEET_INFO& sheetInfo : topLevelSheets )
+                {
+                    wxFileName sheetFileName( Prj().GetProjectPath(), sheetInfo.filename );
+
+                    if( schFileType == SCH_IO_MGR::SCH_LEGACY )
+                        sheetFileName.SetExt( FILEEXT::LegacySchematicFileExtension );
+
+                    wxString sheetPath = sheetFileName.GetFullPath();
+
+                    if( !wxFileName::FileExists( sheetPath ) )
+                    {
+                        wxLogWarning( wxT( "Top-level sheet file not found: %s" ), sheetPath );
+                        continue;
+                    }
+
+                    SCH_SHEET* sheet = pi->LoadSchematicFile( sheetPath, newSchematic.get() );
+
+                    if( sheet )
+                    {
+                        if( sheetInfo.uuid != niluuid )
+                        {
+                            const_cast<KIID&>( sheet->m_Uuid ) = sheetInfo.uuid;
+                        }
+
+                        sheet->SetName( sheetInfo.name );
+                        newSchematic->AddTopLevelSheet( sheet );
+                    }
+                }
+
+                // Set current sheet to the first top-level sheet
+                if( !newSchematic->GetTopLevelSheets().empty() )
+                {
+                    newSchematic->CurrentSheet().clear();
+                    newSchematic->CurrentSheet().push_back( newSchematic->GetTopLevelSheets()[0] );
+                }
+                else
+                {
+                    newSchematic->CreateDefaultScreens();
+                }
+            }
+            else
+            {
+                // Legacy single-root format: Load the single root sheet
+                newSchematic->SetRoot( pi->LoadSchematicFile( fullFileName, newSchematic.get() ) );
+                newSchematic->Root().SetName( _( "Root" ) );
+            }
+        }
+
+        if( !pi->GetError().IsEmpty() && !aSilent )
+        {
+            DisplayErrorMessage( this, _( "The entire schematic could not be loaded.  Errors "
+                                          "occurred attempting to load hierarchical sheets." ),
+                                 pi->GetError() );
+        }
+    }
+    catch( const FUTURE_FORMAT_ERROR& ffe )
+    {
+        newSchematic->CreateDefaultScreens();
+        msg.Printf( _( "Error loading schematic '%s'." ), fullFileName );
+        if( progressReporter )
+            progressReporter->Hide();
+        DisplayErrorMessage( this, msg, ffe.Problem() );  // Always show - critical error
+        failedLoad = true;
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        newSchematic->CreateDefaultScreens();
+        msg.Printf( _( "Error loading schematic '%s'." ), fullFileName );
+        if( progressReporter )
+            progressReporter->Hide();
+        DisplayErrorMessage( this, msg, ioe.What() );  // Always show - critical error
+        failedLoad = true;
+    }
+    catch( const std::bad_alloc& )
+    {
+        newSchematic->CreateDefaultScreens();
+        msg.Printf( _( "Memory exhausted loading schematic '%s'." ), fullFileName );
+        if( progressReporter )
+            progressReporter->Hide();
+        DisplayErrorMessage( this, msg, wxEmptyString );  // Always show - critical error
+        failedLoad = true;
+    }
+
+    SetSchematic( newSchematic.release() );
+    Raise();
+
+    if( failedLoad )
+    {
+        CreateDefaultScreens();
+        m_toolManager->RunAction( ACTIONS::zoomFitScreen );
+        msg.Printf( _( "Failed to load '%s'." ), fullFileName );
+        SetMsgPanel( wxEmptyString, msg );
+        return false;
+    }
+
+    // Load project settings
+    LoadProjectSettings();
+
+    // Check if schematic was modified during load
+    SCH_SHEET_LIST sheetList = Schematic().Hierarchy();
+
+    if( sheetList.IsModified() )
+    {
+        // Always show - user needs to know file has issues
+        DisplayInfoMessage( this,
+                            _( "An error was found when loading the schematic that has "
+                               "been automatically fixed.  Please save the schematic to "
+                               "repair the broken file or it may not be usable with other "
+                               "versions of KiCad." ) );
+    }
+
+    if( sheetList.AllSheetPageNumbersEmpty() )
+        sheetList.SetInitialPageNumbers();
+
+    UpdateFileHistory( fullFileName );
+
+    SCH_SCREENS schematic( Schematic().Root() );
+
+    // Handle legacy format conversions
+    if( schFileType == SCH_IO_MGR::SCH_LEGACY )
+    {
+        // Convert any legacy bus-bus entries to just be bus wires
+        for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
+        {
+            std::vector<SCH_ITEM*> deleted;
+
+            for( SCH_ITEM* item : screen->Items() )
+            {
+                if( item->Type() == SCH_BUS_BUS_ENTRY_T )
+                {
+                    SCH_BUS_BUS_ENTRY* entry = static_cast<SCH_BUS_BUS_ENTRY*>( item );
+                    std::unique_ptr<SCH_LINE> wire = std::make_unique<SCH_LINE>();
+
+                    wire->SetLayer( LAYER_BUS );
+                    wire->SetStartPoint( entry->GetPosition() );
+                    wire->SetEndPoint( entry->GetEnd() );
+
+                    screen->Append( wire.release() );
+                    deleted.push_back( item );
+                }
+            }
+
+            for( SCH_ITEM* item : deleted )
+                screen->Remove( item );
+        }
+
+        // Handle symbol library issues
+        EESCHEMA_SETTINGS* cfg = dynamic_cast<EESCHEMA_SETTINGS*>( Kiface().KifaceSettings() );
+
+        if( schematic.HasNoFullyDefinedLibIds() )
+        {
+            DIALOG_SYMBOL_REMAP dlgRemap( this );
+            dlgRemap.ShowQuasiModal();
+        }
+        else
+        {
+            wxString paths;
+            wxArrayString libNames;
+
+            LEGACY_SYMBOL_LIBS::GetLibNamesAndPaths( &Prj(), &paths, &libNames );
+
+            if( !libNames.IsEmpty() )
+            {
+                if( eeconfig()->m_Appearance.show_illegal_symbol_lib_dialog )
+                {
+                    wxRichMessageDialog invalidLibDlg(
+                            this,
+                            _( "Illegal entry found in project file symbol library list." ),
+                            _( "Project Load Warning" ),
+                            wxOK | wxCENTER | wxICON_EXCLAMATION );
+                    invalidLibDlg.ShowDetailedText(
+                            _( "Symbol libraries defined in the project file symbol library "
+                               "list are no longer supported and will be removed.\n\n"
+                               "This may cause broken symbol library links under certain "
+                               "conditions." ) );
+                    invalidLibDlg.ShowCheckBox( _( "Do not show this dialog again." ) );
+                    invalidLibDlg.ShowModal();
+                    eeconfig()->m_Appearance.show_illegal_symbol_lib_dialog =
+                            !invalidLibDlg.IsCheckBoxChecked();
+                }
+
+                libNames.Clear();
+                paths.Clear();
+                LEGACY_SYMBOL_LIBS::SetLibNamesAndPaths( &Prj(), paths, libNames );
+            }
+
+            if( !cfg || !cfg->m_RescueNeverShow )
+            {
+                SCH_EDITOR_CONTROL* editor = m_toolManager->GetTool<SCH_EDITOR_CONTROL>();
+                editor->RescueSymbolLibTableProject( false );
+            }
+        }
+
+        // Ensure cache library exists
+        LEGACY_SYMBOL_LIBS* legacyLibs = PROJECT_SCH::LegacySchLibs( &Schematic().Project() );
+
+        if( legacyLibs->GetLibraryCount() == 0 )
+        {
+            wxFileName pro( fullFileName );
+            pro.SetExt( FILEEXT::ProjectFileExtension );
+            wxFileName cacheFn = pro;
+            cacheFn.SetName( cacheFn.GetName() + "-cache" );
+            cacheFn.SetExt( FILEEXT::LegacySymbolLibFileExtension );
+
+            msg.Printf( _( "The project symbol library cache file '%s' was not found." ),
+                        cacheFn.GetFullName() );
+            wxString extMsg = _( "This can result in a broken schematic under certain conditions.  "
+                                "If the schematic does not have any missing symbols upon opening, "
+                                "save it immediately before making any changes to prevent data "
+                                "loss.  If there are missing symbols, either manual recovery of "
+                                "the schematic or recovery of the symbol cache library file and "
+                                "reloading the schematic is required." );
+
+            wxMessageDialog dlgMissingCache( this, msg, _( "Warning" ),
+                                             wxOK | wxCANCEL | wxICON_EXCLAMATION | wxCENTER );
+            dlgMissingCache.SetExtendedMessage( extMsg );
+            dlgMissingCache.SetOKCancelLabels(
+                    wxMessageDialog::ButtonLabel( _( "Load Without Cache File" ) ),
+                    wxMessageDialog::ButtonLabel( _( "Abort" ) ) );
+
+            if( dlgMissingCache.ShowModal() == wxID_CANCEL )
+            {
+                Schematic().Reset();
+                CreateDefaultScreens();
+                return false;
+            }
+        }
+
+        schematic.UpdateSymbolLinks();
+
+        if( !aSilent )
+        {
+        m_infoBar->RemoveAllButtons();
+        m_infoBar->AddCloseButton();
+        m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
+                                   "It will be converted to the new format when saved." ),
+                                wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+        }
+
+        schematic.ReplaceDuplicateTimeStamps();
+
+        for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
+            screen->FixLegacyPowerSymbolMismatches();
+
+        OnModify();
+    }
+    else  // S-expression schematic
+    {
+        SCH_SCREEN* first_screen = schematic.GetFirst();
+
+        if( first_screen->GetFileFormatVersionAtLoad() == 0 )
+            first_screen = schematic.GetNext();
+
+        if( first_screen && first_screen->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION )
+        {
+            if( !aSilent )
+        {
+            m_infoBar->RemoveAllButtons();
+            m_infoBar->AddCloseButton();
+            m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
+                                       "It will be converted to the new format when saved." ),
+                                    wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+            }
+        }
+
+        for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
+            screen->UpdateLocalLibSymbolLinks();
+
+        if( Schematic().RootScreen()->GetFileFormatVersionAtLoad() < 20221002 )
+            sheetList.UpdateSymbolInstanceData( Schematic().RootScreen()->GetSymbolInstances() );
+
+        if( Schematic().RootScreen()->GetFileFormatVersionAtLoad() < 20221110 )
+            sheetList.UpdateSheetInstanceData( Schematic().RootScreen()->GetSheetInstances() );
+
+        if( Schematic().RootScreen()->GetFileFormatVersionAtLoad() < 20230221 )
+            for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
+                screen->FixLegacyPowerSymbolMismatches();
+
+        for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
+            screen->MigrateSimModels();
+    }
+
+    // Load drawing sheet
+    LoadDrawingSheet();
+
+    schematic.PruneOrphanedSymbolInstances( Prj().GetProjectName(), sheetList );
+    schematic.PruneOrphanedSheetInstances( Prj().GetProjectName(), sheetList );
+    sheetList.CheckForMissingSymbolInstances( Prj().GetProjectName() );
+
+    Schematic().ConnectionGraph()->Reset();
+
+    // Try to restore the saved sheet path, or use the current sheet
+    SCH_SHEET_PATH targetSheet = savedSheetPath;
+    SCH_SHEET_LIST newSheetList = Schematic().Hierarchy();
+
+    // Try to find the saved sheet in the new hierarchy
+    bool foundSheet = false;
+    for( const SCH_SHEET_PATH& path : newSheetList )
+    {
+        if( path.Path() == savedSheetPath.Path() )
+        {
+            targetSheet = path;
+            foundSheet = true;
+            break;
+        }
+    }
+
+    // If we couldn't find the saved sheet, use the current sheet
+    if( !foundSheet )
+    {
+        targetSheet = GetCurrentSheet();
+    }
+
+    SetCurrentSheet( targetSheet );
+    SetScreen( GetCurrentSheet().LastScreen() );
+
+    // Migrate conflicting bus definitions
+    if( Schematic().ConnectionGraph()->GetBusesNeedingMigration().size() > 0 )
+    {
+        DIALOG_MIGRATE_BUSES dlg( this );
+        dlg.ShowQuasiModal();
+        OnModify();
+    }
+
+    SCH_COMMIT dummy( this );
+
+    if( progressReporter )
+    {
+        progressReporter->Report( _( "Updating connections..." ) );
+        progressReporter->KeepRefreshing();
+    }
+
+    RecalculateConnections( &dummy, GLOBAL_CLEANUP, progressReporter.get() );
+
+    if( schematic.HasSymbolFieldNamesWithWhiteSpace() && !aSilent )
+    {
+        m_infoBar->QueueShowMessage( _( "This schematic contains symbols that have leading "
+                                        "and/or trailing white space field names." ),
+                                     wxICON_WARNING );
+    }
+
+    // Load any exclusions from the project file
+    Schematic().ResolveERCExclusionsPostUpdate();
+
+    initScreenZoom();
+    SetSheetNumberAndCount();
+
+    RecomputeIntersheetRefs();
+    GetCurrentSheet().UpdateAllScreenReferences();
+
+    if( schFileType == SCH_IO_MGR::SCH_LEGACY )
+        Schematic().FixupJunctionsAfterImport();
+
+    SyncView();
+    GetScreen()->ClearDrawingState();
+
+    TestDanglingEnds();
+
+    UpdateHierarchyNavigator( false, true );
+
+    wxCommandEvent changedEvt( EDA_EVT_SCHEMATIC_CHANGED );
+    ProcessEventLocally( changedEvt );
+
+    for( wxEvtHandler* listener : m_schematicChangeListeners )
+    {
+        wxCHECK2( listener, continue );
+
+        wxWindow* win = dynamic_cast<wxWindow*>( listener );
+
+        if( win )
+            win->HandleWindowEvent( changedEvt );
+        else
+            listener->SafelyProcessEvent( changedEvt );
+    }
+
+    updateTitle();
+
+    wxFileName fn = Prj().AbsolutePath( GetScreen()->GetFileName() );
+
+    if( fn.FileExists() && !fn.IsFileWritable() )
+    {
+        // Always show - user MUST know they can't save!
+        m_infoBar->RemoveAllButtons();
+        m_infoBar->AddCloseButton();
+        m_infoBar->ShowMessage( _( "Schematic is read only." ),
+                                wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
+    }
+
+    // Ensure all items are redrawn
+    if( GetCanvas() )
+        GetCanvas()->DisplaySheet( GetCurrentSheet().LastScreen() );
+
+    return true;
+}
+
+
+bool SCH_EDIT_FRAME::CaptureSchematicStateForAIEdit( const wxString& aTraceSchPath )
+{
+    // Clear any previous state
+    m_aiEditBeforeState.clear();
+    m_aiEditTraceSchBackupPath.Clear();
+
+    if( !Schematic().IsValid() )
+        return false;
+
+    // Create backup of trace_sch file
+    wxFileName traceFile( aTraceSchPath );
+    if( traceFile.FileExists() )
+    {
+        wxString backupPath = aTraceSchPath + wxT( ".ai_backup" );
+        if( wxCopyFile( aTraceSchPath, backupPath, true ) )
+        {
+            m_aiEditTraceSchBackupPath = backupPath;
+        }
+        else
+        {
+            wxLogWarning( wxT( "Failed to create backup of trace_sch file: %s" ), aTraceSchPath );
+            // Continue anyway - backup is for safety, not critical
+        }
+    }
+
+    // Iterate all screens and capture all items
+    SCH_SCREENS screens( Schematic().Root() );
+    for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+    {
+        if( !screen )
+            continue;
+
+        // Iterate all items in this screen
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( !item )
+                continue;
+
+            // Store a copy of the item by UUID (needed because items will be invalid after reload)
+            std::unique_ptr<SCH_ITEM> itemCopy( item->Duplicate( IGNORE_PARENT_GROUP, nullptr, true ) );
+            if( itemCopy )
+            {
+                // CRITICAL: Set parent to nullptr to prevent findParent() from walking into
+                // stale screen pointers after reload. The duplicated item's parent inherited
+                // from the original points to the OLD screen which will be freed on reload.
+                // Setting to nullptr makes findParent() safely return nullptr instead of crashing.
+                itemCopy->SetParent( nullptr );
+                
+                m_aiEditBeforeState[item->m_Uuid] = std::move( itemCopy );
+            }
+        }
+    }
+
+    return true;
+}
+
+
+bool SCH_EDIT_FRAME::CompareAndCreateAIEditUndoEntries()
+{
+    if( m_aiEditBeforeState.empty() )
+    {
+        // No before state captured, nothing to compare
+        return false;
+    }
+
+    // SAFETY: Check if schematic is valid before accessing
+    try
+    {
+    if( !Schematic().IsValid() )
+    {
+        // Clear state and return
+            m_aiEditBeforeState.clear();
+            m_aiEditTraceSchBackupPath.Clear();
+            return false;
+        }
+    }
+    catch( ... )
+    {
+        // Schematic access failed - clear state and return
+        m_aiEditBeforeState.clear();
+        m_aiEditTraceSchBackupPath.Clear();
+        return false;
+    }
+
+    // Build map of current items by UUID
+    std::map<KIID, SCH_ITEM*> currentState;
+    
+    try
+    {
+    SCH_SCREENS screens( Schematic().Root() );
+    for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+    {
+        if( !screen )
+            continue;
+
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( !item )
+                continue;
+
+            currentState[item->m_Uuid] = item;
+        }
+        }
+    }
+    catch( ... )
+    {
+        // Failed to iterate screens - clear state and return
+        m_aiEditBeforeState.clear();
+        m_aiEditTraceSchBackupPath.Clear();
+        return false;
+    }
+
+    // Create a PICKED_ITEMS_LIST for this undo entry
+    PICKED_ITEMS_LIST* undoList = new PICKED_ITEMS_LIST();
+    
+    // Use the AI edit description if set, otherwise use generic label
+    wxString undoDescription;
+    if( !m_aiEditDescription.IsEmpty() )
+    {
+        // Truncate long descriptions for undo menu
+        wxString desc = m_aiEditDescription;
+        if( desc.length() > 40 )
+            desc = desc.Left( 37 ) + wxT( "..." );
+        undoDescription = wxString::Format( _( "AI: %s" ), desc );
+    }
+    else
+    {
+        undoDescription = _( "AI Edit" );
+    }
+    undoList->SetDescription( undoDescription );
+
+    bool hasChanges = false;
+
+    // Find deleted items (in old but not new)
+    for( const auto& pair : m_aiEditBeforeState )
+    {
+        const KIID& uuid = pair.first;
+        const std::unique_ptr<SCH_ITEM>& oldItemCopy = pair.second;
+
+        if( currentState.find( uuid ) == currentState.end() )
+        {
+            // Item was deleted - we need to find which screen it should be on
+            // Since we don't have the screen from the old state, we'll use the current screen
+            // or try to find it in the hierarchy
+            SCH_SCREEN* screen = GetScreen();
+            if( screen && oldItemCopy )
+            {
+                try
+                {
+                    // Create a new copy of the old item to add back (for undo)
+                    // Wrap in try-catch as stored items may have stale parent pointers
+                    SCH_ITEM* restoredItem = oldItemCopy->Duplicate( IGNORE_PARENT_GROUP, nullptr, true );
+                    if( restoredItem )
+                    {
+                        // CRITICAL: Set parent to screen before adding to undo list
+                        // This prevents crashes when PutDataInPreviousState calls GetBoundingBox()
+                        // which needs the parent for GetPenWidth()
+                        restoredItem->SetParent( screen );
+                        
+                        ITEM_PICKER picker( screen, restoredItem, UNDO_REDO::DELETED );
+                        picker.SetFlags( oldItemCopy->GetFlags() );
+                        undoList->PushItem( picker );
+                        hasChanges = true;
+                    }
+                }
+                catch( ... )
+                {
+                    // Duplicate failed due to stale pointers - skip this item for undo
+                    wxLogDebug( wxT( "Failed to duplicate item for undo - skipping" ) );
+                }
+            }
+        }
+    }
+
+    // Find new items (in new but not old) and changed items (in both but different)
+    // We need to track which screen each item belongs to
+    std::map<KIID, SCH_SCREEN*> itemToScreenMap;
+    try
+    {
+        SCH_SCREENS screensForMap( Schematic().Root() );
+        for( SCH_SCREEN* screen = screensForMap.GetFirst(); screen; screen = screensForMap.GetNext() )
+    {
+        if( !screen )
+            continue;
+        
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( item )
+                itemToScreenMap[item->m_Uuid] = screen;
+        }
+        }
+    }
+    catch( ... )
+    {
+        // Failed to build item-to-screen map - continue with what we have
+        wxLogDebug( wxT( "AI Edit: Failed to build item-to-screen map" ) );
+    }
+
+    for( const auto& pair : currentState )
+    {
+        const KIID& uuid = pair.first;
+        SCH_ITEM* newItem = pair.second;
+
+        auto screenIt = itemToScreenMap.find( uuid );
+        SCH_SCREEN* screen = ( screenIt != itemToScreenMap.end() ) ? screenIt->second : GetScreen();
+
+        auto oldIt = m_aiEditBeforeState.find( uuid );
+        if( oldIt == m_aiEditBeforeState.end() )
+        {
+            // Item is new
+            if( screen )
+            {
+                ITEM_PICKER picker( screen, newItem, UNDO_REDO::NEWITEM );
+                picker.SetFlags( newItem->GetFlags() );
+                undoList->PushItem( picker );
+                hasChanges = true;
+            }
+        }
+        else
+        {
+            // Item exists in both - check if it changed
+            SCH_ITEM* oldItem = oldIt->second.get();
+            
+            if( !oldItem )
+                continue;
+            
+            // Compare items to see if they changed.
+            // NOTE: The stored oldItem has its parent set to nullptr (done in CaptureSchematicStateForAIEdit)
+            // to prevent findParent() from walking into stale screen pointers. This means field
+            // comparisons via GetParentSymbol() will return nullptr and may report items as different
+            // even if they're the same - but that's safe (conservative: we create undo entries).
+            bool itemsAreDifferent = true;  // Default to different (safe)
+            
+            if( oldItem->Type() == newItem->Type() )
+            {
+                // Try comparison - safe now that parent is nullptr
+                itemsAreDifferent = !( *oldItem == *newItem );
+            }
+            
+            if( itemsAreDifferent )
+                {
+                    // Items are different - create CHANGED entry
+                    if( screen )
+                    {
+                        // Create a copy of the current item for undo
+                        SCH_ITEM* itemCopy = newItem->Duplicate( IGNORE_PARENT_GROUP, nullptr, true );
+                        if( itemCopy )
+                        {
+                            // CRITICAL: Set parent to screen for the copy (stored in link)
+                            // This prevents crashes when PutDataInPreviousState restores the old state
+                        itemCopy->SetParent( screen );
+                        
+                        ITEM_PICKER picker( screen, newItem, UNDO_REDO::CHANGED );
+                        picker.SetLink( itemCopy );
+                        picker.SetFlags( newItem->GetFlags() );
+                        undoList->PushItem( picker );
+                        hasChanges = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Save the undo list if there are changes
+    if( hasChanges && undoList->GetCount() > 0 )
+    {
+        try
+    {
+        SaveCopyInUndoList( *undoList, UNDO_REDO::UNSPECIFIED, false );
+        }
+        catch( ... )
+        {
+            // Failed to save undo list - cleanup
+            wxLogDebug( wxT( "AI Edit: Failed to save undo list" ) );
+            delete undoList;
+            undoList = nullptr;
+        }
+    }
+    else
+    {
+        delete undoList;
+    }
+
+    // Clean up state and backup file
+    m_aiEditBeforeState.clear();
+    m_aiEditDescription.Clear();
+    if( !m_aiEditTraceSchBackupPath.IsEmpty() && wxFile::Exists( m_aiEditTraceSchBackupPath ) )
+    {
+        wxRemoveFile( m_aiEditTraceSchBackupPath );
+    }
+    m_aiEditTraceSchBackupPath.Clear();
+
+    return hasChanges;
+}
+
+
+void SCH_EDIT_FRAME::AutoplaceModifiedSymbols( const std::set<std::string>& aModifiedUUIDs )
+{
+    if( aModifiedUUIDs.empty() )
+        return;
+
+    // SAFETY: Check if schematic is valid before accessing
+    try
+    {
+        if( !Schematic().IsValid() )
+            return;
+    }
+    catch( ... )
+    {
+        return;
+    }
+
+    bool anyAutoplaced = false;
+    std::set<size_t> modifiedScreenIndices;
+
+    try
+    {
+        SCH_SCREENS screens( Schematic().Root() );
+
+        for( size_t i = 0; i < screens.GetCount(); i++ )
+        {
+            SCH_SCREEN* screen = screens.GetScreen( i );
+            if( !screen )
+                continue;
+                
+            for( SCH_ITEM* item : screen->Items().OfType( SCH_SYMBOL_T ) )
+            {
+                if( !item )
+                    continue;
+                SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+
+                // Check if this symbol's UUID is in the modified set
+                std::string uuidStr = symbol->m_Uuid.AsString().ToStdString();
+
+                if( aModifiedUUIDs.count( uuidStr ) )
+                {
+                    // Autoplace fields for this symbol
+                    // Uses AUTOPLACE_AUTO algorithm (same as when placing new symbols)
+                    // Only affects fields with CanAutoplace() == true
+                    symbol->AutoplaceFields( screen, AUTOPLACE_AUTO );
+                    anyAutoplaced = true;
+                    modifiedScreenIndices.insert( i );
+                }
+            }
+        }
+
+        // If we autoplaced any symbols, save the modified screens and refresh the canvas
+        if( anyAutoplaced )
+        {
+            // Save each modified screen to persist the autoplace changes
+            for( size_t idx : modifiedScreenIndices )
+            {
+                SCH_SCREEN* screen = screens.GetScreen( idx );
+                SCH_SHEET* sheet = screens.GetSheet( idx );
+                
+                if( screen && sheet && !screen->GetFileName().IsEmpty() )
+                {
+                    try
+                    {
+                        IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
+                        pi->SaveSchematicFile( screen->GetFileName(), sheet, &Schematic() );
+                    }
+                    catch( ... )
+                    {
+                        // Silently ignore save errors - the autoplace still happened in memory
+                    }
+                }
+            }
+            
+            // Refresh the canvas to show the updated field positions
+            GetCanvas()->Refresh();
+        }
+    }
+    catch( ... )
+    {
+        // Failed to iterate screens - silently return
+        return;
+    }
 }
 
 
@@ -938,6 +1886,14 @@ bool SCH_EDIT_FRAME::saveSchematicFile( SCH_SHEET* aSheet, const wxString& aSave
         // Record a full project snapshot so related files (symbols, libs, sheets) are captured.
         Kiway().LocalHistory().CommitFullProjectSnapshot( schematicFileName.GetPath(), wxS( "SCH Save" ) );
         Kiway().LocalHistory().TagSave( schematicFileName.GetPath(), wxS( "sch" ) );
+
+        // Convert to trace_sch format if this is a .kicad_sch file
+        if( schematicFileName.GetExt() == FILEEXT::KiCadSchematicFileExtension )
+        {
+            wxLogDebug( wxT( "AI DEBUG [saveSchematicFile]: Calling ConvertKicadSchToTraceSch: %s" ), 
+                       schematicFileName.GetFullPath() );
+            ConvertKicadSchToTraceSch( schematicFileName.GetFullPath() );
+        }
 
         if( m_autoSaveTimer )
             m_autoSaveTimer->Stop();

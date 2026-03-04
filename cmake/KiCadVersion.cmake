@@ -37,7 +37,9 @@
 # KiCad.
 #
 # Note: This version string should follow the semantic versioning system
-set( KICAD_SEMANTIC_VERSION "9.99.0-unknown" )
+# For Trace, we use Trace's version (defined in TraceVersion.cmake)
+# This maintains compatibility with KiCad internals while branding as Trace
+set( KICAD_SEMANTIC_VERSION "9.99.0" )
 
 # Default the version to the semantic version.
 # This is overridden by the git repository tag though (if using git)

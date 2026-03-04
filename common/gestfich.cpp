@@ -4,6 +4,7 @@
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,6 +39,12 @@
 #include <string_utils.h>
 #include <launch_ext.h>
 #include "wx/tokenzr.h"
+#include <wildcards_and_files_ext.h>
+#include <python_manager.h>
+#include <paths.h>
+#include <config.h>
+#include <wx/log.h>
+#include <wx/arrstr.h>
 
 #include <wx/wfstream.h>
 #include <wx/fs_zip.h>
@@ -591,5 +598,455 @@ bool AddDirectoryToZip( wxZipOutputStream& aZip, const wxString& aSourceDir, wxS
         cont = dir.GetNext( &filename );
     }
 
+    return true;
+}
+
+
+bool ConvertKicadSchToTraceSch( const wxString& aKicadSchPath )
+{
+    wxFileName kicadSchFile( aKicadSchPath );
+    
+    // Only process .kicad_sch files
+    if( kicadSchFile.GetExt() != FILEEXT::KiCadSchematicFileExtension )
+        return false;
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert kicad_sch to trace_sch" ) );
+        return false;
+    }
+    
+    // Determine trace_sch output path
+    wxFileName traceSchFile( kicadSchFile );
+    traceSchFile.SetExt( FILEEXT::TraceSchematicFileExtension );
+    wxString traceSchPath = traceSchFile.GetFullPath();
+    
+    // Find trace.py script using unified runtime path detection
+    // PATHS::GetStockDataPath() automatically handles:
+    // - Windows install: C:\Program Files\Trace\X.X\share\trace
+    // - Windows dev: Build directory when KICAD_RUN_FROM_BUILD_DIR is set
+    // - macOS bundle: Trace.app/Contents/SharedSupport
+    // - Linux: /usr/share/trace
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/eeschema/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Build command: python trace/trace.py -f kicad_sch -t trace_sch input.kicad_sch output.trace_sch
+    wxString command = wxString::Format( wxT( "\"%s\" \"%s\" -f kicad_sch -t trace_sch \"%s\" \"%s\"" ),
+                                        pythonPath,
+                                        traceScript.GetFullPath(),
+                                        aKicadSchPath,
+                                        traceSchPath );
+    
+    // Log command for debugging
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    // Execute the conversion (synchronously)
+    wxArrayString output;
+    wxArrayString errors;
+    long exitCode = wxExecute( command, output, errors, wxEXEC_SYNC );
+    
+    if( exitCode != 0 )
+    {
+        wxString errorMsg;
+        
+        // Collect all error lines (Python tracebacks are multi-line)
+        if( !errors.IsEmpty() )
+        {
+            for( size_t i = 0; i < errors.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += errors[i];
+            }
+        }
+        
+        // Also check output, as Python errors sometimes go to stdout
+        if( !output.IsEmpty() && errorMsg.IsEmpty() )
+        {
+            for( size_t i = 0; i < output.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += output[i];
+            }
+        }
+        
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        // Log the full error message
+        wxLogWarning( wxString::Format( wxS( "Failed to convert kicad_sch to trace_sch:\n%s" ), errorMsg ) );
+        
+        // Also log the command that was executed for debugging
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !traceSchFile.FileExists() )
+    {
+        wxLogWarning( wxS( "trace_sch file was not created after conversion" ) );
+        return false;
+    }
+    
+    return true;
+}
+
+
+bool ConvertTraceSchToKicadSch( const wxString& aTraceSchPath )
+{
+    wxFileName traceSchFile( aTraceSchPath );
+    
+    // Only process .trace_sch files
+    if( traceSchFile.GetExt() != FILEEXT::TraceSchematicFileExtension )
+        return false;
+    
+    // Determine kicad_sch output path (same directory, different extension)
+    wxFileName kicadSchFile( traceSchFile );
+    kicadSchFile.SetExt( FILEEXT::KiCadSchematicFileExtension );
+    wxString kicadSchPath = kicadSchFile.GetFullPath();
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert trace_sch to kicad_sch" ) );
+        return false;
+    }
+    
+    // Find trace.py script using unified runtime path detection
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/eeschema/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Check if output kicad_sch file exists - if so, pass it as existing_sch for merging
+    wxString existingSchFlag;
+    if( wxFileExists( kicadSchPath ) )
+    {
+        existingSchFlag = wxString::Format( wxT( " --existing-sch \"%s\"" ), kicadSchPath );
+    }
+    
+    wxString command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_sch -t kicad_sch%s \"%s\" \"%s\"" ),
+                                        pythonPath,
+                                        traceScript.GetFullPath(),
+                                        existingSchFlag,
+                                        aTraceSchPath,
+                                        kicadSchPath );
+    
+    // Log command for debugging
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    // Execute the conversion (synchronously)
+    wxArrayString output;
+    wxArrayString errors;
+    long exitCode = wxExecute( command, output, errors, wxEXEC_SYNC );
+    
+    if( exitCode != 0 )
+    {
+        wxString errorMsg;
+        
+        // Collect all error lines (Python tracebacks are multi-line)
+        if( !errors.IsEmpty() )
+        {
+            for( size_t i = 0; i < errors.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += errors[i];
+            }
+        }
+        
+        // Also check output, as Python errors sometimes go to stdout
+        if( !output.IsEmpty() && errorMsg.IsEmpty() )
+        {
+            for( size_t i = 0; i < output.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += output[i];
+            }
+        }
+        
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        // Log the full error message
+        wxLogWarning( wxString::Format( wxS( "Failed to convert trace_sch to kicad_sch:\n%s" ), errorMsg ) );
+        
+        // Also log the command that was executed for debugging
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !kicadSchFile.FileExists() )
+    {
+        wxLogWarning( wxS( "kicad_sch file was not created after conversion" ) );
+        return false;
+    }
+    
+    return true;
+}
+
+
+bool ConvertKicadPcbToTracePcb( const wxString& aKicadPcbPath )
+{
+    wxFileName kicadPcbFile( aKicadPcbPath );
+    
+    // Only process .kicad_pcb files
+    if( kicadPcbFile.GetExt() != FILEEXT::KiCadPcbFileExtension )
+        return false;
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert kicad_pcb to trace_pcb" ) );
+        return false;
+    }
+    
+    // Determine trace_pcb output path
+    wxFileName tracePcbFile( kicadPcbFile );
+    tracePcbFile.SetExt( FILEEXT::TracePcbFileExtension );
+    wxString tracePcbPath = tracePcbFile.GetFullPath();
+    
+    // Find trace.py script
+    // Try multiple locations in order:
+    // Find trace.py script using unified runtime path detection
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/pcbnew/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Build command: python trace/pcbnew/trace.py -f kicad_pcb -t trace_pcb input.kicad_pcb output.trace_pcb
+    wxString command = wxString::Format( wxT( "\"%s\" \"%s\" -f kicad_pcb -t trace_pcb \"%s\" \"%s\"" ),
+                                        pythonPath,
+                                        traceScript.GetFullPath(),
+                                        aKicadPcbPath,
+                                        tracePcbPath );
+    
+    // Log command for debugging
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    // Execute the conversion (synchronously)
+    wxArrayString output;
+    wxArrayString errors;
+    long exitCode = wxExecute( command, output, errors, wxEXEC_SYNC );
+    
+    if( exitCode != 0 )
+    {
+        wxString errorMsg;
+        
+        // Collect all error lines (Python tracebacks are multi-line)
+        if( !errors.IsEmpty() )
+        {
+            for( size_t i = 0; i < errors.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += errors[i];
+            }
+        }
+        
+        // Also check output, as Python errors sometimes go to stdout
+        if( !output.IsEmpty() && errorMsg.IsEmpty() )
+        {
+            for( size_t i = 0; i < output.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += output[i];
+            }
+        }
+        
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        // Log the full error message
+        wxLogWarning( wxString::Format( wxS( "Failed to convert kicad_pcb to trace_pcb:\n%s" ), errorMsg ) );
+        
+        // Also log the command that was executed for debugging
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !tracePcbFile.FileExists() )
+    {
+        wxLogWarning( wxS( "trace_pcb file was not created after conversion" ) );
+        return false;
+    }
+    
+    return true;
+}
+
+
+bool ConvertTracePcbToKicadPcb( const wxString& aTracePcbPath, 
+                                const wxString& aKicadPcbPath,
+                                const wxString& aKicadSchPath )
+{
+    wxFileName tracePcbFile( aTracePcbPath );
+    
+    // Only process .trace_pcb files
+    if( tracePcbFile.GetExt() != FILEEXT::TracePcbFileExtension )
+        return false;
+    
+    // Determine kicad_pcb output path (same directory, different extension, or use provided path)
+    wxFileName kicadPcbFile;
+    wxString kicadPcbPath;
+    
+    if( !aKicadPcbPath.IsEmpty() )
+    {
+        kicadPcbFile = wxFileName( aKicadPcbPath );
+        kicadPcbPath = aKicadPcbPath;
+    }
+    else
+    {
+        kicadPcbFile = wxFileName( tracePcbFile );
+        kicadPcbFile.SetExt( FILEEXT::KiCadPcbFileExtension );
+        kicadPcbPath = kicadPcbFile.GetFullPath();
+    }
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert trace_pcb to kicad_pcb" ) );
+        return false;
+    }
+    
+    // Find trace.py script using unified runtime path detection
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/pcbnew/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Build command: python trace/pcbnew/trace.py -f trace_pcb -t kicad_pcb input.trace_pcb output.kicad_pcb [--existing-pcb existing.kicad_pcb] [--kicad-sch file.kicad_sch]
+    wxString command;
+    
+    if( !aKicadPcbPath.IsEmpty() && !aKicadSchPath.IsEmpty() )
+    {
+        // Both existing_pcb and kicad_sch provided
+        command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_pcb -t kicad_pcb --existing-pcb \"%s\" --kicad-sch \"%s\" \"%s\" \"%s\"" ),
+                                    pythonPath,
+                                    traceScript.GetFullPath(),
+                                    aKicadPcbPath,
+                                    aKicadSchPath,
+                                    aTracePcbPath,
+                                    kicadPcbPath );
+    }
+    else if( !aKicadPcbPath.IsEmpty() )
+    {
+        // Only existing_pcb provided
+        command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_pcb -t kicad_pcb --existing-pcb \"%s\" \"%s\" \"%s\"" ),
+                                    pythonPath,
+                                    traceScript.GetFullPath(),
+                                    aKicadPcbPath,
+                                    aTracePcbPath,
+                                    kicadPcbPath );
+    }
+    else
+    {
+        // No existing files provided
+        command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_pcb -t kicad_pcb \"%s\" \"%s\"" ),
+                                    pythonPath,
+                                    traceScript.GetFullPath(),
+                                    aTracePcbPath,
+                                    kicadPcbPath );
+    }
+    
+    // Log command for debugging
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    // Execute the conversion (synchronously)
+    wxArrayString output;
+    wxArrayString errors;
+    long exitCode = wxExecute( command, output, errors, wxEXEC_SYNC );
+    
+    if( exitCode != 0 )
+    {
+        wxString errorMsg;
+        
+        // Collect all error lines (Python tracebacks are multi-line)
+        if( !errors.IsEmpty() )
+        {
+            for( size_t i = 0; i < errors.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += errors[i];
+            }
+        }
+        
+        // Also check output, as Python errors sometimes go to stdout
+        if( !output.IsEmpty() && errorMsg.IsEmpty() )
+        {
+            for( size_t i = 0; i < output.GetCount(); ++i )
+            {
+                if( !errorMsg.IsEmpty() )
+                    errorMsg += wxS( "\n" );
+                errorMsg += output[i];
+            }
+        }
+        
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        // Log the full error message
+        wxLogWarning( wxString::Format( wxS( "Failed to convert trace_pcb to kicad_pcb:\n%s" ), errorMsg ) );
+        
+        // Also log the command that was executed for debugging
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !kicadPcbFile.FileExists() )
+    {
+        wxLogWarning( wxS( "kicad_pcb file was not created after conversion" ) );
+        return false;
+    }
+    
     return true;
 }

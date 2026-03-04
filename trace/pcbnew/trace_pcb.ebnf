@@ -1,0 +1,91 @@
+(* 
+ * This program source code file is part of Trace, an AI-native PCB design application.
+ *
+ * Copyright (C) 2025-2026 Trace Developers Team
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *)
+
+t-pcb         = { statement } , EOF ;
+
+statement     = footprint_stmt
+              | segment_stmt
+              | via_stmt
+              | zone_stmt
+              | edge_stmt
+              | text_stmt
+              | COMMENT ;
+
+footprint_stmt = "footprint" , WS , ref , WS , lib_path ,
+                [ WS , "@" , WS , coord ] , [ WS , "rot" , WS , NUMBER ] ,
+                WS , "layer" , WS , layer_name ,
+                WS , "pads" , WS , pad_list ,
+                WS , "uid" , WS , UUID ;
+
+segment_stmt  = "segment" , WS , "start" , WS , coord ,
+                WS , "end" , WS , coord ,
+                WS , "width" , WS , NUMBER ,
+                WS , "layer" , WS , layer_name ,
+                WS , "net" , WS , ident ,
+                WS , "uid" , WS , UUID ;
+
+via_stmt      = "via" , WS , "@" , WS , coord ,
+                WS , "size" , WS , NUMBER ,
+                WS , "drill" , WS , NUMBER ,
+                WS , "layers" , WS , layer_list ,
+                [ WS , "net" , WS , ident ] ,
+                WS , "uid" , WS , UUID ;
+
+zone_stmt     = "zone" , WS , "net" , WS , ident ,
+                WS , ( "layer" , WS , layer_name | "layers" , WS , layer_list ) ,
+                WS , "polygon" , WS , polygon_points ,
+                WS , "uid" , WS , UUID ;
+
+edge_stmt     = "edge" , WS , edge_points ,
+                WS , "uid" , WS , UUID ;
+
+text_stmt     = "text" , WS , STRING ,
+                WS , "@" , WS , coord ,
+                WS , "layer" , WS , layer_name ,
+                [ WS , "rot" , WS , NUMBER ] ,
+                [ WS , "font_size" , WS , coord ] ,
+                [ WS , "font_thickness" , WS , NUMBER ] ,
+                [ WS , "justify" , WS , ident , WS , ident ] ,
+                WS , "uid" , WS , UUID ;
+
+(* Note: kicad_ver, kicad_gen, kicad_gen_ver are no longer part of the grammar.
+   These metadata values are hardcoded in the trace_json_to_sexp converter:
+   kicad_ver 20251101
+   kicad_gen "pcbnew"
+   kicad_gen_ver 9.99
+*)
+
+pad_list      = "(" , WS? , pad_assign , { WS? , "," , WS? , pad_assign } , WS? , ")" ;
+pad_assign    = pad_number , "=" , ident ;
+
+layer_list    = "(" , WS? , layer_name , { WS? , "," , WS? , layer_name } , WS? , ")" ;
+
+polygon_points = "(" , WS? , coord , { WS? , "," , WS? , coord } , WS? , ")" ;
+
+edge_points   = point , { WS? , "->" , WS? , point } ;
+
+ref           = IDENT ;            (* e.g. U1, J1 *)
+lib_path      = IDENT ;            (* e.g. Package_TO_SOT_SMD:SOT-23-5 *)
+pad_number    = IDENT | NUMBER ;   (* e.g. "1", "A1" *)
+layer_name    = IDENT | STRING ;   (* e.g. "F.Cu", "B.Cu", "Edge.Cuts" *)
+ident         = IDENT ;
+coord         = NUMBER , "," , NUMBER ;
+point         = coord ;
+

@@ -64,27 +64,15 @@ DIALOG_ABOUT::DIALOG_ABOUT( EDA_BASE_FRAME *aParent, ABOUT_APP_INFO& aAppInfo ) 
 
     images.push_back( KiBitmapBundle( BITMAPS::info ) );              // INFORMATION
     images.push_back( KiBitmapBundle( BITMAPS::recent ) );            // VERSION
-    images.push_back( KiBitmapBundle( BITMAPS::preference ) );        // DEVELOPERS
-    images.push_back( KiBitmapBundle( BITMAPS::editor ) );            // DOCWRITERS
-    images.push_back( KiBitmapBundle( BITMAPS::library ) );           // LIBRARIANS
-    images.push_back( KiBitmapBundle( BITMAPS::color_materials ) );   // ARTISTS
-    images.push_back( KiBitmapBundle( BITMAPS::language ) );          // TRANSLATORS
-    images.push_back( KiBitmapBundle( BITMAPS::zip ) );               // PACKAGERS
     images.push_back( KiBitmapBundle( BITMAPS::tools ) );             // LICENSE
 
     m_notebook->SetImages( images );
 #else
     // TODO: Change these to 16x16 versions when available
-    m_images = new wxImageList( 24, 24, false, 9 );
+    m_images = new wxImageList( 24, 24, false, 3 );
 
     m_images->Add( KiBitmap( BITMAPS::info ) );              // INFORMATION
     m_images->Add( KiBitmap( BITMAPS::recent ) );            // VERSION
-    m_images->Add( KiBitmap( BITMAPS::preference ) );        // DEVELOPERS
-    m_images->Add( KiBitmap( BITMAPS::editor ) );            // DOCWRITERS
-    m_images->Add( KiBitmap( BITMAPS::library ) );           // LIBRARIANS
-    m_images->Add( KiBitmap( BITMAPS::color_materials ) );   // ARTISTS
-    m_images->Add( KiBitmap( BITMAPS::language ) );          // TRANSLATORS
-    m_images->Add( KiBitmap( BITMAPS::zip ) );               // PACKAGERS
     m_images->Add( KiBitmap( BITMAPS::tools ) );             // LICENSE
 
     m_notebook->SetImageList( m_images );
@@ -152,21 +140,6 @@ void DIALOG_ABOUT::createNotebooks()
     wxString version = GetVersionInfoData( m_untranslatedTitleName, true );
 
     createNotebookHtmlPage( m_notebook, _( "Version" ), IMAGES::VERSION, version, true );
-
-    createNotebookPageByCategory( m_notebook, _( "Developers" ) , IMAGES::DEVELOPERS,
-                                  m_info.GetDevelopers() );
-    createNotebookPageByCategory( m_notebook, _( "Doc Writers" ), IMAGES::DOCWRITERS,
-                                  m_info.GetDocWriters() );
-
-    createNotebookPageByCategory( m_notebook, _( "Librarians" ), IMAGES::LIBRARIANS,
-                                  m_info.GetLibrarians() );
-
-    createNotebookPageByCategory( m_notebook, _( "Artists" ), IMAGES::ARTISTS,
-                                  m_info.GetArtists() );
-    createNotebookPageByCategory( m_notebook, _( "Translators" ), IMAGES::TRANSLATORS,
-                                  m_info.GetTranslators() );
-    createNotebookPageByCategory( m_notebook, _( "Packagers" ), IMAGES::PACKAGERS,
-                                  m_info.GetPackagers() );
 
     createNotebookHtmlPage( m_notebook, _( "License" ), IMAGES::LICENSE, m_info.GetLicense() );
 }

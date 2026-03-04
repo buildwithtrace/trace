@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013-2016 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -459,6 +460,7 @@ public:
     static TOOL_ACTION removeUnusedPads;
 
     static TOOL_ACTION runDRC;
+    static TOOL_ACTION cloudAutoroute;
 
     static TOOL_ACTION editFpInFpEditor;
     static TOOL_ACTION editLibFpInFpEditor;
@@ -466,6 +468,7 @@ public:
     static TOOL_ACTION showLayersManager;
     static TOOL_ACTION showNetInspector;
     static TOOL_ACTION showPythonConsole;
+    static TOOL_ACTION showAIChat;
     static TOOL_ACTION zonesManager;
 
     // Design Block management

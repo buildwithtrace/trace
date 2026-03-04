@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2023 Mark Roszko <mark.roszko@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -78,7 +79,7 @@ struct UPDATE_RESPONSE
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE( UPDATE_RESPONSE, version, release_date, details_url,
                                     downloads_url )
 
-#define UPDATE_QUERY_ENDPOINT wxS( "https://downloads.kicad.org/api/v1/update" )
+#define UPDATE_QUERY_ENDPOINT wxString( wxT( TRACE_BACKEND_URL ) ) + wxS( "/trace/update" )
 
 
 UPDATE_MANAGER::UPDATE_MANAGER() : m_working( false )
@@ -211,12 +212,12 @@ void UPDATE_MANAGER::CheckForUpdate( wxWindow* aNoticeParent )
         requestContent.platform = "linux";
         requestContent.arch = "";
 #endif
-        wxString verString = GetSemanticVersion();
+        wxString verString = GetTraceSemanticVersion();
         verString.Replace( "~", "-" ); // make the string valid for semver
         requestContent.current_version = verString;
         requestContent.lang = Pgm().GetLanguageTag();
 
-        KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+        KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
         requestContent.last_check = settings->m_lastUpdateCheckTime;
 
@@ -230,34 +231,61 @@ void UPDATE_MANAGER::CheckForUpdate( wxWindow* aNoticeParent )
         // We can also return 204 for no update
         if( responseCode == 200 )
         {
+            std::string responseBody = update_json_stream.str();
             nlohmann::json  update_json;
-            UPDATE_RESPONSE response;
 
             try
             {
-                update_json_stream >> update_json;
-                response = update_json.get<UPDATE_RESPONSE>();
-
-                if( response.version != settings->m_lastReceivedUpdate )
+                // Parse from the response body string
+                update_json = nlohmann::json::parse( responseBody );
+                
+                // Check if update is available first
+                bool updateAvailable = false;
+                if( update_json.contains( "update_available" ) && update_json["update_available"].is_boolean() )
                 {
-                    aNoticeParent->CallAfter(
-                            [aNoticeParent, response]()
-                            {
-                                auto notice = new DIALOG_UPDATE_NOTICE( aNoticeParent,
-                                                                        response.version,
-                                                                        response.details_url,
-                                                                        response.downloads_url );
+                    updateAvailable = update_json["update_available"].get<bool>();
+                }
+                
+                // Only parse the response if an update is available
+                if( updateAvailable )
+                {
+                    // Only deserialize if all required fields are present and not null
+                    bool canDeserialize = true;
+                    if( !update_json.contains( "version" ) || update_json["version"].is_null() )
+                        canDeserialize = false;
+                    if( !update_json.contains( "release_date" ) || update_json["release_date"].is_null() )
+                        canDeserialize = false;
+                    if( !update_json.contains( "details_url" ) || update_json["details_url"].is_null() )
+                        canDeserialize = false;
+                    if( !update_json.contains( "downloads_url" ) || update_json["downloads_url"].is_null() )
+                        canDeserialize = false;
+                    
+                    if( canDeserialize )
+                    {
+                        UPDATE_RESPONSE response = update_json.get<UPDATE_RESPONSE>();
 
-                                int retCode = notice->ShowModal();
+                        if( response.version != settings->m_lastReceivedUpdate )
+                        {
+                            aNoticeParent->CallAfter(
+                                    [aNoticeParent, response]()
+                                    {
+                                        auto notice = new DIALOG_UPDATE_NOTICE( aNoticeParent,
+                                                                                response.version,
+                                                                                response.details_url,
+                                                                                response.downloads_url );
 
-                                if( retCode != wxID_RETRY )
-                                {
-                                    // basically saving the last received update prevents us from
-                                    // prompting again
-                                    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
-                                        cfg->m_lastReceivedUpdate = response.version;
-                                }
-                            } );
+                                        int retCode = notice->ShowModal();
+
+                                        if( retCode != wxID_RETRY )
+                                        {
+                                            // basically saving the last received update prevents us from
+                                            // prompting again
+                                            if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
+                                                cfg->m_lastReceivedUpdate = response.version;
+                                        }
+                                    } );
+                        }
+                    }
                 }
             }
             catch( const std::exception& e )

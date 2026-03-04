@@ -4,6 +4,7 @@
  * Copyright (C) 2014 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * Copyright (C) 2017 CERN
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -204,6 +205,10 @@ public:
     bool canCloseWindow( wxCloseEvent& aCloseEvent ) override;
     void doCloseWindow() override;
     void OnExitKiCad( wxCommandEvent& event );
+
+    void onSignIn( wxCommandEvent& event );
+    void onSignOut( wxCommandEvent& event );
+    void onAuthStateChanged( wxCommandEvent& event );
 
     void LoadSettings( APP_SETTINGS_BASE* aCfg ) override;
     void SaveSettings( APP_SETTINGS_BASE* aCfg ) override;

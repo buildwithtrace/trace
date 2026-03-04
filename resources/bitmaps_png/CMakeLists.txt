@@ -348,6 +348,8 @@ set( BMAPS_MID
     icon_pcbcalculator_24
     icon_pcbnew_24
     icon_pcm_24
+    icon_send
+    icon_stop
     import3d
     image
     import_brd_file

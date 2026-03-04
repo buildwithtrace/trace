@@ -88,7 +88,8 @@ std::optional<TOOLBAR_CONFIGURATION> SCH_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
 
         config.AppendSeparator()
               .AppendAction( SCH_ACTIONS::showHierarchy )
-              .AppendAction( ACTIONS::showProperties );
+              .AppendAction( ACTIONS::showProperties )
+              .AppendAction( SCH_ACTIONS::showAIChat );
 
         if( ADVANCED_CFG::GetCfg().m_DrawBoundingBoxes )
             config.AppendAction( ACTIONS::toggleBoundingBoxes );

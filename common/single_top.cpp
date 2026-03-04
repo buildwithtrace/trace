@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2014 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -56,6 +57,7 @@
 
 #include <kiplatform/app.h>
 #include <kiplatform/environment.h>
+#include <auth/auth_manager.h>
 
 #include <git2.h>
 #include <thread_pool.h>
@@ -211,9 +213,38 @@ struct APP_SINGLE_TOP : public wxApp
         // Otherwise the Html text is displayed as plain text.
         HtmlModule html_init;
 
+#if defined( __WXMSW__ )
+        // On Windows, check if we were launched with a trace:// URL (auth callback)
+        for( int i = 1; i < this->argc; ++i )
+        {
+            wxString arg = this->argv[i];
+            if( arg.StartsWith( wxT( "trace://" ) ) )
+            {
+                wxSetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), arg );
+                break;
+            }
+        }
+#endif
+
         try
         {
-            return program.OnPgmInit();
+            if( !program.OnPgmInit() )
+            {
+                program.OnPgmExit();
+                return false;
+            }
+
+#if defined( __WXMSW__ )
+            // Handle any pending auth callback
+            wxString authCallbackUrl;
+            if( wxGetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), &authCallbackUrl ) )
+            {
+                wxUnsetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ) );
+                AUTH_MANAGER::Instance().HandleURLCallback( authCallbackUrl );
+            }
+#endif
+
+            return true;
         }
         catch( ... )
         {
@@ -314,6 +345,19 @@ struct APP_SINGLE_TOP : public wxApp
     {
         Pgm().MacOpenFile( aFileName );
     }
+    
+    /**
+     * Handle custom URL scheme callbacks (trace://auth).
+     * Used for OAuth authentication flow on macOS.
+     */
+    void MacOpenURL( const wxString& aURL ) override
+    {
+        if( aURL.StartsWith( wxT( "trace://auth" ) ) )
+        {
+            // Handle authentication callback
+            AUTH_MANAGER::Instance().HandleURLCallback( aURL );
+        }
+    }
 
 #endif
 };
@@ -392,6 +436,10 @@ bool PGM_SINGLE_TOP::OnPgmInit()
     // Create the API server thread once the app event loop exists
     m_api_server = std::make_unique<KICAD_API_SERVER>();
 #endif
+
+    // Restore authentication session from keychain before creating any frames
+    // This ensures the Account menu shows the correct state
+    AUTH_MANAGER::Instance().TryRestoreSession();
 
     // Use KIWAY to create a top window, which registers its existence also.
     // "TOP_FRAME" is a macro that is passed on compiler command line from CMake,

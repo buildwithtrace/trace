@@ -80,7 +80,7 @@
 #include <kiplatform/io.h>
 #include <kiplatform/ui.h>
 
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 
 #include <functional>
 #include <kiface_ids.h>

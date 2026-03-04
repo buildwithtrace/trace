@@ -5,6 +5,7 @@
  * Copyright (C) 2011 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright (C) 2023 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -78,6 +79,10 @@
 #include <widgets/wx_html_report_box.h>
 #include <wx_filename.h>  // For ::ResolvePossibleSymlinks()
 #include <kiplatform/io.h>
+#include <board_item.h>
+#include <undo_redo_container.h>
+#include <wx/file.h>
+#include <wx/log.h>
 
 #include <wx/stdpaths.h>
 #include <wx/ffile.h>
@@ -471,6 +476,15 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     wxString   fullFileName( aFileSet[0] );
     wxFileName wx_filename( fullFileName );
+    
+    // Convert trace_pcb files to kicad_pcb before processing
+    if( wx_filename.GetExt() == FILEEXT::TracePcbFileExtension )
+    {
+        wx_filename.SetExt( FILEEXT::KiCadPcbFileExtension );
+        fullFileName = wx_filename.GetFullPath();
+        wx_filename = wxFileName( fullFileName );
+    }
+    
     Kiway().LocalHistory().Init( wx_filename.GetPath() );
     wxString   msg;
 
@@ -1068,6 +1082,12 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
     Kiway().LocalHistory().CommitFullProjectSnapshot( pcbFileName.GetPath(), wxS( "PCB Save" ) );
     Kiway().LocalHistory().TagSave( pcbFileName.GetPath(), wxS( "pcb" ) );
 
+    // Convert to trace_pcb format if this is a .kicad_pcb file
+    if( pcbFileName.GetExt() == FILEEXT::KiCadPcbFileExtension )
+    {
+        ConvertKicadPcbToTracePcb( pcbFileName.GetFullPath() );
+    }
+
     if( m_autoSaveTimer )
         m_autoSaveTimer->Stop();
 
@@ -1205,4 +1225,221 @@ int BOARD_EDITOR_CONTROL::GenerateODBPPFiles( const TOOL_EVENT& aEvent )
         DisplayError( m_frame, reporter.GetMessages() );
 
     return 0;
+}
+
+
+bool PCB_EDIT_FRAME::ReloadBoardFromFile( const wxString& aFileName )
+{
+    wxString msg;
+    wxString fullFileName = aFileName;
+    wxFileName wx_filename( fullFileName );
+
+    // Ensure absolute path
+    if( !wx_filename.IsAbsolute() )
+    {
+        wx_filename.MakeAbsolute();
+        fullFileName = wx_filename.GetFullPath();
+    }
+
+    // Validate file exists and is readable
+    if( !wxFileName::IsFileReadable( fullFileName ) )
+    {
+        msg.Printf( _( "Board file '%s' does not exist or is not readable." ), fullFileName );
+        DisplayErrorMessage( this, msg );
+        return false;
+    }
+
+    // Do NOT clear undo/redo stack (unlike normal file load)
+    // Just reload the board from file
+    GetScreen()->SetContentModified( false );    // do not prompt the user for changes
+
+    // Use OpenProjectFiles with KICTL_REVERT to reload without clearing undo stack
+    return OpenProjectFiles( std::vector<wxString>( 1, fullFileName ), KICTL_REVERT );
+}
+
+
+bool PCB_EDIT_FRAME::CaptureBoardStateForAIEdit( const wxString& aTracePcbPath )
+{
+    // Clear any previous state
+    m_aiEditBeforeState.clear();
+    m_aiEditTracePcbBackupPath.Clear();
+
+    BOARD* board = GetBoard();
+    if( !board )
+        return false;
+
+    // Create backup of trace_pcb file
+    wxFileName traceFile( aTracePcbPath );
+    if( traceFile.FileExists() )
+    {
+        wxString backupPath = aTracePcbPath + wxT( ".ai_backup" );
+        if( wxCopyFile( aTracePcbPath, backupPath, true ) )
+        {
+            m_aiEditTracePcbBackupPath = backupPath;
+        }
+        else
+        {
+            wxLogWarning( wxT( "Failed to create backup of trace_pcb file: %s" ), aTracePcbPath );
+            // Continue anyway - backup is for safety, not critical
+        }
+    }
+
+    // Iterate through all board items and capture their state
+    BOARD_ITEM_SET itemSet = board->GetItemSet();
+    
+    for( BOARD_ITEM* item : itemSet )
+    {
+        if( !item )
+            continue;
+
+        // Store a copy of the item by UUID (needed because items will be invalid after reload)
+        BOARD_ITEM* itemCopy = static_cast<BOARD_ITEM*>( item->Clone() );
+        if( itemCopy )
+        {
+            itemCopy->SetFlags( UR_TRANSIENT );
+            m_aiEditBeforeState[item->m_Uuid] = std::unique_ptr<BOARD_ITEM>( itemCopy );
+        }
+    }
+
+    return true;
+}
+
+
+bool PCB_EDIT_FRAME::CompareAndCreateAIEditUndoEntries()
+{
+    if( m_aiEditBeforeState.empty() )
+    {
+        // No before state captured, nothing to compare
+        return false;
+    }
+
+    BOARD* board = GetBoard();
+    if( !board )
+    {
+        // Clear state and return
+        m_aiEditBeforeState.clear();
+        m_aiEditTracePcbBackupPath.Clear();
+        return false;
+    }
+
+    // Build map of current items by UUID
+    std::map<KIID, BOARD_ITEM*> currentState;
+    BOARD_ITEM_SET itemSet = board->GetItemSet();
+    
+    for( BOARD_ITEM* item : itemSet )
+    {
+        if( !item )
+            continue;
+
+        currentState[item->m_Uuid] = item;
+    }
+
+    // Create a PICKED_ITEMS_LIST for this undo entry
+    PICKED_ITEMS_LIST* undoList = new PICKED_ITEMS_LIST();
+    undoList->SetDescription( _( "AI Edit" ) );
+
+    bool hasChanges = false;
+
+    // Find deleted items (in old but not new)
+    for( const auto& pair : m_aiEditBeforeState )
+    {
+        const KIID& uuid = pair.first;
+        const std::unique_ptr<BOARD_ITEM>& oldItemCopy = pair.second;
+
+        if( currentState.find( uuid ) == currentState.end() )
+        {
+            // Item was deleted
+            if( oldItemCopy )
+            {
+                // Create a new copy of the old item to add back (for undo)
+                BOARD_ITEM* restoredItem = static_cast<BOARD_ITEM*>( oldItemCopy->Clone() );
+                if( restoredItem )
+                {
+                    ITEM_PICKER picker( nullptr, restoredItem, UNDO_REDO::DELETED );
+                    picker.SetFlags( oldItemCopy->GetFlags() );
+                    undoList->PushItem( picker );
+                    hasChanges = true;
+                }
+            }
+        }
+    }
+
+    // Find new items (in new but not old) and changed items (in both but different)
+    for( const auto& pair : currentState )
+    {
+        const KIID& uuid = pair.first;
+        BOARD_ITEM* newItem = pair.second;
+
+        auto oldIt = m_aiEditBeforeState.find( uuid );
+        if( oldIt == m_aiEditBeforeState.end() )
+        {
+            // Item is new
+            ITEM_PICKER picker( nullptr, newItem, UNDO_REDO::NEWITEM );
+            picker.SetFlags( newItem->GetFlags() );
+            undoList->PushItem( picker );
+            hasChanges = true;
+        }
+        else
+        {
+            // Item exists in both - check if it changed
+            BOARD_ITEM* oldItem = oldIt->second.get();
+            
+            if( !oldItem )
+                continue;
+            
+            // Compare items using operator== (which uses compare with EQUALITY flag)
+            // After reload, items are new objects, so we compare by content
+            if( oldItem->Type() == newItem->Type() )
+            {
+                // Use operator== to check if items are different
+                if( !( *oldItem == *newItem ) )
+                {
+                    // Items are different - create CHANGED entry
+                    // Create a copy of the current item for undo
+                    BOARD_ITEM* itemCopy = static_cast<BOARD_ITEM*>( newItem->Clone() );
+                    if( itemCopy )
+                    {
+                        ITEM_PICKER picker( nullptr, newItem, UNDO_REDO::CHANGED );
+                        picker.SetLink( itemCopy );
+                        picker.SetFlags( newItem->GetFlags() );
+                        undoList->PushItem( picker );
+                        hasChanges = true;
+                    }
+                }
+            }
+            else
+            {
+                // Type mismatch - treat as changed
+                BOARD_ITEM* itemCopy = static_cast<BOARD_ITEM*>( newItem->Clone() );
+                if( itemCopy )
+                {
+                    ITEM_PICKER picker( nullptr, newItem, UNDO_REDO::CHANGED );
+                    picker.SetLink( itemCopy );
+                    picker.SetFlags( newItem->GetFlags() );
+                    undoList->PushItem( picker );
+                    hasChanges = true;
+                }
+            }
+        }
+    }
+
+    // Save the undo list if there are changes
+    if( hasChanges && undoList->GetCount() > 0 )
+    {
+        SaveCopyInUndoList( *undoList, UNDO_REDO::UNSPECIFIED );
+    }
+    else
+    {
+        delete undoList;
+    }
+
+    // Clean up state and backup file
+    m_aiEditBeforeState.clear();
+    if( !m_aiEditTracePcbBackupPath.IsEmpty() && wxFile::Exists( m_aiEditTracePcbBackupPath ) )
+    {
+        wxRemoveFile( m_aiEditTracePcbBackupPath );
+    }
+    m_aiEditTracePcbBackupPath.Clear();
+
+    return hasChanges;
 }

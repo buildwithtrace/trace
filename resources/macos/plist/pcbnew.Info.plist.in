@@ -11,9 +11,10 @@
                 <array>
                     <string>kicad_pcb</string>
                     <string>brd</string>
+                    <string>trace_pcb</string>
                 </array>
 
-            <key>CFBundleTypeName</key>         <string>KiCad PCB document</string>
+            <key>CFBundleTypeName</key>         <string>Trace PCB document</string>
             <key>LSHandlerRank</key>            <string>Owner</string>
         </dict>
         <dict>
@@ -40,7 +41,7 @@
     <key>CFBundleExecutable</key>               <string>pcbnew</string>
     <key>CFBundleGetInfoString</key>            <string></string>
     <key>CFBundleIconFile</key>                 <string>pcbnew.icns</string>
-    <key>CFBundleIdentifier</key>               <string>org.kicad.pcbnew</string>
+    <key>CFBundleIdentifier</key>               <string>org.trace.pcbnew</string>
     <key>CFBundleInfoDictionaryVersion</key>    <string>6.0</string>
     <key>CFBundleLongVersionString</key>        <string>@KICAD_VERSION_FULL@</string>
     <key>CFBundleName</key>                     <string>PCB Editor</string>
@@ -50,7 +51,7 @@
     <key>CFBundleVersion</key>                  <string>@KICAD_VERSION_FULL@</string>
     <key>CSResourcesFileMapped</key>            <true/>
     <key>LSRequiresCarbon</key>                 <true/>
-    <key>NSHumanReadableCopyright</key>         <string>Copyright The KiCad Developers</string>
+    <key>NSHumanReadableCopyright</key>         <string>Copyright The Trace Developers</string>
     <key>NSHighResolutionCapable</key>          <true/>
 </dict>
 </plist>

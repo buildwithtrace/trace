@@ -4,6 +4,7 @@
  * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2013 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -78,6 +79,8 @@
 #include <atomic>
 #include <update_manager.h>
 #include <jobs/jobset.h>
+#include <gestfich.h>
+#include <auth/auth_manager.h>
 
 #include <../pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>   // for SEXPR_BOARD_FILE_VERSION def
 
@@ -106,6 +109,7 @@ BEGIN_EVENT_TABLE( KICAD_MANAGER_FRAME, EDA_BASE_FRAME )
     // Window events
     EVT_SIZE( KICAD_MANAGER_FRAME::OnSize )
     EVT_IDLE( KICAD_MANAGER_FRAME::OnIdle )
+    EVT_TIMER( ID_AUTH_POLL_TIMER, KICAD_MANAGER_FRAME::OnAuthPollTimer )
 
     // Menu events
     EVT_MENU( wxID_EXIT, KICAD_MANAGER_FRAME::OnExit )
@@ -116,6 +120,8 @@ BEGIN_EVENT_TABLE( KICAD_MANAGER_FRAME, EDA_BASE_FRAME )
     EVT_MENU( ID_IMPORT_EASYEDA_PROJECT, KICAD_MANAGER_FRAME::OnImportEasyEdaFiles )
     EVT_MENU( ID_IMPORT_EASYEDAPRO_PROJECT, KICAD_MANAGER_FRAME::OnImportEasyEdaProFiles )
     EVT_MENU( ID_IMPORT_ALTIUM_PROJECT, KICAD_MANAGER_FRAME::OnImportAltiumProjectFiles )
+    EVT_MENU( ID_ACCOUNT_SIGN_IN, KICAD_MANAGER_FRAME::OnAccountSignIn )
+    EVT_MENU( ID_ACCOUNT_SIGN_OUT, KICAD_MANAGER_FRAME::OnAccountSignOut )
 
     // Range menu events
     EVT_MENU_RANGE( ID_LANGUAGE_CHOICE, ID_LANGUAGE_CHOICE_END,
@@ -142,17 +148,19 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
                         KICAD_MANAGER_FRAME_NAME, &::Kiway, unityScale ),
         m_active_project( false ),
         m_showHistoryPanel( false ),
+        m_authPollTimer( this, ID_AUTH_POLL_TIMER ),
         m_leftWin( nullptr ),
         m_historyPane( nullptr ),
         m_launcher( nullptr ),
         m_lastToolbarIconSize( 0 ),
         m_pcmButton( nullptr ),
-        m_pcmUpdateCount( 0 )
+        m_pcmUpdateCount( 0 ),
+        m_lastKnownAuthState( static_cast<int>( AUTH_STATE::SIGNED_OUT ) )
 {
     const int defaultLeftWinWidth = FromDIP( 250 );
 
     m_leftWinWidth = defaultLeftWinWidth; // Default value
-    m_aboutTitle = "KiCad";
+    m_aboutTitle = "Trace";
 
     // JPC: A very ugly hack to fix an issue on Linux: if the wxbase315u_xml_gcc_custom.so is
     // used **only** in PCM, it is not found in some cases at run time.
@@ -218,6 +226,13 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
     configureToolbars();
     RecreateToolbars();
     ReCreateMenuBar();
+    
+    // Listen for auth state changes to update the Account menu
+    AUTH_MANAGER::Instance().Bind( EVT_AUTH_STATE_CHANGED, &KICAD_MANAGER_FRAME::OnAuthStateChanged, this );
+    
+    // Start auth polling timer as backup to detect when user signs in via browser callback
+    // The primary mechanism is EVT_AUTH_STATE_CHANGED, but this timer catches edge cases
+    m_authPollTimer.Start( 1000, wxTIMER_CONTINUOUS );
 
     m_auimgr.SetManagedWindow( this );
     m_auimgr.SetFlags( wxAUI_MGR_LIVE_RESIZE );
@@ -280,9 +295,9 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
     }
 
     if( ADVANCED_CFG::GetCfg().m_HideVersionFromTitle )
-        SetTitle( wxT( "KiCad" ) );
+        SetTitle( wxT( "Trace" ) );
     else
-        SetTitle( wxString( "KiCad " ) + GetMajorMinorVersion() );
+        SetTitle( wxString( "Trace " ) + GetTraceMajorMinorVersion() );
 
     // Do not let the messages window have initial focus
     m_leftWin->SetFocus();
@@ -290,6 +305,10 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
     // Init for dropping files
     m_acceptedExts.emplace( FILEEXT::ProjectFileExtension, &KICAD_MANAGER_ACTIONS::loadProject );
     m_acceptedExts.emplace( FILEEXT::LegacyProjectFileExtension, &KICAD_MANAGER_ACTIONS::loadProject );
+
+    // Trace files - map to same actions as kicad files (will be converted in DoWithAcceptedFiles)
+    m_acceptedExts.emplace( FILEEXT::TraceSchematicFileExtension, &KICAD_MANAGER_ACTIONS::editOtherSch );
+    m_acceptedExts.emplace( FILEEXT::TracePcbFileExtension, &KICAD_MANAGER_ACTIONS::editOtherPCB );
 
     // Gerber files
     // Note that all gerber files are aliased as GerberFileExtension
@@ -314,6 +333,9 @@ KICAD_MANAGER_FRAME::KICAD_MANAGER_FRAME( wxWindow* parent, const wxString& titl
 
 KICAD_MANAGER_FRAME::~KICAD_MANAGER_FRAME()
 {
+    // Unbind auth state change handler
+    AUTH_MANAGER::Instance().Unbind( EVT_AUTH_STATE_CHANGED, &KICAD_MANAGER_FRAME::OnAuthStateChanged, this );
+    
     Unbind( wxEVT_CHAR, &TOOL_DISPATCHER::DispatchWxEvent, m_toolDispatcher );
     Unbind( wxEVT_CHAR_HOOK, &TOOL_DISPATCHER::DispatchWxEvent, m_toolDispatcher );
 
@@ -615,6 +637,32 @@ void KICAD_MANAGER_FRAME::DoWithAcceptedFiles()
             gerberFiles += wxT( '\"' );
             gerberFiles += fileName.GetFullPath() + wxT( '\"' );
             gerberFiles = gerberFiles.Pad( 1 );
+        }
+        else if( ext == FILEEXT::TraceSchematicFileExtension )
+        {
+            // Convert trace_sch path to kicad_sch and open it
+            wxFileName kicadSchFile( fileName );
+            kicadSchFile.SetExt( FILEEXT::KiCadSchematicFileExtension );
+            wxString kicadSchPath = kicadSchFile.GetFullPath();
+            
+            // Check if this is the current project's schematic
+            if( kicadSchPath == SchFileName() || kicadSchPath == SchLegacyFileName() )
+                m_toolManager->RunAction( KICAD_MANAGER_ACTIONS::editSchematic );
+            else
+                m_toolManager->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherSch, &kicadSchPath );
+        }
+        else if( ext == FILEEXT::TracePcbFileExtension )
+        {
+            // Convert trace_pcb path to kicad_pcb and open it
+            wxFileName kicadPcbFile( fileName );
+            kicadPcbFile.SetExt( FILEEXT::KiCadPcbFileExtension );
+            wxString kicadPcbPath = kicadPcbFile.GetFullPath();
+            
+            // Check if this is the current project's PCB
+            if( kicadPcbPath == PcbFileName() || kicadPcbPath == PcbLegacyFileName() )
+                m_toolManager->RunAction( KICAD_MANAGER_ACTIONS::editPCB );
+            else
+                m_toolManager->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherPCB, &kicadPcbPath );
         }
         else
         {
@@ -984,6 +1032,12 @@ void KICAD_MANAGER_FRAME::CreateNewProject( const wxFileName& aProjectFileName, 
             }
 
             // wxFFile dtor will close the file
+            
+            // Create corresponding trace_sch file
+            if( fn.FileExists() )
+            {
+                ConvertKicadSchToTraceSch( fn.GetFullPath() );
+            }
         }
 
         // If a <project>.kicad_pcb or <project>.brd file does not exist,
@@ -1155,9 +1209,9 @@ void KICAD_MANAGER_FRAME::ProjectChanged()
     }
 
     if( ADVANCED_CFG::GetCfg().m_HideVersionFromTitle )
-        title += wxT( " \u2014 " ) + wxString( wxS( "KiCad" ) );
+        title += wxT( " \u2014 " ) + wxString( wxS( "Trace" ) );
     else
-        title += wxT( " \u2014 " ) + wxString( wxS( "KiCad " ) ) + GetMajorMinorVersion();
+        title += wxT( " \u2014 " ) + wxString( wxS( "Trace " ) ) + GetTraceMajorMinorVersion();
 
     SetTitle( title );
 
@@ -1290,7 +1344,7 @@ void KICAD_MANAGER_FRAME::OnIdle( wxIdleEvent& aEvent )
     }
 
 #ifdef KICAD_UPDATE_CHECK
-    if( !m_updateManager && settings->m_KiCadUpdateCheck )
+    if( !m_updateManager && settings->m_TraceUpdateCheck )
     {
         m_updateManager = std::make_unique<UPDATE_MANAGER>();
         m_updateManager->CheckForUpdate( this );
@@ -1372,4 +1426,83 @@ void KICAD_MANAGER_FRAME::RestoreCommitFromHistory( const wxString& aHash )
 bool KICAD_MANAGER_FRAME::HistoryPanelShown()
 {
     return m_historyPane && m_auimgr.GetPane( m_historyPane ).IsShown();
+}
+
+
+void KICAD_MANAGER_FRAME::OnAccountSignIn( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().StartLogin( wxT( "https://buildwithtrace.com/login" ) );
+    // Recreate menu bar to update Account menu state
+    doReCreateMenuBar();
+}
+
+
+void KICAD_MANAGER_FRAME::OnAuthStateChanged( wxCommandEvent& event )
+{
+    wxLogDebug( wxT( "KICAD_MANAGER_FRAME::OnAuthStateChanged called, state=%d" ), event.GetInt() );
+    
+    // Update tracked state so polling timer doesn't duplicate this work
+    m_lastKnownAuthState = event.GetInt();
+    
+    // Auth state changed (e.g., user signed in via browser callback)
+    // Update the Account menu to reflect the new state
+    // Use CallAfter to ensure this runs on the main thread at a safe point
+    CallAfter( [this]()
+    {
+    doReCreateMenuBar();
+        
+        // Force a visual refresh of the menu bar on macOS
+#ifdef __WXMAC__
+        if( wxMenuBar* menuBar = GetMenuBar() )
+        {
+            // Touch the menu bar to force macOS to redraw it
+            menuBar->Refresh();
+        }
+#endif
+        wxLogDebug( wxT( "Menu bar recreated after auth state change" ) );
+    } );
+    
+    event.Skip();  // Allow other handlers to process this event
+}
+
+
+void KICAD_MANAGER_FRAME::OnAccountSignOut( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().SignOut();
+    // Recreate menu bar to update Account menu state
+    doReCreateMenuBar();
+}
+
+
+void KICAD_MANAGER_FRAME::OnAuthPollTimer( wxTimerEvent& event )
+{
+    // Poll for auth state changes (e.g., user signed in via browser callback)
+    // This is a backup mechanism - primary is EVT_AUTH_STATE_CHANGED event
+    
+    AUTH_STATE currentAuthState = AUTH_MANAGER::Instance().GetState();
+    
+    // Only try to restore session if we're in SIGNING_IN state or initial startup
+    // Do NOT auto-restore after explicit sign-out (SIGNED_OUT state)
+    // This prevents the timer from immediately signing the user back in after they sign out
+    if( currentAuthState == AUTH_STATE::SIGNING_IN )
+    {
+        AUTH_MANAGER::Instance().TryRestoreSession();
+        currentAuthState = AUTH_MANAGER::Instance().GetState();
+    }
+    
+    // If auth state changed, update the UI
+    int currentState = static_cast<int>( currentAuthState );
+    if( currentState != m_lastKnownAuthState )
+    {
+        wxLogDebug( wxT( "Auth poll timer detected state change: %d -> %d" ), 
+                   m_lastKnownAuthState, currentState );
+        m_lastKnownAuthState = currentState;
+        
+        // Use CallAfter to ensure menu recreation happens at a safe point
+        CallAfter( [this]()
+    {
+        doReCreateMenuBar();
+            wxLogDebug( wxT( "Menu bar recreated by auth poll timer" ) );
+        } );
+    }
 }

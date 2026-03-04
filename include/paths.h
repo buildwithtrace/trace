@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -33,9 +34,9 @@
 
 // lowercase or pretty case depending on platform
 #if defined( __WXMAC__ ) || defined( __WXMSW__ )
-#define KICAD_PATH_STR wxT( "KiCad" )
+#define KICAD_PATH_STR wxT( "Trace" )
 #else
-#define KICAD_PATH_STR  wxT( "kicad" )
+#define KICAD_PATH_STR  wxT( "trace" )
 #endif
 
 /**

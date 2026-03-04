@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# GitGuardian Shield - Scan for secrets before committing
+#
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${YELLOW}🔍 Scanning for secrets with GitGuardian...${NC}"
+
+# Run ggshield scan on staged files
+ggshield secret scan pre-commit
+
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ No secrets detected${NC}"
+    exit 0
+else
+    echo -e "${RED}✗ Secrets detected! Commit blocked.${NC}"
+    echo -e "${YELLOW}To commit anyway (NOT RECOMMENDED), use: git commit --no-verify${NC}"
+    exit 1
+fi

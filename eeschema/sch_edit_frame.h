@@ -5,6 +5,7 @@
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright (C) 2023 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,6 +30,8 @@
 
 #include <stddef.h>
 #include <vector>
+#include <map>
+#include <set>
 #include <wx/cmndata.h>
 #include <wx/event.h>
 #include <wx/gdicmn.h>
@@ -43,6 +46,7 @@
 #include <math/box2.h>
 #include <sch_base_frame.h>
 #include <template_fieldnames.h>
+#include <nlohmann/json.hpp>
 
 class SCH_ITEM;
 class EDA_ITEM;
@@ -59,6 +63,7 @@ class SCHEMATIC;
 class SCH_COMMIT;
 class SCH_DESIGN_BLOCK_PANE;
 class PANEL_REMOTE_SYMBOL;
+class AI_CHAT_PANEL;
 class DIALOG_BOOK_REPORTER;
 class DIALOG_ERC;
 class DIALOG_SYMBOL_FIELDS_TABLE;
@@ -69,6 +74,21 @@ class DIALOG_SCHEMATIC_SETUP;
 class PROGRESS_REPORTER;
 class wxSearchCtrl;
 class BITMAP_BUTTON;
+struct DIFF_RESULT;
+
+
+/**
+ * Captures schematic edit state for incremental updates.
+ * Used to preserve selection, viewport, and zoom during AI edits.
+ */
+struct SchematicEditState
+{
+    std::set<KIID> selectedItems;   ///< UUIDs of currently selected items
+    VECTOR2D       viewportCenter;  ///< Current viewport center
+    double         zoomLevel;       ///< Current zoom level
+
+    SchematicEditState() : zoomLevel( 1.0 ) {}
+};
 
 
 /// Schematic search type used by the socket link with Pcbnew
@@ -466,6 +486,78 @@ public:
 
     bool OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl = 0 ) override;
 
+    /**
+     * Reload the schematic from file without clearing the undo/redo stack.
+     * This is useful when the file has been modified externally and we want to
+     * refresh the display while preserving undo history.
+     *
+     * @param aFileName is the absolute path to the schematic file to reload.
+     * @param aSilent if true, suppress progress dialogs and info messages (for AI edits).
+     * @return true if the schematic was reloaded successfully.
+     */
+    bool ReloadSchematicFromFile( const wxString& aFileName, bool aSilent = false );
+
+    /**
+     * Capture the current schematic state before an AI edit.
+     * This saves all items to a map keyed by UUID and creates a backup of the trace_sch file.
+     * Should only be called once per AI edit sequence (on the first replace_in_file call).
+     *
+     * @param aTraceSchPath Path to the trace_sch file to backup.
+     * @return true if state was captured successfully.
+     */
+    bool CaptureSchematicStateForAIEdit( const wxString& aTraceSchPath );
+
+    /**
+     * Compare the schematic state before and after an AI edit, and create undo entries.
+     * This should be called after ReloadSchematicFromFile() completes.
+     * Creates undo entries for deleted, new, and changed items.
+     *
+     * @return true if comparison and undo entry creation succeeded.
+     */
+    bool CompareAndCreateAIEditUndoEntries();
+
+    /**
+     * Autoplace fields for symbols that were modified during an AI edit session.
+     * Only affects fields with CanAutoplace() == true (do_not_autoplace: no).
+     *
+     * @param aModifiedUUIDs Set of UUID strings for symbols that were added or modified.
+     */
+    void AutoplaceModifiedSymbols( const std::set<std::string>& aModifiedUUIDs );
+
+    /**
+     * Set a description for the AI edit that will appear in the undo menu.
+     * Call this before the AI edit starts.
+     *
+     * @param aDescription Brief description of what the AI edit does (e.g., "Add LED circuit")
+     */
+    void SetAIEditDescription( const wxString& aDescription ) { m_aiEditDescription = aDescription; }
+    wxString GetAIEditDescription() const { return m_aiEditDescription; }
+
+    /**
+     * Capture current schematic edit state (selection, viewport, zoom).
+     * Used before applying incremental diffs to preserve user context.
+     *
+     * @return Current edit state
+     */
+    SchematicEditState CaptureEditState();
+
+    /**
+     * Restore schematic edit state (selection, viewport, zoom).
+     * Used after applying incremental diffs to restore user context.
+     *
+     * @param aState The state to restore
+     */
+    void RestoreEditState( const SchematicEditState& aState );
+
+    /**
+     * Apply an incremental diff to the schematic without full reload.
+     * This preserves selection, viewport, and undo stack for simple edits.
+     *
+     * @param aDiff Diff result containing added/removed/modified elements
+     * @return true if diff was applied successfully, false if full reload needed
+     */
+    bool ApplyIncrementalDiff( const DIFF_RESULT& aDiff );
+
     void SetSchematic( SCHEMATIC* aSchematic );
 
     wxString GetCurrentFileName() const override;
@@ -820,6 +912,7 @@ public:
 
     void ToggleRemoteSymbolPanel();
 
+    void ToggleAIChat();
 
     DIALOG_BOOK_REPORTER* GetSymbolDiffDialog();
 
@@ -924,6 +1017,33 @@ protected:
     void onPluginAvailabilityChanged( wxCommandEvent& aEvt );
 #endif
 
+public:
+    /**
+     * Serialize current ERC violations to JSON.
+     * @return JSON array of ERC violations.
+     */
+    nlohmann::json serializeErcViolations();
+
+    /**
+     * Run ERC and return violations as JSON.
+     * This triggers a full ERC run and serializes the resulting markers.
+     * @return JSON array of ERC violations.
+     */
+    nlohmann::json runErcAndSerialize();
+
+    /**
+     * Run annotation and serialize result messages to JSON for AI tool.
+     * This triggers the annotation process and captures the resulting messages.
+     * @param aOptions JSON object with annotation options (scope, sort order, etc.)
+     * @return JSON object with annotation messages and summary.
+     */
+    nlohmann::json runAnnotateAndSerialize( const nlohmann::json& aOptions );
+
+    /**
+     * Helper to convert severity enum to string.
+     */
+    std::string severityToString( SEVERITY aSeverity );
+
 private:
     // Called when resizing the Hierarchy Navigator panel
     void OnResizeHierarchyNavigator( wxSizeEvent& aEvent );
@@ -937,6 +1057,10 @@ private:
 
     void OnLoadFile( wxCommandEvent& event );
     void OnImportProject( wxCommandEvent& event );
+
+    void OnAccountSignIn( wxCommandEvent& event );
+    void OnAccountSignOut( wxCommandEvent& event );
+    void OnAuthStateChanged( wxCommandEvent& event );
 
     void OnClearFileHistory( wxCommandEvent& aEvent );
 
@@ -1067,8 +1191,14 @@ private:
     std::vector<LIB_ID>         m_designBlockHistoryList;
     SCH_DESIGN_BLOCK_PANE*      m_designBlocksPane;
     PANEL_REMOTE_SYMBOL*        m_remoteSymbolPane;
+    AI_CHAT_PANEL*              m_aiChatPanel;
 
     wxChoice*                   m_currentVariantCtrl;
+
+    // AI edit undo/redo state tracking
+    std::map<KIID, std::unique_ptr<SCH_ITEM>>  m_aiEditBeforeState;  ///< Map of UUID to SCH_ITEM copy for items before AI edit
+    wxString                                    m_aiEditTraceSchBackupPath;  ///< Path to backup of trace_sch file
+    wxString                                    m_aiEditDescription;  ///< Description of AI edit for undo menu
 
 #ifdef KICAD_IPC_API
     std::unique_ptr<API_HANDLER_SCH> m_apiHandler;

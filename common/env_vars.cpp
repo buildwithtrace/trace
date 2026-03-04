@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,13 +37,24 @@
  */
 static const std::vector<wxString> predefinedEnvVars = {
     wxS( "KIPRJMOD" ),
-    ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ),
-    ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ),
-    ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ),
-    ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ),
+    // Trace versioned variables (shown to users)
+    ENV_VAR::GetTraceVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ),
+    ENV_VAR::GetTraceVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ),
+    ENV_VAR::GetTraceVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ),
+    ENV_VAR::GetTraceVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ),
+    ENV_VAR::GetTraceVersionedEnvVarName( wxS( "3RD_PARTY" ) ),
+    ENV_VAR::GetTraceVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) ),
+    // KiCad versioned variables (for backwards compatibility)
+    ENV_VAR::GetKicadVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ),
+    ENV_VAR::GetKicadVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ),
+    ENV_VAR::GetKicadVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ),
+    ENV_VAR::GetKicadVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ),
+    ENV_VAR::GetKicadVersionedEnvVarName( wxS( "3RD_PARTY" ) ),
+    ENV_VAR::GetKicadVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) ),
+    // User template dir (both TRACE and KICAD versions for compatibility)
+    wxS( "TRACE_USER_TEMPLATE_DIR" ),
     wxS( "KICAD_USER_TEMPLATE_DIR" ),
     wxS( "KICAD_PTEMPLATES" ),
-    ENV_VAR::GetVersionedEnvVarName( wxS( "3RD_PARTY" ) ),
 };
 
 
@@ -76,6 +88,24 @@ void ENV_VAR::GetEnvVarAutocompleteTokens( wxArrayString* aVars )
 
 wxString ENV_VAR::GetVersionedEnvVarName( const wxString& aBaseName )
 {
+    // Return the Trace versioned name by default
+    return GetTraceVersionedEnvVarName( aBaseName );
+}
+
+
+wxString ENV_VAR::GetTraceVersionedEnvVarName( const wxString& aBaseName )
+{
+    // Get the Trace major version from the major.minor string
+    wxString traceMajorMinor = GetTraceMajorMinorVersion();
+    long major = 0;
+    traceMajorMinor.BeforeFirst( '.' ).ToLong( &major );
+
+    return wxString::Format( "TRACE%ld_%s", major, aBaseName );
+}
+
+
+wxString ENV_VAR::GetKicadVersionedEnvVarName( const wxString& aBaseName )
+{
     int version = 0;
     std::tie(version, std::ignore, std::ignore) = GetMajorMinorPatchTuple();
 
@@ -86,16 +116,33 @@ wxString ENV_VAR::GetVersionedEnvVarName( const wxString& aBaseName )
 std::optional<wxString> ENV_VAR::GetVersionedEnvVarValue( const ENV_VAR_MAP& aMap,
                                                           const wxString& aBaseName )
 {
-    wxString exactMatch = ENV_VAR::GetVersionedEnvVarName( aBaseName );
+    // First try exact match with TRACE version
+    wxString traceMatch = ENV_VAR::GetTraceVersionedEnvVarName( aBaseName );
 
-    if( aMap.count( exactMatch ) )
-        return aMap.at( exactMatch ).GetValue();
+    if( aMap.count( traceMatch ) )
+        return aMap.at( traceMatch ).GetValue();
 
-    wxString partialMatch = wxString::Format( "KICAD*_%s", aBaseName );
+    // Then try exact match with KICAD version
+    wxString kicadMatch = ENV_VAR::GetKicadVersionedEnvVarName( aBaseName );
+
+    if( aMap.count( kicadMatch ) )
+        return aMap.at( kicadMatch ).GetValue();
+
+    // Try partial match with TRACE*_
+    wxString tracePartialMatch = wxString::Format( "TRACE*_%s", aBaseName );
 
     for( const auto& [k, v] : aMap )
     {
-        if( k.Matches( partialMatch ) )
+        if( k.Matches( tracePartialMatch ) )
+            return v.GetValue();
+    }
+
+    // Try partial match with KICAD*_
+    wxString kicadPartialMatch = wxString::Format( "KICAD*_%s", aBaseName );
+
+    for( const auto& [k, v] : aMap )
+    {
+        if( k.Matches( kicadPartialMatch ) )
             return v.GetValue();
     }
 
@@ -107,43 +154,85 @@ static void initialiseEnvVarHelp( std::map<wxString, wxString>& aMap )
 {
     // Set up dynamically, as we want to be able to use _() translations,
     // which can't be done statically
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) )] =
+
+    // Trace versioned variables (primary)
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) )] =
         _( "The base path of locally installed system footprint libraries (.pretty folders)." );
 
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) )] =
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "3DMODEL_DIR" ) )] =
         _( "The base path of system footprint 3D shapes (.3Dshapes folders)." );
 
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) )] =
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "SYMBOL_DIR" ) )] =
         _( "The base path of the locally installed symbol libraries." );
 
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) )] =
-        _( "A directory containing project templates installed with KiCad." );
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) )] =
+        _( "A directory containing project templates installed with Trace." );
 
-    aMap[wxS( "KICAD_USER_TEMPLATE_DIR" )] =
-        _( "Optional. Can be defined if you want to create your own project templates folder." );
-
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "3RD_PARTY" ) )] =
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "3RD_PARTY" ) )] =
         _( "A directory containing 3rd party plugins, libraries and other downloadable content." );
 
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) )] =
+        _( "The base path of the locally installed design block libraries." );
+
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "SCRIPTING_DIR" ) )] =
+        _( "A directory containing system-wide scripts installed with Trace." );
+
+    aMap[ENV_VAR::GetTraceVersionedEnvVarName( wxS( "USER_SCRIPTING_DIR" ) )] =
+        _( "A directory containing user-specific scripts." );
+
+    // KiCad versioned variables (backwards compatibility aliases)
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) )] =
+        _( "The base path of locally installed system footprint libraries (.pretty folders). "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "3DMODEL_DIR" ) )] =
+        _( "The base path of system footprint 3D shapes (.3Dshapes folders). "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "SYMBOL_DIR" ) )] =
+        _( "The base path of the locally installed symbol libraries. "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) )] =
+        _( "A directory containing project templates. "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "3RD_PARTY" ) )] =
+        _( "A directory containing 3rd party plugins, libraries and other downloadable content. "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) )] =
+        _( "The base path of the locally installed design block libraries. "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "SCRIPTING_DIR" ) )] =
+        _( "A directory containing system-wide scripts. "
+           "This is an alias for backwards compatibility." );
+
+    aMap[ENV_VAR::GetKicadVersionedEnvVarName( wxS( "USER_SCRIPTING_DIR" ) )] =
+        _( "A directory containing user-specific scripts. "
+           "This is an alias for backwards compatibility." );
+
+    aMap[wxS( "TRACE_USER_TEMPLATE_DIR" )] =
+        _( "Optional. Can be defined if you want to create your own project templates folder." );
+
+    aMap[wxS( "KICAD_USER_TEMPLATE_DIR" )] =
+        _( "Optional. Can be defined if you want to create your own project templates folder. "
+           "This is an alias for backwards compatibility." );
+
     aMap[wxS( "KIPRJMOD" )] =
-        _( "Internally defined by KiCad (cannot be edited) and is set to the absolute path of the currently "
+        _( "Internally defined by Trace (cannot be edited) and is set to the absolute path of the currently "
            "loaded project file.  This environment variable can be used to define files and paths relative "
            "to the currently loaded project.  For instance, ${KIPRJMOD}/libs/footprints.pretty can be "
            "defined as a folder containing a project specific footprint library named footprints.pretty." );
 
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "SCRIPTING_DIR" ) )] =
-        _( "A directory containing system-wide scripts installed with KiCad." );
-
-    aMap[ENV_VAR::GetVersionedEnvVarName( wxS( "USER_SCRIPTING_DIR" ) )] =
-        _( "A directory containing user-specific scripts installed with KiCad." );
-
     // Deprecated vars
 #define DEP( var ) wxString::Format( _( "Deprecated version of %s." ), var )
 
-    aMap[wxS( "KICAD_PTEMPLATES" )] = DEP( ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ) );
-    aMap[wxS( "KISYS3DMOD" )]       = DEP( ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
-    aMap[wxS( "KISYSMOD" )]         = DEP( ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ) );
-    aMap[wxS( "KICAD_SYMBOL_DIR" )] = DEP( ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ) );
+    aMap[wxS( "KICAD_PTEMPLATES" )] = DEP( ENV_VAR::GetTraceVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ) );
+    aMap[wxS( "KISYS3DMOD" )]       = DEP( ENV_VAR::GetTraceVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
+    aMap[wxS( "KISYSMOD" )]         = DEP( ENV_VAR::GetTraceVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ) );
+    aMap[wxS( "KICAD_SYMBOL_DIR" )] = DEP( ENV_VAR::GetTraceVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ) );
 
 #undef DEP
 }

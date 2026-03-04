@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2019-2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -130,6 +131,14 @@ TOOL_ACTION SCH_ACTIONS::showRemoteSymbolPanel( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Remote Symbols" ) )
         .Tooltip( _( "Show/hide the remote symbol panel" ) )
         .Icon( BITMAPS::library_browser ) );
+
+TOOL_ACTION SCH_ACTIONS::showAIChat( TOOL_ACTION_ARGS()
+        .Name( "eeschema.EditorControl.showAIChat" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( MD_CTRL + 'I' )
+        .FriendlyName( _( "AI Agent" ) )
+        .Tooltip( _( "Show/hide the AI agent chat panel" ) )
+        .Icon( BITMAPS::icon_ai_eeschema ) );
 
 TOOL_ACTION SCH_ACTIONS::saveSheetAsDesignBlock( TOOL_ACTION_ARGS()
         .Name( "eeschema.SchDesignBlockControl.saveSheetAsDesignBlock" )
@@ -1135,6 +1144,7 @@ TOOL_ACTION SCH_ACTIONS::incrementAnnotations( TOOL_ACTION_ARGS()
         .Tooltip( _( "Increment a subset of reference designators starting at a particular symbol" ) )
         .Icon( BITMAPS::annotate_increment )
         );
+
 
 TOOL_ACTION SCH_ACTIONS::schematicSetup( TOOL_ACTION_ARGS()
         .Name( "eeschema.EditorControl.schematicSetup" )

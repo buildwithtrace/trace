@@ -4,6 +4,7 @@
  * Copyright (C) 2012-2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008-2016 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -103,7 +104,7 @@ FOOTPRINT_VIEWER_FRAME::FOOTPRINT_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent
                     FOOTPRINT_VIEWER_FRAME_NAME ),
    m_comp( LIB_ID(), wxEmptyString, wxEmptyString, KIID_PATH(), {} )
 {
-    m_aboutTitle = _HKI( "KiCad Footprint Library Browser" );
+    m_aboutTitle = _HKI( "Trace Footprint Library Browser" );
 
     // Force the items to always snap
     m_magneticItems.pads     = MAGNETIC_OPTIONS::CAPTURE_ALWAYS;
@@ -257,7 +258,7 @@ FOOTPRINT_VIEWER_FRAME::FOOTPRINT_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent
     // Horizontal items; layers 4 - 6
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().VToolbar().Name( "TopMainToolbar" ).Top().Layer(6) );
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" ).Left().Layer(3) );
-    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(6) );
+    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(1) );
 
     // Vertical items; layers 1 - 3
     m_auimgr.AddPane( libPanel, EDA_PANE().Palette().Name( "Libraries" ).Left().Layer(2)

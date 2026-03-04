@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -265,6 +266,38 @@ void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList )
         EDA_ITEM*      eda_item = aList->GetPickedItem( ii );
         SCH_SCREEN*    screen = dynamic_cast<SCH_SCREEN*>( aList->GetScreenForItem( ii ) );
         SCH_SHEET_PATH undoSheet = sheets.FindSheetForScreen( screen );
+
+        // After AI edits reload the schematic, pointers in the undo stack may be invalid.
+        // Resolve items by UUID for NEWITEM and CHANGED items that are in the schematic.
+        // DELETED items are transient copies and don't need resolution.
+        if( eda_item && ( status == UNDO_REDO::NEWITEM || status == UNDO_REDO::CHANGED ) )
+        {
+            SCH_ITEM* schItemForResolve = dynamic_cast<SCH_ITEM*>( eda_item );
+            if( schItemForResolve )
+            {
+                // Get UUID before pointer might be invalid
+                KIID itemUuid = schItemForResolve->m_Uuid;
+                
+                // Resolve the item by UUID to get the current valid pointer
+                SCH_ITEM* resolvedItem = Schematic().ResolveItem( itemUuid, nullptr, true );
+                if( resolvedItem )
+                {
+                    // Update the wrapper to use the resolved pointer
+                    aList->SetPickedItem( resolvedItem, ii );
+                    eda_item = resolvedItem;
+                }
+                else
+                {
+                    // Item was deleted in a later edit and can't be resolved.
+                    // Skip this picker - it's no longer valid.
+                    wxLogTrace( wxS( "UNDO" ), wxS( "Skipping undo entry for item %s - not found in schematic" ),
+                                itemUuid.AsString() );
+                    continue;
+                }
+            }
+        }
+
+        wxCHECK2( eda_item, continue );
 
         eda_item->SetFlags( aList->GetPickerFlags( ii ) );
         eda_item->ClearEditFlags();

@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -254,7 +255,7 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
     }
 
     git_signature* rawSig = nullptr;
-    git_signature_now( &rawSig, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &rawSig, "Trace", "hello@buildwithtrace.com" );
     std::unique_ptr<git_signature, decltype( &git_signature_free )> sig( rawSig, &git_signature_free );
 
     git_commit* parent = nullptr;
@@ -455,7 +456,7 @@ bool LOCAL_HISTORY::CommitSnapshot( const std::vector<wxString>& aFiles, const w
     std::unique_ptr<git_tree, decltype( &git_tree_free )> tree( rawTree, &git_tree_free );
 
     git_signature* rawSig = nullptr;
-    git_signature_now( &rawSig, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &rawSig, "Trace", "hello@buildwithtrace.com" );
     std::unique_ptr<git_signature, decltype( &git_signature_free )> sig( rawSig,
                                                                          &git_signature_free );
 
@@ -723,7 +724,7 @@ bool LOCAL_HISTORY::CommitDuplicateOfLastSave( const wxString& aProjectPath, con
     }
 
     git_signature* sigRaw = nullptr;
-    git_signature_now( &sigRaw, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &sigRaw, "Trace", "hello@buildwithtrace.com" );
     std::unique_ptr<git_signature, decltype( &git_signature_free )> sig( sigRaw, &git_signature_free );
 
     wxString msg = aMessage.IsEmpty() ? wxS("Discard unsaved ") + aFileType : aMessage;
@@ -1581,7 +1582,7 @@ bool recordRestoreInHistory( git_repository* aRepo, git_commit* aCommit, git_tre
     git_time_t t = git_commit_time( aCommit );
     wxDateTime dt( (time_t) t );
     git_signature* sig = nullptr;
-    git_signature_now( &sig, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &sig, "Trace", "hello@buildwithtrace.com" );
     git_commit* parent = nullptr;
     git_oid parent_id;
 

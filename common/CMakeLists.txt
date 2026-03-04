@@ -24,6 +24,56 @@ add_subdirectory( gal )
 # Get the netlist reader library
 add_subdirectory( netlist_reader )
 
+# Build the React chat UI and generate the embedded HTML header
+find_program( NPM_EXECUTABLE npm )
+if( NPM_EXECUTABLE )
+    set( CHAT_UI_SOURCE_DIR ${CMAKE_SOURCE_DIR}/resources/chat-ui )
+    set( CHAT_UI_BUILD_DIR ${CMAKE_BINARY_DIR}/chat-ui-build )
+    set( CHAT_UI_HEADER ${CMAKE_BINARY_DIR}/chat_ui_html.h )
+    set( CHAT_UI_DIST ${CHAT_UI_SOURCE_DIR}/dist/index.html )
+    set( CHAT_UI_INSTALLED ${CMAKE_BINARY_DIR}/resources/chat-ui.html )
+    
+    # Glob all source files to ensure rebuild when any change
+    file( GLOB_RECURSE CHAT_UI_SOURCES 
+        ${CHAT_UI_SOURCE_DIR}/src/*.tsx
+        ${CHAT_UI_SOURCE_DIR}/src/*.ts
+        ${CHAT_UI_SOURCE_DIR}/src/*.css
+        ${CHAT_UI_SOURCE_DIR}/*.json
+        ${CHAT_UI_SOURCE_DIR}/*.html
+        ${CHAT_UI_SOURCE_DIR}/vite.config.ts
+    )
+    
+    # Custom command to build the React app and copy to build directory
+    add_custom_command(
+        OUTPUT ${CHAT_UI_HEADER} ${CHAT_UI_INSTALLED}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CHAT_UI_BUILD_DIR}
+        COMMAND ${NPM_EXECUTABLE} install --prefix ${CHAT_UI_SOURCE_DIR}
+        COMMAND ${NPM_EXECUTABLE} run build --prefix ${CHAT_UI_SOURCE_DIR}
+        COMMAND ${CMAKE_COMMAND} 
+            -DINPUT_FILE=${CHAT_UI_DIST}
+            -DOUTPUT_FILE=${CHAT_UI_HEADER}
+            -P ${CMAKE_SOURCE_DIR}/cmake/GenerateChatUIHeader.cmake
+        # Also copy the HTML file to the build resources directory for file:// loading
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/resources
+        COMMAND ${CMAKE_COMMAND} -E copy ${CHAT_UI_DIST} ${CHAT_UI_INSTALLED}
+        DEPENDS ${CHAT_UI_SOURCES}
+        WORKING_DIRECTORY ${CHAT_UI_SOURCE_DIR}
+        COMMENT "Building React chat UI and generating header"
+    )
+    
+    add_custom_target( chat_ui_header DEPENDS ${CHAT_UI_HEADER} ${CHAT_UI_INSTALLED} )
+    
+    # Add the build directory to include paths so chat_ui_html.h can be found
+    include_directories( ${CMAKE_BINARY_DIR} )
+    
+    # Install the chat UI HTML file
+    install( FILES ${CHAT_UI_INSTALLED}
+        DESTINATION ${KICAD_DATA}/resources
+        COMPONENT resources )
+else()
+    message( WARNING "npm not found - chat UI will use fallback HTML" )
+endif()
+
 # Only for win32 cross compilation using MXE
 add_compile_definitions( $<$<AND:$<BOOL:${WIN32}>,$<BOOL:${MSYS}>>:GLEW_STATIC> )
 
@@ -93,6 +143,16 @@ set( KICOMMON_SRCS
     git/kicad_git_errors.cpp
     git/git_backend.cpp
     git/libgit_backend.cpp
+
+    # Auth
+    auth/auth_manager.cpp
+
+    # Conversation database (local SQLite cache for AI conversations)
+    conversation_db.cpp
+    conversation_sync.cpp
+
+    # Process management
+    process/python_process_manager.cpp
 
     # Jobs
     jobs/job.cpp
@@ -194,6 +254,9 @@ set( KICOMMON_SRCS
     widgets/wx_grid.cpp
     widgets/wx_html_report_panel.cpp
     widgets/wx_html_report_panel_base.cpp
+    ai_tool_executor.cpp
+    ai_backend_client.cpp
+    ai_diff_analyzer.cpp
 
     database/database_lib_settings.cpp
 
@@ -298,6 +361,12 @@ if( KICAD_IPC_API )
     )
 endif()
 
+if( WIN32 )
+    list( APPEND KICOMMON_SRCS
+        process_executor_win.cpp
+    )
+endif()
+
 add_library( kicommon SHARED
     ${KICOMMON_SRCS}
     )
@@ -346,6 +415,9 @@ target_link_libraries( kicommon
 
     # needed because of python_scripting.cpp
     ${PYTHON_LIBRARIES}
+
+    # needed for conversation_db.cpp (local SQLite cache)
+    SQLite::SQLite3
     )
 
 
@@ -366,12 +438,22 @@ include( ${KICAD_CMAKE_MODULE_PATH}/KiCadVersion.cmake )
 include( ${KICAD_CMAKE_MODULE_PATH}/CreateGitVersionHeader.cmake )
 create_git_version_header(${CMAKE_SOURCE_DIR})
 
+message(STATUS "KICAD_VERSION before regex: '${KICAD_VERSION}'")
+
 # Extract the major and minor build version as a string
 string( REGEX MATCH
         "([0-9]+)\\.([0-9]+)\\.([0-9]+)"
         KICAD_MAJOR_MINOR_PATCH_VERSION
         "${KICAD_VERSION}"
     )
+
+message(STATUS "KICAD_MAJOR_MINOR_PATCH_VERSION after regex: '${KICAD_MAJOR_MINOR_PATCH_VERSION}'")
+
+# Fallback if regex didn't match
+if(NOT KICAD_MAJOR_MINOR_PATCH_VERSION OR KICAD_MAJOR_MINOR_PATCH_VERSION STREQUAL "")
+    set(KICAD_MAJOR_MINOR_PATCH_VERSION "1.0.0")
+    message(WARNING "Could not extract version from KICAD_VERSION, using fallback: ${KICAD_MAJOR_MINOR_PATCH_VERSION}")
+endif()
 
 set_target_properties( kicommon PROPERTIES
     OUTPUT_NAME     kicommon
@@ -577,6 +659,8 @@ set( COMMON_WIDGET_SRCS
     widgets/wx_treebook.cpp
     widgets/webview_panel.cpp
     widgets/zoom_correction_ctrl.cpp
+    widgets/chat_webview_panel.cpp
+    widgets/ai_chat_panel_base.cpp
     )
 
 set( COMMON_DRAWING_SHEET_SRCS
@@ -826,6 +910,11 @@ endif()
 add_dependencies( common version_header )
 add_dependencies( common compoundfilereader )  # used by altium_parser.cpp
 
+# Add dependency on chat UI header if npm is available
+if( NPM_EXECUTABLE )
+    add_dependencies( common chat_ui_header )
+endif()
+
 target_link_libraries( common
     libcontext
     kimath
@@ -878,6 +967,7 @@ add_dependencies( common pegtl )
 target_include_directories( common PUBLIC
     $<TARGET_PROPERTY:pegtl,INTERFACE_INCLUDE_DIRECTORIES>
     $<TARGET_PROPERTY:magic_enum,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:kiplatform,INTERFACE_INCLUDE_DIRECTORIES>
     )
 
 target_include_directories( common SYSTEM PUBLIC

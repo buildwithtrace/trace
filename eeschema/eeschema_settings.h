@@ -38,6 +38,7 @@ extern const wxAuiPaneInfo& defaultPropertiesPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultSchSelectionFilterPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultDesignBlocksPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow );
+extern const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow );
 
 
 
@@ -111,6 +112,7 @@ public:
         int  remote_symbol_panel_docked_width;
         int  remote_symbol_panel_float_width;
         int  remote_symbol_panel_float_height;
+        bool ai_chat_show;
     };
 
     struct REMOTE_SYMBOL_CONFIG

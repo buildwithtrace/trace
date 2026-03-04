@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -38,7 +39,7 @@ const nlohmann::json PCM_DEFAULT_REPOSITORIES = nlohmann::json::array( {
 
 
 KICAD_SETTINGS::KICAD_SETTINGS() :
-        APP_SETTINGS_BASE( "kicad", kicadSchemaVersion ), m_LeftWinWidth( 200 ),
+        APP_SETTINGS_BASE( "trace", kicadSchemaVersion ), m_LeftWinWidth( 200 ),
         m_ShowHistoryPanel( false )
 {
     m_params.emplace_back( new PARAM<int>( "appearance.left_frame_width", &m_LeftWinWidth, 200 ) );
@@ -56,7 +57,7 @@ KICAD_SETTINGS::KICAD_SETTINGS() :
     m_params.emplace_back(
             new PARAM<wxString>( "system.last_received_update", &m_lastReceivedUpdate, "" ) );
 
-    m_params.emplace_back( new PARAM<bool>( "system.check_for_kicad_updates", &m_KiCadUpdateCheck,
+    m_params.emplace_back( new PARAM<bool>( "system.check_for_trace_updates", &m_TraceUpdateCheck,
                                             true ) );
 
     m_params.emplace_back( new PARAM<wxPoint>( "template.window.pos", &m_TemplateWindowPos,

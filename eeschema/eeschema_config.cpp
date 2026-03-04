@@ -382,6 +382,9 @@ void SCH_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
             cfg->m_AuiPanels.remote_symbol_panel_float_height = remoteSymbolPane.floating_size.y;
             cfg->m_AuiPanels.remote_symbol_panel_float_width = remoteSymbolPane.floating_size.x;
         }
+
+        wxAuiPaneInfo& aiChatPane = m_auimgr.GetPane( wxS( "AIChat" ) );
+        cfg->m_AuiPanels.ai_chat_show = aiChatPane.IsShown();
     }
 }
 

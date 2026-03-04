@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Ian McInerney
  *
  * This program is free software; you can redistribute it and/or
@@ -147,6 +148,8 @@ void from_json( const nlohmann::json& aJson, TOOLBAR_CONFIGURATION& aConfig )
 TOOLBAR_SETTINGS::TOOLBAR_SETTINGS( const wxString& aFullPath ) :
         JSON_SETTINGS( aFullPath, SETTINGS_LOC::TOOLBARS, toolbarSchemaVersion )
 {
+    m_createIfDefault = false;
+
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "toolbars",
         [&]() -> nlohmann::json
         {
@@ -213,4 +216,13 @@ std::optional<TOOLBAR_CONFIGURATION> TOOLBAR_SETTINGS::GetStoredToolbarConfig( T
 
     // Return a nullopt if no toolbar is configured
     return std::nullopt;
+}
+
+
+bool TOOLBAR_SETTINGS::SaveToFile( const wxString& aDirectory, bool aForce )
+{
+    if( m_toolbars.empty() && !aForce )
+        return false;
+
+    return JSON_SETTINGS::SaveToFile( aDirectory, aForce );
 }

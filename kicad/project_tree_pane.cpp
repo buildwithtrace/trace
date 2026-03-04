@@ -4,6 +4,7 @@
  * Copyright (C) 2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright (C) 2012 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -107,9 +108,11 @@ static const wxChar* s_allowedExtensionsToList[] =
     wxT( "^.*\\.kicad_pro$" ),
     wxT( "^.*\\.pdf$" ),
     wxT( "^.*\\.sch$" ),           // Legacy Eeschema files
-    wxT( "^.*\\.kicad_sch$" ),     // S-expr Eeschema files
+    // wxT( "^.*\\.kicad_sch$" ),     // S-expr Eeschema files - hidden but still supported
+    wxT( "^.*\\.trace_sch$" ),     // Trace schematic files
     wxT( "^[^$].*\\.brd$" ),       // Legacy Pcbnew files
-    wxT( "^[^$].*\\.kicad_pcb$" ), // S format Pcbnew board files
+    // wxT( "^[^$].*\\.kicad_pcb$" ), // S format Pcbnew board files
+    wxT( "^[^$].*\\.trace_pcb$" ), // Trace PCB files
     wxT( "^[^$].*\\.kicad_dru$" ), // Design rule files
     wxT( "^[^$].*\\.kicad_wks$" ), // S format kicad drawing sheet files
     wxT( "^[^$].*\\.kicad_mod$" ), // S format kicad footprint files, currently not listed
@@ -363,8 +366,10 @@ wxString PROJECT_TREE_PANE::GetFileExt( TREE_FILE_TYPE type )
     case TREE_FILE_TYPE::JSON_PROJECT:          return FILEEXT::ProjectFileExtension;
     case TREE_FILE_TYPE::LEGACY_SCHEMATIC:      return FILEEXT::LegacySchematicFileExtension;
     case TREE_FILE_TYPE::SEXPR_SCHEMATIC:       return FILEEXT::KiCadSchematicFileExtension;
+    case TREE_FILE_TYPE::TRACE_SCHEMATIC:       return FILEEXT::TraceSchematicFileExtension;
     case TREE_FILE_TYPE::LEGACY_PCB:            return FILEEXT::LegacyPcbFileExtension;
     case TREE_FILE_TYPE::SEXPR_PCB:             return FILEEXT::KiCadPcbFileExtension;
+    case TREE_FILE_TYPE::TRACE_PCB:             return FILEEXT::TracePcbFileExtension;
     case TREE_FILE_TYPE::GERBER:                return FILEEXT::GerberFileExtensionsRegex;
     case TREE_FILE_TYPE::GERBER_JOB_FILE:       return FILEEXT::GerberJobFileExtension;
     case TREE_FILE_TYPE::HTML:                  return FILEEXT::HtmlFileExtension;
@@ -488,7 +493,8 @@ wxTreeItemId PROJECT_TREE_PANE::addItemToProjectTree( const wxString& aName,
     }
 
     if( !showAllSchematics && ( currfile.GetExt() == GetFileExt( TREE_FILE_TYPE::LEGACY_SCHEMATIC )
-                                || currfile.GetExt() == GetFileExt( TREE_FILE_TYPE::SEXPR_SCHEMATIC ) ) )
+                                || currfile.GetExt() == GetFileExt( TREE_FILE_TYPE::SEXPR_SCHEMATIC )
+                                || currfile.GetExt() == GetFileExt( TREE_FILE_TYPE::TRACE_SCHEMATIC ) ) )
     {
         if( aProjectNames )
         {
@@ -524,7 +530,11 @@ wxTreeItemId PROJECT_TREE_PANE::addItemToProjectTree( const wxString& aName,
     if( type == TREE_FILE_TYPE::LEGACY_PROJECT
             || type == TREE_FILE_TYPE::JSON_PROJECT
             || type == TREE_FILE_TYPE::LEGACY_SCHEMATIC
-            || type == TREE_FILE_TYPE::SEXPR_SCHEMATIC )
+            || type == TREE_FILE_TYPE::SEXPR_SCHEMATIC
+            || type == TREE_FILE_TYPE::TRACE_SCHEMATIC
+            || type == TREE_FILE_TYPE::LEGACY_PCB
+            || type == TREE_FILE_TYPE::SEXPR_PCB
+            || type == TREE_FILE_TYPE::TRACE_PCB )
     {
         kid = m_TreeProject->GetFirstChild( aParent, cookie );
 
@@ -561,6 +571,32 @@ wxTreeItemId PROJECT_TREE_PANE::addItemToProjectTree( const wxString& aName,
                     case TREE_FILE_TYPE::SEXPR_SCHEMATIC:
                         if( itemData->GetType() == TREE_FILE_TYPE::LEGACY_SCHEMATIC )
                             m_TreeProject->Delete( kid );
+
+                        break;
+                    case TREE_FILE_TYPE::TRACE_SCHEMATIC:
+                        if( itemData->GetType() == TREE_FILE_TYPE::SEXPR_SCHEMATIC )
+                            m_TreeProject->Delete( kid );
+
+                        break;
+
+                    case TREE_FILE_TYPE::LEGACY_PCB:
+                        if( itemData->GetType() == TREE_FILE_TYPE::SEXPR_PCB
+                            || itemData->GetType() == TREE_FILE_TYPE::TRACE_PCB )
+                            return wxTreeItemId();
+
+                        break;
+
+                    case TREE_FILE_TYPE::SEXPR_PCB:
+                        if( itemData->GetType() == TREE_FILE_TYPE::LEGACY_PCB )
+                            m_TreeProject->Delete( kid );
+                        else if( itemData->GetType() == TREE_FILE_TYPE::TRACE_PCB )
+                            m_TreeProject->Delete( kid );
+
+                        break;
+
+                    case TREE_FILE_TYPE::TRACE_PCB:
+                        if( itemData->GetType() == TREE_FILE_TYPE::SEXPR_PCB )
+                            return wxTreeItemId();
 
                         break;
 
@@ -720,6 +756,10 @@ void PROJECT_TREE_PANE::ReCreateTreePrj()
     if( prjOpened )
     {
         pro_dir = wxPathOnly( m_Parent->GetProjectFileName() );
+        
+        // Ensure all kicad_sch and kicad_pcb files have corresponding trace files
+        EnsureTraceFilesExist( pro_dir );
+        
         wxDir dir( pro_dir );
 
         if( dir.IsOpened() )    // protected dirs will not open, see "man opendir()"
@@ -760,6 +800,116 @@ void PROJECT_TREE_PANE::ReCreateTreePrj()
                 m_gitSyncTimer.Start( 100, wxTIMER_ONE_SHOT );
                 m_gitStatusTimer.Start( 500, wxTIMER_ONE_SHOT );
             } );
+}
+
+
+void PROJECT_TREE_PANE::EnsureTraceFilesExist( const wxString& aProjectDir )
+{
+    if( aProjectDir.IsEmpty() )
+        return;
+
+    wxDir dir( aProjectDir );
+    if( !dir.IsOpened() )
+        return;
+
+    // Build list of files that need conversion
+    std::vector<wxString> kicadSchFiles;
+    std::vector<wxString> kicadPcbFiles;
+
+    wxString filename;
+    bool haveFile = dir.GetFirst( &filename, wxEmptyString, wxDIR_FILES );
+
+    while( haveFile )
+    {
+        wxString fullPath = aProjectDir + wxFileName::GetPathSeparator() + filename;
+        wxFileName file( fullPath );
+        wxString ext = file.GetExt();
+
+        // Check for .kicad_sch files
+        if( ext == FILEEXT::KiCadSchematicFileExtension )
+        {
+            wxFileName traceFile( file );
+            traceFile.SetExt( FILEEXT::TraceSchematicFileExtension );
+            
+            if( !wxFileExists( traceFile.GetFullPath() ) )
+            {
+                kicadSchFiles.push_back( file.GetFullPath() );
+            }
+        }
+        // Check for .kicad_pcb files
+        else if( ext == FILEEXT::KiCadPcbFileExtension )
+        {
+            wxFileName traceFile( file );
+            traceFile.SetExt( FILEEXT::TracePcbFileExtension );
+            
+            if( !wxFileExists( traceFile.GetFullPath() ) )
+            {
+                kicadPcbFiles.push_back( file.GetFullPath() );
+            }
+        }
+
+        haveFile = dir.GetNext( &filename );
+    }
+
+    // If no conversions needed, return early
+    size_t totalFiles = kicadSchFiles.size() + kicadPcbFiles.size();
+    if( totalFiles == 0 )
+        return;
+
+    // Create and show progress dialog
+    wxProgressDialog progressDlg( _( "Generating Trace Files" ),
+                                  _( "Checking for missing trace files..." ),
+                                  totalFiles,
+                                  m_Parent,
+                                  wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_ELAPSED_TIME | wxPD_CAN_ABORT );
+
+    size_t currentFile = 0;
+    bool cancelled = false;
+
+    // Convert .kicad_sch files
+    for( const wxString& kicadSchPath : kicadSchFiles )
+    {
+        wxFileName kicadSchFile( kicadSchPath );
+        wxString message = wxString::Format( _( "Converting %s..." ), kicadSchFile.GetFullName() );
+        
+        if( !progressDlg.Update( currentFile, message, &cancelled ) || cancelled )
+            break;
+
+        if( !ConvertKicadSchToTraceSch( kicadSchPath ) )
+        {
+            wxLogWarning( wxString::Format( wxS( "Failed to convert %s to trace_sch format" ),
+                                            kicadSchPath ) );
+        }
+
+        currentFile++;
+        wxYield();  // Keep UI responsive
+    }
+
+    // Convert .kicad_pcb files (only if not cancelled)
+    if( !cancelled )
+    {
+        for( const wxString& kicadPcbPath : kicadPcbFiles )
+        {
+            wxFileName kicadPcbFile( kicadPcbPath );
+            wxString message = wxString::Format( _( "Converting %s..." ), kicadPcbFile.GetFullName() );
+            
+            if( !progressDlg.Update( currentFile, message, &cancelled ) || cancelled )
+                break;
+
+            if( !ConvertKicadPcbToTracePcb( kicadPcbPath ) )
+            {
+                wxLogWarning( wxString::Format( wxS( "Failed to convert %s to trace_pcb format" ),
+                                                kicadPcbPath ) );
+            }
+
+            currentFile++;
+            wxYield();  // Keep UI responsive
+        }
+    }
+
+    // Update progress to 100% if not cancelled
+    if( !cancelled )
+        progressDlg.Update( totalFiles, _( "Complete" ) );
 }
 
 
@@ -875,7 +1025,9 @@ void PROJECT_TREE_PANE::onRight( wxTreeEvent& Event )
             KI_FALLTHROUGH;
 
         case TREE_FILE_TYPE::SEXPR_SCHEMATIC:
+        case TREE_FILE_TYPE::TRACE_SCHEMATIC:
         case TREE_FILE_TYPE::SEXPR_PCB:
+        case TREE_FILE_TYPE::TRACE_PCB:
             KI_FALLTHROUGH;
 
         default:

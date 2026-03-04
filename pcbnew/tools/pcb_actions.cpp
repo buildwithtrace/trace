@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013-2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -464,6 +465,15 @@ TOOL_ACTION PCB_ACTIONS::runDRC( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Design Rules Checker" ) )
         .Tooltip( _( "Show the design rules checker window" ) )
         .Icon( BITMAPS::erc ) );
+
+// Cloud Autoroute
+//
+TOOL_ACTION PCB_ACTIONS::cloudAutoroute( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.cloudAutoroute" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Cloud Autoroute" ) )
+        .Tooltip( _( "Run cloud-based autorouting on the board" ) )
+        .Icon( BITMAPS::icon_ai_pcbnew ) );
 
 // PCB_DESIGN_BLOCK_CONTROL
 TOOL_ACTION PCB_ACTIONS::placeDesignBlock( TOOL_ACTION_ARGS()
@@ -1206,7 +1216,7 @@ TOOL_ACTION PCB_ACTIONS::rescueAutosave( TOOL_ACTION_ARGS()
 TOOL_ACTION PCB_ACTIONS::openNonKicadBoard( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.openNonKicadBoard" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Non-KiCad Board File..." ) )
+        .FriendlyName( _( "External Board File..." ) )
         .Tooltip( _( "Import board file from other applications" ) )
         .Icon( BITMAPS::import_brd_file ) );
 
@@ -1621,6 +1631,14 @@ TOOL_ACTION PCB_ACTIONS::showNetInspector( TOOL_ACTION_ARGS()
         .Tooltip( _( "Show/hide the net inspector" ) )
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::tools ) );
+
+TOOL_ACTION PCB_ACTIONS::showAIChat( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.showAIChat" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "AI Agent" ) )
+        .Tooltip( _( "Show/hide the AI agent chat panel" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::icon_ai_pcbnew ) );
 
 TOOL_ACTION PCB_ACTIONS::zonesManager( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Control.zonesManager" )

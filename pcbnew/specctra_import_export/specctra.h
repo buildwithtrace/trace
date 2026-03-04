@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2007-2013 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -88,6 +89,21 @@ class SPECCTRA_DB;
  * @param aFullFilename specctra file name
  */
 void ExportBoardToSpecctraFile( BOARD* aBoard, const wxString& aFullFilename );
+
+/**
+ * @brief Helper method to export board to DSN string
+ * @param aBoard board object
+ * @return DSN content as a string
+ */
+std::string ExportBoardToSpecctraString( BOARD* aBoard );
+
+/**
+ * @brief Helper method to import session from string content
+ * @param aBoard board object to apply routing to
+ * @param aSesContent SES file content as a string
+ * @return true on success
+ */
+bool ImportSpecctraSessionFromString( BOARD* aBoard, const std::string& aSesContent );
 
 
 /**
@@ -3729,6 +3745,14 @@ public:
      * @throw IO_ERROR if there is a lexer or parser error.
      */
     void LoadSESSION( const wxString& aFilename );
+
+    /**
+     * A recursive descent parser for a SPECCTRA DSN "session" from string content.
+     *
+     * @param aSesContent The session file content as a string.
+     * @throw IO_ERROR if there is a lexer or parser error.
+     */
+    void LoadSESSIONFromString( const std::string& aSesContent );
 
     /**
      * Write the internal PCB instance out as a SPECTRA DSN format file.

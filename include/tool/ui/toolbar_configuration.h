@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Ian McInerney
  *
  * This program is free software; you can redistribute it and/or
@@ -239,6 +240,8 @@ public:
     {
         m_toolbars[aToolbar] = aConfig;
     }
+
+    bool SaveToFile( const wxString& aDirectory, bool aForce = false ) override;
 
 protected:
     // The toolbars

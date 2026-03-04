@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2021 Andrew Lutsenko, anlutsenko at gmail dot com
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -508,7 +509,7 @@ void PANEL_PACKAGES_VIEW::OnDownloadVersionClicked( wxCommandEvent& event )
     }
 
     const wxString& url = *ver_it->download_url;
-    KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     wxWindow* topLevelParent = wxGetTopLevelParent( this );
     wxFileDialog dialog( topLevelParent, _( "Save Package" ), cfg->m_PcmLastDownloadDir,

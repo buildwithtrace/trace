@@ -74,3 +74,20 @@ bool KIPLATFORM::SECRETS::GetSecret(const wxString& aService, const wxString& aK
     CFRelease(query);
     return status == errSecSuccess;
 }
+
+
+bool KIPLATFORM::SECRETS::EraseSecret(const wxString& aService, const wxString& aKey)
+{
+    // Create a query for the secret
+    CFMutableDictionaryRef query = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
+    CFDictionarySetValue(query, kSecAttrService, CFStringCreateWithCString(NULL, aService.utf8_str().data(), kCFStringEncodingUTF8));
+    CFDictionarySetValue(query, kSecAttrAccount, CFStringCreateWithCString(NULL, aKey.utf8_str().data(), kCFStringEncodingUTF8));
+
+    // Delete the secret from the keychain
+    OSStatus status = SecItemDelete(query);
+
+    CFRelease(query);
+    // Return true if deleted or if it didn't exist
+    return status == errSecSuccess || status == errSecItemNotFound;
+}

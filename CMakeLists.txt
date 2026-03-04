@@ -49,7 +49,58 @@ else()
     set( CMAKE_BUILD_TYPE Release CACHE STRING "Set to either \"Release\" or \"Debug\"" )
 endif()
 
-project( kicad )
+project( trace )
+
+#================================================
+# Trace Backend URL Configuration
+#================================================
+# Two backend servers:
+# - Debug:   http://localhost:8000/api/v1              (local dev server)
+# - Release: https://api.buildwithtrace.com/api/v1    (production server)
+#
+# Override with: -DTRACE_BACKEND_URL="https://custom.url/api/v1"
+#================================================
+
+# Determine default URL based on build type
+# Note: MSVC presets use RelWithDebInfo for release builds
+if(CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+    set(_DEFAULT_BACKEND_URL "https://api.buildwithtrace.com/api/v1")
+else()
+    # Debug and all other build types use local development server
+    set(_DEFAULT_BACKEND_URL "http://localhost:8000/api/v1")
+endif()
+
+# Cache the variable so it persists and can be overridden via -D flag
+set(TRACE_BACKEND_URL "${_DEFAULT_BACKEND_URL}" CACHE STRING "Backend URL for Trace AI services")
+
+# Auto-fix incorrect cached values (migration from old URLs)
+# This handles cases where cache contains outdated URLs without manual intervention
+if(TRACE_BACKEND_URL STREQUAL "https://api.buildwithtrace.com" OR 
+   TRACE_BACKEND_URL STREQUAL "http://api.buildwithtrace.com/api/v1" OR
+   TRACE_BACKEND_URL STREQUAL "http://api.buildwithtrace.com")
+    message(STATUS "Trace: Auto-fixing incorrect cached backend URL: ${TRACE_BACKEND_URL}")
+    message(STATUS "Trace: Updating to correct URL: ${_DEFAULT_BACKEND_URL}")
+    set(TRACE_BACKEND_URL "${_DEFAULT_BACKEND_URL}" CACHE STRING "Backend URL for Trace AI services" FORCE)
+endif()
+
+message(STATUS "Trace: TRACE_BACKEND_URL=${TRACE_BACKEND_URL} (build type: ${CMAKE_BUILD_TYPE})")
+
+# Pass to compiler as preprocessor definition
+add_compile_definitions(TRACE_BACKEND_URL="${TRACE_BACKEND_URL}")
+
+# Also set AI_BACKEND_URL (legacy compatibility)  
+add_compile_definitions(AI_BACKEND_URL="${TRACE_BACKEND_URL}")
+
+# Debug: Show what we're actually defining
+message(STATUS "Trace: Defining TRACE_BACKEND_URL=${TRACE_BACKEND_URL}")
+message(STATUS "Trace: Defining AI_BACKEND_URL=${TRACE_BACKEND_URL}")
+
+# Set debug flag using generator expression for multi-config generators  
+add_compile_definitions($<$<CONFIG:Debug>:TRACE_DEBUG_BUILD=1>)
+
+#================================================
+# End Trace Configuration
+#================================================
 
 # Create a default build type for our QA that doesn't include `NDEBUG`
 set(CMAKE_CXX_FLAGS_QABUILD "-Os -g1 -ggdb1")
@@ -188,9 +239,9 @@ mark_as_advanced( KICAD_USE_CMAKE_FINDPROTOBUF )
 ####################################
 # Installation options
 ####################################
-option( KICAD_INSTALL_DEMOS
-    "Install KiCad demos and examples (default ON)"
-    ON )
+# option( KICAD_INSTALL_DEMOS
+#     "Install KiCad demos and examples (default ON)"
+#     ON )
 
 option( KICAD_I18N_UNIX_STRICT_PATH
     "Use standard Unix locale lookup path (default OFF)."
@@ -334,7 +385,7 @@ add_compile_definitions( $<$<CONFIG:Debug>:DEBUG> )
 # Add option to add user directories for linker, if any
 link_directories( ${LINK_DIRECTORIES_PATH} )
 
-set( KICAD_CONFIG_DIR "kicad" CACHE STRING "Location of user specific KiCad config files" )
+set( KICAD_CONFIG_DIR "trace" CACHE STRING "Location of user specific Trace config files" )
 mark_as_advanced( KICAD_CONFIG_DIR )
 add_compile_definitions( KICAD_CONFIG_DIR=${KICAD_CONFIG_DIR} )
 
@@ -689,15 +740,15 @@ if( NOT APPLE )
 
     # Do not make these variables "PATH" b/c cmake will truncate them and we need the full path
     if( NOT IS_ABSOLUTE ${CMAKE_INSTALL_DATADIR} )
-        set( KICAD_DATA ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/kicad
-            CACHE STRING "Location of KiCad data files." )
-        set( KICAD_DOCS ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/doc/kicad
-            CACHE STRING "Location of KiCad documentation files." )
+        set( KICAD_DATA ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/trace
+            CACHE STRING "Location of Trace data files." )
+        set( KICAD_DOCS ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/doc/trace
+            CACHE STRING "Location of Trace documentation files." )
     else()
-        set( KICAD_DATA ${CMAKE_INSTALL_DATADIR}/kicad
-            CACHE STRING "Location of KiCad data files." )
-        set( KICAD_DOCS ${CMAKE_INSTALL_DATADIR}/doc/kicad
-            CACHE STRING "Location of KiCad documentation files." )
+        set( KICAD_DATA ${CMAKE_INSTALL_DATADIR}/trace
+            CACHE STRING "Location of Trace data files." )
+        set( KICAD_DOCS ${CMAKE_INSTALL_DATADIR}/doc/trace
+            CACHE STRING "Location of Trace documentation files." )
     endif()
 
     set( KICAD_LIBRARY_DATA ${KICAD_DATA}
@@ -719,14 +770,12 @@ if( NOT APPLE )
         set( KICAD_LIB ${CMAKE_INSTALL_LIBDIR}
             CACHE PATH "Location of KiCad shared objects" )
 
-        set( KICAD_USER_PLUGIN ${CMAKE_INSTALL_LIBDIR}/kicad/plugins
-            CACHE PATH "Location of KiCad user-loaded plugins" )
+        set( KICAD_USER_PLUGIN ${CMAKE_INSTALL_LIBDIR}/trace/plugins
+            CACHE PATH "Location of Trace user-loaded plugins" )
     endif()
 
-    set( KICAD_DEMOS ${KICAD_DATA}/demos
-        CACHE PATH "Location of KiCad demo files." )
-    set( KICAD_TEMPLATE ${KICAD_LIBRARY_DATA}/template
-        CACHE PATH "Location of KiCad template files." )
+    set( KICAD_TEMPLATE ${KICAD_DATA}/template
+        CACHE PATH "Location of Trace template files." )
 else()
     # everything without leading / is relative to CMAKE_INSTALL_PREFIX.
     # CMAKE_INSTALL_PREFIX is root of .dmg image
@@ -734,7 +783,7 @@ else()
         CACHE PATH "Location of KiCad binaries." FORCE )
 
     # some paths to single app bundle
-    set( OSX_BUNDLE_MAIN "KiCad.app" )
+    set( OSX_BUNDLE_MAIN "Trace.app" )
     set( OSX_BUNDLE_BIN_DIR "Contents/MacOS" )
     set( OSX_BUNDLE_LIB_DIR "Contents/Frameworks" )
     set( OSX_BUNDLE_KIFACE_DIR "Contents/PlugIns" )
@@ -752,7 +801,7 @@ else()
     set( OSX_BUNDLE_INSTALL_PLUGIN_DIR "${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_KIFACE_DIR}" )
 
     # everything provided with the application bundle goes into
-    # KiCad.app/Contents/SharedSupport => accessible via GetDataDir()
+    # Trace.app/Contents/SharedSupport => accessible via GetDataDir()
     # everything else to the .dmg image
     set( KICAD_DATA ${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_SUP_DIR}
         CACHE PATH "Location of KiCad data files." FORCE )
@@ -766,8 +815,8 @@ else()
         CACHE PATH "Location of KiCad plugins." FORCE )
     set( KICAD_DOCS doc
         CACHE PATH "Location of KiCad documentation files." FORCE )
-    set( KICAD_DEMOS demos
-        CACHE PATH "Location of KiCad demo files." FORCE )
+    # set( KICAD_DEMOS demos
+    #     CACHE PATH "Location of KiCad demo files." FORCE )
 
     # Required to run from build folder
     if( PYTHON_FRAMEWORK )
@@ -786,8 +835,41 @@ mark_as_advanced( KICAD_BIN
     KICAD_DATA
     KICAD_LIBRARY_DATA
     KICAD_DOCS
-    KICAD_DEMOS
     KICAD_TEMPLATE )
+
+# Install vcpkg runtime DLLs and KiCad core DLLs (Windows only)
+# This must be after KICAD_BIN is defined
+if( WIN32 AND NOT APPLE )
+    # Install vcpkg runtime DLLs to bin directory for Windows
+    # This ensures all necessary DLLs are available when running from file explorer
+    if( VCPKG_INSTALLED_DIR )
+        set( VCPKG_BIN_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin" )
+        if( EXISTS "${VCPKG_BIN_DIR}" )
+            message( STATUS "Installing vcpkg runtime DLLs from: ${VCPKG_BIN_DIR}" )
+            install( DIRECTORY "${VCPKG_BIN_DIR}/"
+                DESTINATION ${KICAD_BIN}
+                FILES_MATCHING PATTERN "*.dll"
+                PATTERN "python*" EXCLUDE  # Exclude Python DLLs (we have our own)
+            )
+        endif()
+    endif()
+    
+    # Install KiCad core DLLs (kicommon, kigal, etc.) to bin directory
+    # These are built by the project and needed for file explorer execution
+    if( EXISTS "${CMAKE_BINARY_DIR}/common/kicommon.dll" )
+        install( FILES "${CMAKE_BINARY_DIR}/common/kicommon.dll"
+            DESTINATION ${KICAD_BIN}
+            COMPONENT binary
+        )
+    endif()
+    
+    if( EXISTS "${CMAKE_BINARY_DIR}/common/gal/kigal.dll" )
+        install( FILES "${CMAKE_BINARY_DIR}/common/gal/kigal.dll"
+            DESTINATION ${KICAD_BIN}
+            COMPONENT binary
+        )
+    endif()
+endif()
 
 include( Functions )
 
@@ -875,6 +957,9 @@ include( MinGWResourceCompiler )
 
 # Find ngspice library, required for integrated circuit simulator
 find_package( ngspice REQUIRED )
+
+# Find SQLite3 library, required for local conversation database
+find_package( SQLite3 REQUIRED )
 
 # Find OpenCascade, required for STEP plugin and tools
 find_package(OCC)
@@ -1007,6 +1092,92 @@ else()
 endif()
 message( STATUS "Python module install path: ${PYTHON_DEST}" )
 
+# Install Python interpreter and standard library for vcpkg builds
+# PYTHONHOME is set to bin/ in python_scripting.cpp, so Python libs must be at bin/Lib/
+if( VCPKG_TOOLCHAIN AND WIN32 )
+    # Install Python standard library to bin/Lib/ (PYTHONHOME/Lib)
+    install( DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/python3/Lib/
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/Lib/
+        COMPONENT runtime
+    )
+    
+    # Install Python DLLs to bin/DLLs/ (PYTHONHOME/DLLs)
+    if( EXISTS ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/python3/DLLs/ )
+        install( DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/python3/DLLs/
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/DLLs/
+            COMPONENT runtime
+        )
+    endif()
+    
+    # Install Python executable (for subprocess use)  
+    install( FILES ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/python3/python.exe
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/
+        COMPONENT runtime
+        OPTIONAL
+    )
+    
+    # Install main Python DLL (python311.dll etc.) - may be in different locations
+    install( FILES 
+        ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/python3/python311.dll
+        ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin/python311.dll
+        ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/debug/bin/python311.dll
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/
+        COMPONENT runtime
+        OPTIONAL
+    )
+    
+    # Install vcpkg runtime DLLs (wxWidgets, OpenSSL, Python DLL, etc.)
+    # Install ALL DLLs from both debug and release directories to ensure nothing is missing
+    # This is more reliable than trying to be config-specific
+    
+    # Install all release DLLs (including wxWidgets release builds)
+    install( DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin/
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/
+        COMPONENT runtime
+        FILES_MATCHING
+        PATTERN "*.dll"
+        PATTERN "*d.dll" EXCLUDE  # Exclude debug DLLs from release directory
+    )
+    
+    # Install all debug DLLs (including wxWidgets debug builds)  
+    install( DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/debug/bin/
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/
+        COMPONENT runtime
+        FILES_MATCHING
+        PATTERN "*.dll"
+    )
+    
+    # Install any additional DLLs from tools directory
+    install( DIRECTORY ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/
+        DESTINATION ${CMAKE_INSTALL_PREFIX}/bin/
+        COMPONENT runtime
+        FILES_MATCHING
+        PATTERN "*.dll"
+    )
+    
+    # Debug: Check what DLL directories actually exist
+    if( EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin/" )
+        message( STATUS "✓ Found vcpkg release DLL directory: ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin/" )
+    else()
+        message( WARNING "✗ Missing vcpkg release DLL directory: ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin/" )
+    endif()
+    
+    if( EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/debug/bin/" )
+        message( STATUS "✓ Found vcpkg debug DLL directory: ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/debug/bin/" )
+    else()
+        message( WARNING "✗ Missing vcpkg debug DLL directory: ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/debug/bin/" )
+    endif()
+    
+    if( EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/" )
+        message( STATUS "✓ Found vcpkg tools directory: ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/" )
+    else()
+        message( STATUS "! No vcpkg tools directory found: ${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/tools/" )
+    endif()
+    
+    message( STATUS "Installing ALL vcpkg DLLs to: ${CMAKE_INSTALL_PREFIX}/bin/" )
+    message( STATUS "This ensures both debug and release DLLs are available for any build type." )
+endif()
+
 find_package( PythonLibs 3.6 REQUIRED )
 
 # pybind11 is header-only, so include the subdir
@@ -1111,6 +1282,26 @@ else()
 endif()
 
 message(STATUS "wxUSE_GLCANVAS_EGL=${wxWidgets_GLCANVAS_EGL}")
+
+# Check if wxWidgets has SetStateImages (backported high-DPI tree control support)
+# This is available in patched wxWidgets from kicad-mac-builder and will be in wxWidgets 3.4
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_INCLUDES ${wxWidgets_INCLUDE_DIRS})
+set(CMAKE_REQUIRED_LIBRARIES ${wxWidgets_LIBRARIES})
+set(CMAKE_REQUIRED_DEFINITIONS ${wxWidgets_DEFINITIONS})
+check_cxx_source_compiles("
+    #include <wx/treectrl.h>
+    #include <wx/vector.h>
+    #include <wx/bmpbndl.h>
+    class TestTree : public wxTreeCtrl {
+        void test() { wxVector<wxBitmapBundle> v; SetStateImages(v); }
+    };
+    int main() { return 0; }
+" HAVE_WX_SET_STATE_IMAGES)
+if(HAVE_WX_SET_STATE_IMAGES)
+    message(STATUS "wxWidgets has SetStateImages support (high-DPI tree controls)")
+    add_definitions(-DHAVE_WX_SET_STATE_IMAGES)
+endif()
 
 if( NOT MSVC )
     if( ${wxWidgets_VERSION_STRING} VERSION_LESS 3.2 )
@@ -1220,6 +1411,22 @@ find_package( Doxygen )
 
 add_subdirectory( doxygen )
 
+if( NOT APPLE )
+    if( WIN32 )
+        set( KICAD_TRACE_DIR "${KICAD_DATA}/scripting/trace" )
+    else()
+        set( KICAD_TRACE_DIR "${CMAKE_INSTALL_PREFIX}/${KICAD_DATA}/scripting/trace" )
+        # For relative paths, construct full path
+        if( NOT IS_ABSOLUTE ${KICAD_DATA} )
+            set( KICAD_TRACE_DIR "${CMAKE_INSTALL_PREFIX}/${KICAD_DATA}/scripting/trace" )
+        else()
+            set( KICAD_TRACE_DIR "${KICAD_DATA}/scripting/trace" )
+        endif()
+    endif()
+else()
+    set( KICAD_TRACE_DIR "${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_SUP_DIR}/scripting/trace" )
+endif()
+
 # Generate config.h.
 configure_file( ${PROJECT_SOURCE_DIR}/cmake/config.h.cmake
     ${CMAKE_BINARY_DIR}/config.h )
@@ -1241,9 +1448,57 @@ add_custom_target( uninstall
 # Installation
 #================================================
 
+# Windows URL protocol registration (for authentication callbacks)
+if( WIN32 )
+    install( CODE "
+        message( STATUS \"Registering trace:// URL protocol...\" )
+        execute_process(
+            COMMAND \"\${CMAKE_INSTALL_PREFIX}/bin/trace.exe\" --register-protocol-silent
+            TIMEOUT 30
+            RESULT_VARIABLE REGISTER_RESULT
+            OUTPUT_QUIET
+            ERROR_QUIET
+        )
+        if( REGISTER_RESULT EQUAL 0 )
+            message( STATUS \"  ✓ URL protocol registered successfully\" )
+        else()
+            message( WARNING \"  ⚠ URL protocol registration failed (code: \${REGISTER_RESULT})\" )
+            message( STATUS \"  You can manually register by running: trace.exe --register-protocol\" )
+        endif()
+    " COMPONENT Runtime )
+endif()
+
 include( CTest )
 enable_testing()
 list( APPEND CMAKE_CTEST_ARGUMENTS "--output-on-failure" )
+
+#================================================
+# Windows: Set library paths for AI/Python conversion
+# These must be defined BEFORE add_subdirectory(kicad)
+#================================================
+if( WIN32 )
+    # Library paths are now set at runtime in kicad.cpp OnPgmInit()
+    # using PATHS::getWindowsKiCadRoot() to detect installation directory.
+    # This ensures paths are always correct regardless of where Trace is installed.
+    #
+    # The compile-time definitions below are no longer used, but kept commented
+    # for reference in case they're needed for debugging:
+    #
+    # Build directory for KiCad libraries
+    # set( KICAD_LIBS_BUILD_DIR "${CMAKE_BINARY_DIR}/kicad_libs" )
+    # 
+    # # Library paths for BUILD directory
+    # set( TRACE_WIN_SYMBOL_PATH_BUILD "${KICAD_LIBS_BUILD_DIR}/symbols" )
+    # set( TRACE_WIN_FOOTPRINT_PATH_BUILD "${KICAD_LIBS_BUILD_DIR}/footprints" )
+    # set( TRACE_WIN_3DMODEL_PATH_BUILD "${KICAD_LIBS_BUILD_DIR}/3dmodels" )
+    # 
+    # # Library paths for INSTALL directory
+    # set( TRACE_WIN_SYMBOL_PATH_INSTALL "${CMAKE_INSTALL_PREFIX}/share/kicad_libs/symbols" )
+    # set( TRACE_WIN_FOOTPRINT_PATH_INSTALL "${CMAKE_INSTALL_PREFIX}/share/kicad_libs/footprints" )
+    # set( TRACE_WIN_3DMODEL_PATH_INSTALL "${CMAKE_INSTALL_PREFIX}/share/kicad_libs/3dmodels" )
+    
+    message( STATUS "Windows: Library paths will be detected at runtime" )
+endif()
 
 #================================================
 # Let CMake look in these directories for nested
@@ -1274,10 +1529,10 @@ if( KICAD_BUILD_QA_TESTS )
     add_subdirectory( qa )
 endif()
 
-# Demos
-if( KICAD_INSTALL_DEMOS )
-    add_subdirectory( demos )
-endif ( KICAD_INSTALL_DEMOS )
+# Demos - removed as demos directory does not exist
+# if( KICAD_INSTALL_DEMOS )
+#     add_subdirectory( demos )
+# endif ( KICAD_INSTALL_DEMOS )
 
 # I18n Translations
 if( KICAD_BUILD_I18N )
@@ -1286,7 +1541,7 @@ endif()
 
 if( APPLE )
     set( KICAD_OSX_CODESIGN ON
-            CACHE BOOL "Sign KiCad.app on macOS" FORCE )
+            CACHE BOOL "Sign Trace.app on macOS" FORCE )
     set( KICAD_OSX_SIGNING_ID "-"
             CACHE STRING "macOS Signing ID, defaults to ad-hoc" FORCE )
     set( KICAD_OSX_SIGNING_USE_SECURE_TIMESTAMP OFF
@@ -1303,4 +1558,182 @@ if( APPLE )
     # declare it last.
 
     add_subdirectory( signing )
+
 endif()
+
+# =============================================================================
+# Fetch KiCad libraries from GitLab repositories
+# =============================================================================
+include(FetchContent)
+
+# Allow use of FetchContent_Populate (old API) for downloading library files
+# These repos don't have CMakeLists.txt files, so we can't use MakeAvailable
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+
+# Declare the three KiCad library repositories
+FetchContent_Declare(
+  kicad_symbols
+  GIT_REPOSITORY https://github.com/buildwithtrace/trace-kicad-symbols-lib.git
+  GIT_TAG main
+  GIT_SUBMODULES ""
+)
+
+FetchContent_Declare(
+  kicad_footprints
+  GIT_REPOSITORY https://github.com/buildwithtrace/trace-kicad-footprints-lib.git
+  GIT_TAG main
+  GIT_SUBMODULES ""
+)
+
+FetchContent_Declare(
+  kicad_packages3d
+  GIT_REPOSITORY https://github.com/buildwithtrace/trace-kicad-3dmodels-lib.git
+  GIT_TAG main
+  GIT_SUBMODULES ""
+)
+
+FetchContent_Declare(
+  kicad_templates
+  GIT_REPOSITORY https://github.com/buildwithtrace/trace-kicad-templates-lib.git
+  GIT_TAG main
+  GIT_SUBMODULES ""
+)
+
+# Populate content without processing their CMakeLists.txt files
+# FetchContent_Populate sets variables: <lowercaseName>_SOURCE_DIR and <lowercaseName>_BINARY_DIR
+FetchContent_Populate(kicad_symbols)
+FetchContent_Populate(kicad_footprints)
+FetchContent_Populate(kicad_packages3d)
+FetchContent_Populate(kicad_templates)
+
+# Set up platform-specific install destinations
+if( APPLE )
+    # macOS: Use OSX bundle structure
+    set( KICAD_SYMBOLS_DEST "${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_SUP_DIR}/symbols" )
+    set( KICAD_FOOTPRINTS_DEST "${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_SUP_DIR}/footprints" )
+    set( KICAD_3DMODELS_DEST "${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_SUP_DIR}/3dmodels" )
+    set( KICAD_TEMPLATE_DEST "${OSX_BUNDLE_INSTALL_DIR}/${OSX_BUNDLE_SUP_DIR}/template" )
+elseif( WIN32 )
+    # Windows: Use share/trace structure to match NSIS installer expectations
+    set( KICAD_SYMBOLS_DEST "share/trace/symbols" )
+    set( KICAD_FOOTPRINTS_DEST "share/trace/footprints" )
+    set( KICAD_3DMODELS_DEST "share/trace/3dmodels" )
+    set( KICAD_TEMPLATE_DEST "share/trace/template" )
+else()
+    # Linux: Use share/trace structure
+    set( KICAD_SYMBOLS_DEST "share/trace/symbols" )
+    set( KICAD_FOOTPRINTS_DEST "share/trace/footprints" )
+    set( KICAD_3DMODELS_DEST "share/trace/3dmodels" )
+    set( KICAD_TEMPLATE_DEST "share/trace/template" )
+endif()
+
+# Install symbols: .kicad_sym files
+file(GLOB_RECURSE SYMBOL_FILES "${kicad_symbols_SOURCE_DIR}/*.kicad_sym")
+install(FILES ${SYMBOL_FILES}
+        DESTINATION ${KICAD_SYMBOLS_DEST}
+        COMPONENT Libraries)
+
+# Install sym-lib-table to templates
+if(EXISTS "${kicad_symbols_SOURCE_DIR}/sym-lib-table")
+    install(FILES "${kicad_symbols_SOURCE_DIR}/sym-lib-table"
+            DESTINATION ${KICAD_TEMPLATE_DEST}
+            COMPONENT Libraries)
+endif()
+
+# Install footprints: .pretty directories
+# Find all .pretty directories recursively by searching for directories
+file(GLOB ALL_FOOTPRINT_ITEMS "${kicad_footprints_SOURCE_DIR}/*")
+set(PRETTY_DIRS "")
+foreach(ITEM ${ALL_FOOTPRINT_ITEMS})
+    if(IS_DIRECTORY "${ITEM}")
+        get_filename_component(ITEM_NAME "${ITEM}" NAME)
+        if(ITEM_NAME MATCHES "\\.pretty$")
+            list(APPEND PRETTY_DIRS "${ITEM}")
+        endif()
+        # Recursively search subdirectories (but skip .git)
+        if(NOT ITEM_NAME STREQUAL ".git")
+            file(GLOB SUB_ITEMS "${ITEM}/*")
+            foreach(SUB_ITEM ${SUB_ITEMS})
+                if(IS_DIRECTORY "${SUB_ITEM}")
+                    get_filename_component(SUB_ITEM_NAME "${SUB_ITEM}" NAME)
+                    if(SUB_ITEM_NAME MATCHES "\\.pretty$")
+                        list(APPEND PRETTY_DIRS "${SUB_ITEM}")
+                    endif()
+                endif()
+            endforeach()
+        endif()
+    endif()
+endforeach()
+install(DIRECTORY ${PRETTY_DIRS}
+        DESTINATION ${KICAD_FOOTPRINTS_DEST}
+        COMPONENT Libraries
+        FILES_MATCHING PATTERN "*.kicad_mod"
+        PATTERN ".git" EXCLUDE)
+
+# Install fp-lib-table to templates
+if(EXISTS "${kicad_footprints_SOURCE_DIR}/fp-lib-table")
+    install(FILES "${kicad_footprints_SOURCE_DIR}/fp-lib-table"
+            DESTINATION ${KICAD_TEMPLATE_DEST}
+            COMPONENT Libraries)
+endif()
+
+# Install 3D models: .3dshapes directories
+# Find all .3dshapes directories recursively by searching for directories
+file(GLOB ALL_3D_ITEMS "${kicad_packages3d_SOURCE_DIR}/*")
+set(SHAPE_DIRS "")
+foreach(ITEM ${ALL_3D_ITEMS})
+    if(IS_DIRECTORY "${ITEM}")
+        get_filename_component(ITEM_NAME "${ITEM}" NAME)
+        if(ITEM_NAME MATCHES "\\.3dshapes$")
+            list(APPEND SHAPE_DIRS "${ITEM}")
+        endif()
+        # Recursively search subdirectories (but skip .git)
+        if(NOT ITEM_NAME STREQUAL ".git")
+            file(GLOB SUB_ITEMS "${ITEM}/*")
+            foreach(SUB_ITEM ${SUB_ITEMS})
+                if(IS_DIRECTORY "${SUB_ITEM}")
+                    get_filename_component(SUB_ITEM_NAME "${SUB_ITEM}" NAME)
+                    if(SUB_ITEM_NAME MATCHES "\\.3dshapes$")
+                        list(APPEND SHAPE_DIRS "${SUB_ITEM}")
+                    endif()
+                endif()
+            endforeach()
+        endif()
+    endif()
+endforeach()
+install(DIRECTORY ${SHAPE_DIRS}
+        DESTINATION ${KICAD_3DMODELS_DEST}
+        COMPONENT Libraries
+        FILES_MATCHING PATTERN "*.wrl"
+        PATTERN ".git" EXCLUDE)
+
+install(DIRECTORY ${SHAPE_DIRS}
+        DESTINATION ${KICAD_3DMODELS_DEST}
+        COMPONENT Libraries
+        FILES_MATCHING PATTERN "*.step"
+        PATTERN ".git" EXCLUDE)
+
+install(DIRECTORY ${SHAPE_DIRS}
+        DESTINATION ${KICAD_3DMODELS_DEST}
+        COMPONENT Libraries
+        FILES_MATCHING PATTERN "*.stp"
+        PATTERN ".git" EXCLUDE)
+
+# Install project templates from kicad-templates (Arduino, STM32, Raspberry Pi, etc.)
+# Each template is a subdirectory containing project files with a meta/info.html
+file(GLOB TEMPLATE_DIRS "${kicad_templates_SOURCE_DIR}/*")
+foreach(TEMPLATE_DIR ${TEMPLATE_DIRS})
+    if(IS_DIRECTORY "${TEMPLATE_DIR}")
+        get_filename_component(TEMPLATE_NAME "${TEMPLATE_DIR}" NAME)
+        # Skip hidden directories and non-template items (templates have meta/info.html)
+        if(NOT TEMPLATE_NAME MATCHES "^\\." AND EXISTS "${TEMPLATE_DIR}/meta/info.html")
+            install(DIRECTORY "${TEMPLATE_DIR}/"
+                    DESTINATION "${KICAD_TEMPLATE_DEST}/${TEMPLATE_NAME}"
+                    COMPONENT Libraries
+                    PATTERN ".git" EXCLUDE
+                    PATTERN ".github" EXCLUDE)
+        endif()
+    endif()
+endforeach()

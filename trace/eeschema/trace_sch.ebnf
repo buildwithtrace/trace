@@ -1,0 +1,132 @@
+(* 
+ * This program source code file is part of Trace, an AI-native PCB design application.
+ *
+ * Copyright (C) 2025-2026 Trace Developers Team
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *)
+
+t-schem      = { statement } , EOF ;
+
+statement    = file_uid_stmt
+             | paper_stmt
+             | component_stmt
+             | net_stmt
+             | wire_stmt
+             | cwire_stmt
+             | cwiredef_stmt
+             | label_stmt
+             | glabel_stmt
+             | hier_stmt
+             | sheet_stmt
+             | text_stmt
+             | junction_stmt
+             | noconnect_stmt
+             | bus_stmt
+             | polyline_stmt
+             | rectangle_stmt
+             | arc_stmt
+             | bezier_stmt
+             | circle_stmt
+             | text_box_stmt
+             | bus_entry_stmt
+             | instance_meta_stmt
+             | COMMENT ;
+
+component_stmt   = "comp" , WS , ref , WS , comp_symbol , [ WS , comp_value ] ,
+                   [ WS , "@", WS , coord ] , [ WS , "rot" , WS , NUMBER ] ,
+                   [ WS , "unit" , WS , NUMBER ] , [ WS , "body_style" , WS , NUMBER ] ,
+                   [ WS , "props" , WS , prop_list ] , WS , "pins" , WS , pin_list ,
+                   WS , "uid" , WS , UUID ;
+
+net_stmt         = "net" , WS , ident , { WS , ident } ;
+
+wire_stmt        = "wire" , WS , wire_points , WS , "uid" , WS , UUID ;
+
+cwire_stmt       = "cwire" , WS , cwire_ref , WS , endpoint , WS , "->" , WS , endpoint , [ WS , "net" , WS , ident ] ;
+
+cwire_ref        = "CW" , NUMBER ;                        (* e.g., CW1, CW2 *)
+
+cwiredef_stmt    = "cwiredef" , WS , cwire_ref , WS , wire_points ;
+
+endpoint         = pin_ref | junction_ref ;
+pin_ref          = IDENT , "." , ( IDENT | NUMBER ) ;   (* e.g., C1.1, U1.VCC *)
+junction_ref     = "JUNC" , NUMBER ;                     (* e.g., JUNC1, JUNC2 *)
+
+label_stmt       = "label" , WS , ( STRING | ident ) , WS , "@" , WS , coord ;
+
+glabel_stmt      = "glabel" , WS , ident , WS , "@" , WS , coord ,
+                   [ WS , "rot" , WS , NUMBER ] , [ WS , "shape" , WS , ident ] ,
+                   [ WS , prop_list ] ;
+
+hier_stmt        = "hier" , WS , ident , WS , "@" , WS , coord ,
+                   [ WS , "rot" , WS , NUMBER ] , [ WS , "shape" , WS , ident ] ,
+                   [ WS , prop_list ] ;
+
+sheet_stmt       = "sheet" , WS , ident , WS , "file" , WS , ( STRING | ident ) ,
+                   [ WS , "@" , WS , coord ] , [ WS , "rot" , WS , NUMBER ] ,
+                   [ WS , "size" , WS , coord ] , [ WS , prop_list ] ,
+                   [ WS , "ins" , WS , pinmap ] , [ WS , "outs" , WS , pinmap ] ,
+                   WS , "uid" , WS , UUID ;
+
+text_stmt        = "text" , WS , STRING , [ WS , "@" , WS , coord ] , [ WS , prop_list ] ;
+
+junction_stmt    = "junction" , WS , [ junction_ref , WS ] , "@" , WS , coord , WS , "uid" , WS , UUID ;
+
+noconnect_stmt   = "noconnect" , WS , "@" , WS , coord , WS , "uid" , WS , UUID ;
+
+bus_stmt         = "bus" , WS , wire_points , WS , "uid" , WS , UUID ;
+
+polyline_stmt    = "polyline" , WS , wire_points , WS , "uid" , WS , UUID ;
+
+rectangle_stmt   = "rectangle" , WS , "start" , WS , coord , WS , "end" , WS , coord , WS , stroke , WS , fill , WS , "uid" , WS , UUID ;
+
+arc_stmt         = "arc" , WS , "start" , WS , coord , WS , "mid" , WS , coord , WS , "end" , WS , coord , WS , stroke , WS , fill , WS , "uid" , WS , UUID ;
+
+bezier_stmt      = "bezier" , WS , wire_points , WS , stroke , WS , fill , WS , "uid" , WS , UUID ;
+
+circle_stmt      = "circle" , WS , "center" , WS , coord , WS , "radius" , WS , NUMBER , WS , stroke , WS , fill , WS , "uid" , WS , UUID ;
+
+text_box_stmt    = "text_box" , WS , STRING , WS , "@" , WS , coord , [ WS , "rot" , WS , NUMBER ] , WS , "size" , WS , coord , [ WS , "margins" , WS , margins ] , WS , stroke , WS , fill , [ WS , "effects" , WS , prop_list ] , WS , "uid" , WS , UUID ;
+
+bus_entry_stmt   = "bus_entry" , WS , "@" , WS , coord , WS , "size" , WS , coord , WS , stroke , WS , "uid" , WS , UUID ;
+
+instance_meta_stmt = "inst" , WS , "project" , WS , STRING , WS , "path" , WS , STRING , [ WS , "page" , WS , NUMBER ] ;
+
+file_uid_stmt      = "file_uid" , WS , UUID ;
+paper_stmt         = "paper" , WS , STRING ;
+
+prop_list        = "{" , WS? , { property , [ WS? , "," , WS? ] } , WS? , "}" ;
+property         = "prop" , WS , STRING , WS , ":" , WS , STRING ;
+
+pin_list         = "(" , WS? , pin_assign , { WS? , "," , WS? , pin_assign } , WS? , ")" ;
+pin_assign       = ( IDENT | NUMBER ) , "=" , ident , [ WS , "@" , WS , coord ] ;
+
+pinmap           = "{" , WS? , { pin_assign , [ WS? , "," , WS? ] } , WS? , "}" ;
+
+wire_points      = point , { WS? , "->" , WS? , point } ;
+point            = coord ;
+
+ref               = IDENT ;            (* e.g. R1, U2 *)
+comp_symbol       = IDENT ;            (* e.g. R, C, Device:R, 74HC04 *)
+comp_value        = STRING | IDENT | NUMBER ;
+ident             = IDENT ;
+coord             = NUMBER , "," , NUMBER ;
+
+stroke            = "stroke" , WS , "width" , WS , NUMBER , WS , "type" , WS , STRING ;
+
+fill              = "fill" , WS , "type" , WS , STRING , [ WS , "color" , WS , NUMBER , WS , NUMBER , WS , NUMBER , WS , NUMBER ] ;
+
+margins           = NUMBER , "," , NUMBER , "," , NUMBER , "," , NUMBER ;
