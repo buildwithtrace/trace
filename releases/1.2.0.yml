@@ -1,0 +1,12 @@
+version: "1.2.0"
+summary: "Trace now supports KiCAD 10, some bug fixes and new features"
+changes:
+  - category: "New Features"
+    items:
+      - "Trace now supports KiCAD 10"
+  - category: "Bug Fixes"
+    items:
+      - "Fixed the app suddenly stopping during stream"
+  - category: "Improvements"
+    items:
+      - "New UI changes to the chat interface for better UI/UX"

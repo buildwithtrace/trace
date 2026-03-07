@@ -1,0 +1,15 @@
+# Trace Authors and Contributors
+
+This file lists contributors to Trace-specific features and modifications.
+For KiCad contributors (whose work Trace is built upon), see AUTHORS.txt.
+
+## Trace Developers (2025-2026)
+
+Ayomide Adekoya <ayo@buildwithtrace.com>
+Jeff Allo <jeff@buildwithtrace.com>
+Olu Afolabi <olu@buildwithtrace.com>
+
+---
+
+Trace is a modified version of KiCad EDA.
+See https://github.com/buildwithtrace/trace for the source repository.

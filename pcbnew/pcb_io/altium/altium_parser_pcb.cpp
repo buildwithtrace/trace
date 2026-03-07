@@ -35,8 +35,36 @@
 #include "io/altium/altium_props_utils.h"
 
 
+/**
+ * Flag to enable Altium importer logging.
+ *
+ * Use "KICAD_ALTIUM_IMPORT" to enable.
+ *
+ * @ingroup trace_env_vars
+ */
+static const wxChar* traceAltiumImport = wxT( "KICAD_ALTIUM_IMPORT" );
+
+
+/*
+ * Returns an Altium layer id from V6 and V7 file format data, compatible with the rest of the parser.
+ */
+ALTIUM_LAYER altium_versioned_layer( ALTIUM_LAYER aV6Layer, ALTIUM_LAYER aV7Layer )
+{
+    if( aV7Layer >= ALTIUM_LAYER::V7_MECHANICAL_17 && aV7Layer <= ALTIUM_LAYER::V7_MECHANICAL_LAST )
+        return aV7Layer;
+
+    return aV6Layer;
+}
+
+
+/*
+ * Returns V7 layer ids for Mechanical 17 and above. Otherwise, V6 layer ids.
+ */
 ALTIUM_LAYER altium_layer_from_name( const wxString& aName )
 {
+    if( aName.IsEmpty() )
+        return ALTIUM_LAYER::UNKNOWN;
+
     static const std::unordered_map<std::string, ALTIUM_LAYER> hash_map = {
         { "TOP", ALTIUM_LAYER::TOP_LAYER },
         { "MID1", ALTIUM_LAYER::MID_LAYER_1 },
@@ -131,16 +159,87 @@ ALTIUM_LAYER altium_layer_from_name( const wxString& aName )
 
     auto it = hash_map.find( std::string( aName.c_str() ) );
 
-    if( it == hash_map.end() )
+    if( it != hash_map.end() )
+        return it->second;
+
+    // Try V7 format mechanical layers
+    const wxString mechanicalStr( "MECHANICAL" );
+
+    if( aName.StartsWith( mechanicalStr ) )
     {
-        wxLogError( _( "Unknown mapping of the Altium layer '%s'." ), aName );
-        return ALTIUM_LAYER::UNKNOWN;
+        unsigned long val = 0;
+
+        if( aName.Mid( mechanicalStr.length() ).ToULong( &val ) )
+            return static_cast<ALTIUM_LAYER>( static_cast<int>( ALTIUM_LAYER::V7_MECHANICAL_BASE ) + val );
     }
-    else
+
+    wxLogError( _( "Unknown mapping of the Altium layer '%s'." ), aName );
+    return ALTIUM_LAYER::UNKNOWN;
+}
+
+
+ALTIUM_MECHKIND altium_mechkind_from_name( const wxString& aName )
+{
+    static const std::unordered_map<std::string, ALTIUM_MECHKIND> hash_map = {
+        { "AssemblyTop", ALTIUM_MECHKIND::ASSEMBLY_TOP },
+        { "AssemblyBottom", ALTIUM_MECHKIND::ASSEMBLY_BOT },
+
+        { "AssemblyNotes", ALTIUM_MECHKIND::ASSEMBLY_NOTES },
+        { "Board", ALTIUM_MECHKIND::BOARD },
+
+        { "CoatingTop", ALTIUM_MECHKIND::COATING_TOP },
+        { "CoatingBottom", ALTIUM_MECHKIND::COATING_BOT },
+
+        { "ComponentCenterTop", ALTIUM_MECHKIND::COMPONENT_CENTER_TOP },
+        { "ComponentCenterBottom", ALTIUM_MECHKIND::COMPONENT_CENTER_BOT },
+
+        { "ComponentOutlineTop", ALTIUM_MECHKIND::COMPONENT_OUTLINE_TOP },
+        { "ComponentOutlineBottom", ALTIUM_MECHKIND::COMPONENT_OUTLINE_BOT },
+
+        { "CourtyardTop", ALTIUM_MECHKIND::COURTYARD_TOP },
+        { "CourtyardBottom", ALTIUM_MECHKIND::COURTYARD_BOT },
+
+        { "DesignatorTop", ALTIUM_MECHKIND::DESIGNATOR_TOP },
+        { "DesignatorBottom", ALTIUM_MECHKIND::DESIGNATOR_BOT },
+
+        { "Dimensions", ALTIUM_MECHKIND::DIMENSIONS },
+        { "DimensionsTop", ALTIUM_MECHKIND::DIMENSIONS_TOP },
+        { "DimensionsBottom", ALTIUM_MECHKIND::DIMENSIONS_BOT },
+
+        { "FabNotes", ALTIUM_MECHKIND::FAB_NOTES },
+
+        { "GluePointsTop", ALTIUM_MECHKIND::GLUE_POINTS_TOP },
+        { "GluePointsBottom", ALTIUM_MECHKIND::GLUE_POINTS_BOT },
+
+        { "GoldPlatingTop", ALTIUM_MECHKIND::GOLD_PLATING_TOP },
+        { "GoldPlatingBottom", ALTIUM_MECHKIND::GOLD_PLATING_BOT },
+
+        { "ValueTop", ALTIUM_MECHKIND::VALUE_TOP },
+        { "ValueBottom", ALTIUM_MECHKIND::VALUE_BOT },
+
+        { "VCut", ALTIUM_MECHKIND::V_CUT },
+
+        { "3DBodyTop", ALTIUM_MECHKIND::BODY_3D_TOP },
+        { "3DBodyBottom", ALTIUM_MECHKIND::BODY_3D_BOT },
+
+        { "RouteToolPath", ALTIUM_MECHKIND::ROUTE_TOOL_PATH },
+        { "Sheet", ALTIUM_MECHKIND::SHEET },
+        { "BoardShape", ALTIUM_MECHKIND::BOARD_SHAPE },
+    };
+
+    auto it = hash_map.find( std::string( aName.c_str() ) );
+
+    if( it != hash_map.end() )
     {
         return it->second;
     }
+    else
+    {
+        wxLogError( _( "Unknown mapping of the Altium layer kind '%s'." ), aName );
+        return ALTIUM_MECHKIND::UNKNOWN;
+    }
 }
+
 
 void altium_parse_polygons( std::map<wxString, wxString>& aProps,
                             std::vector<ALTIUM_VERTICE>& aVertices )
@@ -270,6 +369,99 @@ AEXTENDED_PRIMITIVE_INFORMATION::AEXTENDED_PRIMITIVE_INFORMATION( ALTIUM_BINARY_
 }
 
 
+ABOARD6_LAYER_STACKUP::ABOARD6_LAYER_STACKUP( const std::map<wxString, wxString>& aProps, const wxString& aPrefix,
+                                              uint32_t aLayerIdFallback )
+{
+    // LAYERID is specific to V7 format
+    layerId = ALTIUM_PROPS_UTILS::ReadInt( aProps, aPrefix + wxT( "LAYERID" ), aLayerIdFallback );
+
+    name = ALTIUM_PROPS_UTILS::ReadString( aProps, aPrefix + wxT( "NAME" ), wxT( "" ) );
+    nextId = ALTIUM_PROPS_UTILS::ReadInt( aProps, aPrefix + wxT( "NEXT" ), 0 );
+    prevId = ALTIUM_PROPS_UTILS::ReadInt( aProps, aPrefix + wxT( "PREV" ), 0 );
+    copperthick = ALTIUM_PROPS_UTILS::ReadKicadUnit( aProps, aPrefix + wxT( "COPTHICK" ), wxT( "1.4mil" ) );
+
+    dielectricconst = ALTIUM_PROPS_UTILS::ReadDouble( aProps, aPrefix + wxT( "DIELCONST" ), 0. );
+    dielectricthick = ALTIUM_PROPS_UTILS::ReadKicadUnit( aProps, aPrefix + wxT( "DIELHEIGHT" ), wxT( "60mil" ) );
+    dielectricmaterial = ALTIUM_PROPS_UTILS::ReadString( aProps, aPrefix + wxT( "DIELMATERIAL" ), wxT( "FR-4" ) );
+
+    // TODO: In some component libraries MECHENABLED may be FALSE but the layers show up as used.
+    // (we should check if any objects exists on these layers?)
+    wxString mechEnabled = ALTIUM_PROPS_UTILS::ReadString( aProps, aPrefix + wxT( "MECHENABLED" ), wxT( "" ) );
+
+    mechenabled = !mechEnabled.Contains( wxS( "FALSE" ) );
+
+    if( mechenabled )
+    {
+        wxString mechKind = ALTIUM_PROPS_UTILS::ReadString( aProps, aPrefix + wxT( "MECHKIND" ), wxT( "" ) );
+
+        if( !mechKind.IsEmpty() )
+            mechkind = altium_mechkind_from_name( mechKind );
+    }
+}
+
+
+static std::vector<ABOARD6_LAYER_STACKUP> ReadAltiumStackupFromProperties( const std::map<wxString, wxString>& aProps )
+{
+    std::vector<ABOARD6_LAYER_STACKUP> stackup;
+
+    for( size_t i = 1; i < std::numeric_limits<size_t>::max(); i++ )
+    {
+        const wxString layeri = wxString( wxT( "LAYER" ) ) << std::to_string( i );
+        const wxString layername = layeri + wxT( "NAME" );
+
+        auto layernameit = aProps.find( layername );
+
+        if( layernameit == aProps.end() )
+            break;
+
+        ABOARD6_LAYER_STACKUP l( aProps, layeri, i );
+        stackup.push_back( l );
+    }
+
+    // V7 format layers
+    for( size_t i = 0; i < std::numeric_limits<size_t>::max(); i++ )
+    {
+        const wxString layeri = wxString( wxT( "LAYERV7_" ) ) << std::to_string( i );
+        const wxString layername = layeri + wxT( "NAME" );
+
+        auto layernameit = aProps.find( layername );
+
+        if( layernameit == aProps.end() )
+            break;
+
+        ABOARD6_LAYER_STACKUP l( aProps, layeri, 0 );
+        stackup.push_back( l );
+    }
+
+    return stackup;
+}
+
+
+ALIBRARY::ALIBRARY( ALTIUM_BINARY_PARSER& aReader )
+{
+    std::map<wxString, wxString> props = aReader.ReadProperties();
+
+    if( props.empty() )
+        THROW_IO_ERROR( wxT( "Library stream has no properties!" ) );
+
+    layercount = ALTIUM_PROPS_UTILS::ReadInt( props, wxT( "LAYERSETSCOUNT" ), 1 ) + 1;
+
+    stackup = ReadAltiumStackupFromProperties( props );
+
+    for( ABOARD6_LAYER_STACKUP& l : stackup )
+    {
+        wxString originalName = l.name;
+
+        // Ensure that layer names are unique in KiCad
+        for( int ii = 2; !layerNames.insert( l.name ).second; ii++ )
+            l.name = wxString::Format( wxT( "%s %d" ), originalName, ii );
+    }
+
+    if( aReader.HasParsingError() )
+        THROW_IO_ERROR( wxT( "Library stream was not parsed correctly!" ) );
+}
+
+
 ABOARD6::ABOARD6( ALTIUM_BINARY_PARSER& aReader )
 {
     std::map<wxString, wxString> props = aReader.ReadProperties();
@@ -284,35 +476,15 @@ ABOARD6::ABOARD6( ALTIUM_BINARY_PARSER& aReader )
 
     layercount = ALTIUM_PROPS_UTILS::ReadInt( props, wxT( "LAYERSETSCOUNT" ), 1 ) + 1;
 
-    for( size_t i = 1; i < std::numeric_limits<size_t>::max(); i++ )
+    stackup = ReadAltiumStackupFromProperties( props );
+
+    for( ABOARD6_LAYER_STACKUP& l : stackup )
     {
-        const wxString layeri    = wxT( "LAYER" ) + wxString( std::to_string( i ) );
-        const wxString layername = layeri + wxT( "NAME" );
-
-        auto layernameit = props.find( layername );
-
-        if( layernameit == props.end() )
-            break; // it doesn't seem like we know beforehand how many vertices are inside a polygon
-
-        ABOARD6_LAYER_STACKUP l;
-
-        l.name = ALTIUM_PROPS_UTILS::ReadString( props, layername, wxT( "" ) );
         wxString originalName = l.name;
-        int ii = 2;
 
         // Ensure that layer names are unique in KiCad
-        while( !layerNames.insert( l.name ).second )
-            l.name = wxString::Format( wxT( "%s %d" ), originalName, ii++ );
-
-        l.nextId = ALTIUM_PROPS_UTILS::ReadInt( props, layeri + wxT( "NEXT" ), 0 );
-        l.prevId = ALTIUM_PROPS_UTILS::ReadInt( props, layeri + wxT( "PREV" ), 0 );
-        l.copperthick = ALTIUM_PROPS_UTILS::ReadKicadUnit( props, layeri + wxT( "COPTHICK" ), wxT( "1.4mil" ) );
-
-        l.dielectricconst = ALTIUM_PROPS_UTILS::ReadDouble( props, layeri + wxT( "DIELCONST" ), 0. );
-        l.dielectricthick = ALTIUM_PROPS_UTILS::ReadKicadUnit( props, layeri + wxT( "DIELHEIGHT" ),  wxT( "60mil" ) );
-        l.dielectricmaterial = ALTIUM_PROPS_UTILS::ReadString( props, layeri + wxT( "DIELMATERIAL" ), wxT( "FR-4" ) );
-
-        stackup.push_back( l );
+        for( int ii = 2; !layerNames.insert( l.name ).second; ii++ )
+            l.name = wxString::Format( wxT( "%s %d" ), originalName, ii );
     }
 
     altium_parse_polygons( props, board_vertices );
@@ -394,7 +566,8 @@ ADIMENSION6::ADIMENSION6( ALTIUM_BINARY_PARSER& aReader )
     if( props.empty() )
         THROW_IO_ERROR( wxT( "Dimensions6 stream has no props" ) );
 
-    layer = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( props, wxT( "LAYER" ), wxT( "" ) ) );
+    layer_v6 = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( props, wxT( "LAYER" ), wxT( "" ) ) );
+    layer_v7 = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( props, wxT( "LAYER_V7" ), wxT( "" ) ) );
     kind = static_cast<ALTIUM_DIMENSION_KIND>( ALTIUM_PROPS_UTILS::ReadInt( props, wxT( "DIMENSIONKIND" ), 0 ) );
 
     textformat = ALTIUM_PROPS_UTILS::ReadString( props, wxT( "TEXTFORMAT" ), wxT( "" ) );
@@ -450,6 +623,8 @@ ADIMENSION6::ADIMENSION6( ALTIUM_BINARY_PARSER& aReader )
     else if( dimensionunit == wxT( "Centimeters" ) ) textunit = ALTIUM_UNIT::CM;
     else                                             textunit = ALTIUM_UNIT::UNKNOWN;
 
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
+
     if( aReader.HasParsingError() )
         THROW_IO_ERROR( wxT( "Dimensions6 stream was not parsed correctly" ) );
 }
@@ -496,7 +671,8 @@ APOLYGON6::APOLYGON6( ALTIUM_BINARY_PARSER& aReader )
     if( properties.empty() )
         THROW_IO_ERROR( wxT( "Polygons6 stream has no properties" ) );
 
-    layer  = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( properties, wxT( "LAYER" ), wxT( "" ) ) );
+    layer_v6 = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( properties, wxT( "LAYER" ), wxT( "" ) ) );
+    layer_v7 = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( properties, wxT( "LAYER_V7" ), wxT( "" ) ) );
     net    = ALTIUM_PROPS_UTILS::ReadInt( properties, wxT( "NET" ), ALTIUM_NET_UNCONNECTED );
     locked = ALTIUM_PROPS_UTILS::ReadBool( properties, wxT( "LOCKED" ), false );
 
@@ -520,6 +696,8 @@ APOLYGON6::APOLYGON6( ALTIUM_BINARY_PARSER& aReader )
     else                                            hatchstyle = ALTIUM_POLYGON_HATCHSTYLE::UNKNOWN;
 
     altium_parse_polygons( properties, vertices );
+
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
 
     if( aReader.HasParsingError() )
         THROW_IO_ERROR( wxT( "Polygons6 stream was not parsed correctly" ) );
@@ -631,7 +809,7 @@ AARC6::AARC6( ALTIUM_BINARY_PARSER& aReader )
     // Subrecord 1
     aReader.ReadAndSetSubrecordLength();
 
-    layer = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
+    layer_v6 = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
 
     uint8_t flags1    = aReader.Read<uint8_t>();
     is_locked         = ( flags1 & 0x04 ) == 0;
@@ -651,15 +829,20 @@ AARC6::AARC6( ALTIUM_BINARY_PARSER& aReader )
     width      = aReader.ReadKicadUnit();
     subpolyindex = aReader.Read<uint16_t>();
 
-    if( aReader.GetRemainingSubrecordBytes() >= 10 )
+    int remaining = aReader.GetRemainingSubrecordBytes();
+
+    if( remaining >= 9 )
     {
-        aReader.Skip( 9 );
+        aReader.Skip( 5 );
+        layer_v7 = static_cast<ALTIUM_LAYER>( aReader.Read<uint32_t>() );
+    }
+
+    if( remaining >= 10 )
         keepoutrestrictions = aReader.Read<uint8_t>();
-    }
     else
-    {
         keepoutrestrictions = is_keepout ? 0x1F : 0;
-    }
+
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
 
     aReader.SkipSubrecord();
 
@@ -747,8 +930,8 @@ APAD6::APAD6( ALTIUM_BINARY_PARSER& aReader )
 
     ExpectSubrecordLengthAtLeast( "Pads6", "subrecord5", 110, subrecord5 );
 
-    layer     = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
-    tolayer   = ALTIUM_LAYER::UNKNOWN;
+    layer_v6 = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
+    tolayer = ALTIUM_LAYER::UNKNOWN;
     fromlayer = ALTIUM_LAYER::UNKNOWN;
 
     uint8_t flags1  = aReader.Read<uint8_t>();
@@ -792,15 +975,13 @@ APAD6::APAD6( ALTIUM_BINARY_PARSER& aReader )
 
     if( subrecord5 == 110 )
     {
-        // Don't know exactly what this is, but it's always been 0 in the files with
-        // 110-byte subrecord5.
+        // Don't know exactly what this is, but it's always been 0 in the files with 110-byte subrecord5.
         // e.g. https://gitlab.com/kicad/code/kicad/-/issues/16514
         const uint32_t unknown = aReader.ReadKicadUnit(); // to 110
 
         if( unknown != 0 )
         {
-            THROW_IO_ERROR( wxString::Format( "Pads6 stream subrecord5 + 106 has value %d, "
-                                              "which is unexpected",
+            THROW_IO_ERROR( wxString::Format( "Pads6 stream subrecord5 + 106 has value %d, which is unexpected",
                                               unknown ) );
         }
         holerotation = 0;
@@ -838,7 +1019,7 @@ APAD6::APAD6( ALTIUM_BINARY_PARSER& aReader )
     // Known lengths: 596, 628, 651
     // 596 is the number of bytes read in this code-block
     if( subrecord6 >= 596 )
-    { // TODO: detect type from something else than the size?
+    {
         sizeAndShape = std::make_unique<APAD6_SIZE_AND_SHAPE>();
 
         for( wxSize& size : sizeAndShape->inner_size )
@@ -874,6 +1055,8 @@ APAD6::APAD6( ALTIUM_BINARY_PARSER& aReader )
     {
         wxLogError( _( "Pads6 stream has unexpected length for subrecord 6: %d." ), subrecord6 );
     }
+
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
 
     aReader.SkipSubrecord();
 
@@ -975,7 +1158,7 @@ ATRACK6::ATRACK6( ALTIUM_BINARY_PARSER& aReader )
     // Subrecord 1
     aReader.ReadAndSetSubrecordLength();
 
-    layer = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
+    layer_v6 = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
 
     uint8_t flags1    = aReader.Read<uint8_t>();
     is_locked         = ( flags1 & 0x04 ) == 0;
@@ -992,16 +1175,22 @@ ATRACK6::ATRACK6( ALTIUM_BINARY_PARSER& aReader )
     end   = aReader.ReadVector2IPos();
     width = aReader.ReadKicadUnit();
     subpolyindex = aReader.Read<uint16_t>();
+    aReader.Skip( 1 );
 
-    if( aReader.GetRemainingSubrecordBytes() >= 11 )
+    int remaining = aReader.GetRemainingSubrecordBytes();
+
+    if( remaining >= 9 )
     {
-        aReader.Skip( 10 );
+        aReader.Skip( 5 );
+        layer_v7 = static_cast<ALTIUM_LAYER>( aReader.Read<uint32_t>() );
+    }
+
+    if( remaining >= 10 )
         keepoutrestrictions = aReader.Read<uint8_t>();
-    }
     else
-    {
         keepoutrestrictions = is_keepout ? 0x1F : 0;
-    }
+
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
 
     aReader.SkipSubrecord();
 
@@ -1019,7 +1208,7 @@ ATEXT6::ATEXT6( ALTIUM_BINARY_PARSER& aReader, std::map<uint32_t, wxString>& aSt
     // Subrecord 1 - Properties
     size_t subrecord1 = aReader.ReadAndSetSubrecordLength();
 
-    layer = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
+    layer_v6 = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
     aReader.Skip( 6 );
     component = aReader.Read<uint16_t>();
     aReader.Skip( 4 );
@@ -1066,19 +1255,19 @@ ATEXT6::ATEXT6( ALTIUM_BINARY_PARSER& aReader, std::map<uint32_t, wxString>& aSt
 
     int remaining = aReader.GetRemainingSubrecordBytes();
 
-    if( remaining >= 103 )
+    if( remaining >= 93 )
     {
         VECTOR2I unk_vec = aReader.ReadVector2ISize();
-        printf(" Unk vec: %d, %d\n", unk_vec.x, unk_vec.y);
+        wxLogTrace( traceAltiumImport, " Unk vec: %d, %d\n", unk_vec.x, unk_vec.y );
 
         barcode_margin = aReader.ReadVector2ISize();
 
         int32_t unk32 = aReader.ReadKicadUnit();
-        printf(" Unk32: %d\n", unk32);
+        wxLogTrace( traceAltiumImport, " Unk32: %d\n", unk32 );
 
         barcode_type = static_cast<ALTIUM_BARCODE_TYPE>( aReader.Read<uint8_t>() );
         uint8_t unk8 = aReader.Read<uint8_t>();
-        printf(" Unk8: %u\n", unk8);
+        wxLogTrace( traceAltiumImport, " Unk8: %u\n", unk8 );
 
         barcode_inverted = aReader.Read<uint8_t>() != 0;
         fonttype = static_cast<ALTIUM_TEXT_TYPE>( aReader.Read<uint8_t>() );
@@ -1086,14 +1275,14 @@ ATEXT6::ATEXT6( ALTIUM_BINARY_PARSER& aReader, std::map<uint32_t, wxString>& aSt
         aReader.ReadBytes( fontData, sizeof( fontData ) );
         barcode_fontname = wxString( fontData, wxMBConvUTF16LE(), sizeof( fontData ) ).BeforeFirst( '\0' );
 
-        for( size_t ii = 0; ii < 5; ++ii )
-        {
-            uint8_t temp = aReader.Peek<uint8_t>();
-            uint32_t temp32 = ii < 1 ? ALTIUM_PROPS_UTILS::ConvertToKicadUnit( aReader.Peek<uint32_t>() ) : 0;
-            printf( "2ATEXT6 %zu:\t Byte:%u, Kicad:%u\n", ii, temp, temp32 );
-            aReader.Skip( 1 );
-        }
+        uint8_t unk8_2 = aReader.Read<uint8_t>();
+        wxLogTrace( traceAltiumImport, " Unk8_2: %u\n", unk8 );
 
+        layer_v7 = static_cast<ALTIUM_LAYER>( aReader.Read<uint32_t>() );
+    }
+
+    if( remaining >= 103 )
+    {
         // "Frame" text type flag
         isFrame = aReader.Read<uint8_t>() != 0;
 
@@ -1104,7 +1293,7 @@ ATEXT6::ATEXT6( ALTIUM_BINARY_PARSER& aReader, std::map<uint32_t, wxString>& aSt
         {
             uint8_t temp = aReader.Peek<uint8_t>();
             uint32_t temp32 = ii < 3 ? ALTIUM_PROPS_UTILS::ConvertToKicadUnit( aReader.Peek<uint32_t>() ) : 0;
-            printf( "3ATEXT6 %zu:\t Byte:%u, Kicad:%u\n", ii, temp, temp32 );
+            wxLogTrace( traceAltiumImport, "3ATEXT6 %zu:\t Byte:%u, Kicad:%u\n", ii, temp, temp32 );
             aReader.Skip( 1 );
         }
     }
@@ -1149,6 +1338,8 @@ ATEXT6::ATEXT6( ALTIUM_BINARY_PARSER& aReader, std::map<uint32_t, wxString>& aSt
         isInvertedRect = false;
     }
 
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
+
     if( aReader.HasParsingError() )
         THROW_IO_ERROR( wxT( "Texts6 stream was not parsed correctly" ) );
 }
@@ -1163,7 +1354,7 @@ AFILL6::AFILL6( ALTIUM_BINARY_PARSER& aReader )
     // Subrecord 1
     aReader.ReadAndSetSubrecordLength();
 
-    layer = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
+    layer_v6 = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
 
     uint8_t flags1 = aReader.Read<uint8_t>();
     is_locked      = ( flags1 & 0x04 ) == 0;
@@ -1179,15 +1370,20 @@ AFILL6::AFILL6( ALTIUM_BINARY_PARSER& aReader )
     pos2     = aReader.ReadVector2IPos();
     rotation = aReader.Read<double>();
 
-    if( aReader.GetRemainingSubrecordBytes() >= 10 )
+    int remaining = aReader.GetRemainingSubrecordBytes();
+
+    if( remaining >= 9 )
     {
-        aReader.Skip( 9 );
+        aReader.Skip( 5 );
+        layer_v7 = static_cast<ALTIUM_LAYER>( aReader.Read<uint32_t>() );
+    }
+
+    if( remaining >= 10 )
         keepoutrestrictions = aReader.Read<uint8_t>();
-    }
     else
-    {
         keepoutrestrictions = is_keepout ? 0x1F : 0;
-    }
+
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
 
     aReader.SkipSubrecord();
 
@@ -1205,10 +1401,11 @@ AREGION6::AREGION6( ALTIUM_BINARY_PARSER& aReader, bool aExtendedVertices )
     // Subrecord 1
     aReader.ReadAndSetSubrecordLength();
 
-    layer = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
+    layer_v6 = static_cast<ALTIUM_LAYER>( aReader.Read<uint8_t>() );
 
     uint8_t flags1 = aReader.Read<uint8_t>();
     is_locked      = ( flags1 & 0x04 ) == 0;
+    is_teardrop    = ( flags1 & 0x10 ) != 0;
 
     uint8_t flags2 = aReader.Read<uint8_t>();
     is_keepout     = flags2 == 2;
@@ -1224,6 +1421,8 @@ AREGION6::AREGION6( ALTIUM_BINARY_PARSER& aReader, bool aExtendedVertices )
 
     if( properties.empty() )
         THROW_IO_ERROR( wxT( "Regions6 stream has empty properties" ) );
+
+    layer_v7 = altium_layer_from_name( ALTIUM_PROPS_UTILS::ReadString( properties, wxT( "V7_LAYER" ), "" ) );
 
     int  pkind     = ALTIUM_PROPS_UTILS::ReadInt( properties, wxT( "KIND" ), 0 );
     bool is_cutout = ALTIUM_PROPS_UTILS::ReadBool( properties, wxT( "ISBOARDCUTOUT" ), false );
@@ -1248,19 +1447,25 @@ AREGION6::AREGION6( ALTIUM_BINARY_PARSER& aReader, bool aExtendedVertices )
         {
             kind = ALTIUM_REGION_KIND::COPPER;
         }
+
         break;
+
     case 1:
         kind = ALTIUM_REGION_KIND::POLYGON_CUTOUT;
         break;
+
     case 2:
         kind = ALTIUM_REGION_KIND::DASHED_OUTLINE;
         break;
+
     case 3:
         kind = ALTIUM_REGION_KIND::UNKNOWN_3; // TODO: what kind is this?
         break;
+
     case 4:
         kind = ALTIUM_REGION_KIND::CAVITY_DEFINITION;
         break;
+
     default:
         kind = ALTIUM_REGION_KIND::UNKNOWN;
         break;
@@ -1305,6 +1510,8 @@ AREGION6::AREGION6( ALTIUM_BINARY_PARSER& aReader, bool aExtendedVertices )
             holes.at( k ).emplace_back( VECTOR2I( x, y ) );
         }
     }
+
+    layer = altium_versioned_layer( layer_v6, layer_v7 );
 
     aReader.SkipSubrecord();
 

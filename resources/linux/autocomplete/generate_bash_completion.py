@@ -6,12 +6,12 @@ import sys
 
 # --- Tree Generation Logic ---
 
-KICAD_CLI = "kicad-cli"
+TRACE_CLI = "trace-cli"
 ENV = os.environ.copy()
 ENV["KICAD_RUN_FROM_BUILD_DIR"] = "1"
 
 def get_help(args):
-    cmd = [KICAD_CLI] + args + ["-h"]
+    cmd = [TRACE_CLI] + args + ["-h"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, env=ENV)
         return result.stdout
@@ -73,9 +73,9 @@ def explore(path):
 
 def generate_bash_completion(tree):
     script = []
-    script.append("# kicad-cli bash completion")
+    script.append("# trace-cli bash completion")
     script.append("")
-    script.append("_kicad_cli()")
+    script.append("_trace_cli()")
     script.append("{")
     script.append("    local cur prev words cword")
     script.append("    if type _init_completion >/dev/null 2>&1; then")
@@ -135,7 +135,7 @@ def generate_bash_completion(tree):
 
     script.append("    esac")
     script.append("}")
-    script.append("complete -F _kicad_cli kicad-cli")
+    script.append("complete -F _trace_cli trace-cli")
 
     return "\n".join(script)
 

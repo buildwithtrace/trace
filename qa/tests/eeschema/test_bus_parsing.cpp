@@ -1,0 +1,351 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include <qa_utils/wx_utils/unit_test_utils.h>
+
+#include <project/net_settings.h>
+#include <sch_connection.h>
+
+
+BOOST_AUTO_TEST_SUITE( BusParsing )
+
+
+BOOST_AUTO_TEST_CASE( ParsesFormattedVectorBus )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusVector( wxS( "D_{[1..2]}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "D" ) );
+
+    std::vector<wxString> expected = { wxS( "D1" ), wxS( "D2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesFormattedGroupWithVectorMember )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "MEM{D_{[1..2]} ~{LATCH}}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "MEM" ) );
+
+    std::vector<wxString> expected = { wxS( "D[1..2]" ), wxS( "LATCH" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RejectsUnescapedSpacesInBusVector )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Unescaped space in bus vector prefix should fail
+    BOOST_CHECK( !NET_SETTINGS::ParseBusVector( wxS( "Data Bus[1..4]" ), &name, &members ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesBackslashEscapedSpacesInBusVector )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Backslash-escaped space in bus vector prefix should work
+    BOOST_CHECK( NET_SETTINGS::ParseBusVector( wxS( "Data\\ Bus[1..2]" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "Data Bus" ) );
+
+    std::vector<wxString> expected = { wxS( "Data Bus1" ), wxS( "Data Bus2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesQuotedSpacesInBusVector )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Quoted string with space in bus vector prefix should work
+    BOOST_CHECK( NET_SETTINGS::ParseBusVector( wxS( "\"Data Bus\"[1..2]" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "Data Bus" ) );
+
+    std::vector<wxString> expected = { wxS( "Data Bus1" ), wxS( "Data Bus2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RejectsUnescapedSpacesInBusGroupPrefix )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Unescaped space in bus group prefix should fail
+    BOOST_CHECK( !NET_SETTINGS::ParseBusGroup( wxS( "My Bus{NET1 NET2}" ), &name, &members ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesBackslashEscapedSpacesInBusGroupPrefix )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Backslash-escaped space in bus group prefix should work
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "My\\ Bus{NET1 NET2}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "My Bus" ) );
+
+    std::vector<wxString> expected = { wxS( "NET1" ), wxS( "NET2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesQuotedSpacesInBusGroupPrefix )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Quoted string with space in bus group prefix should work
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "\"My Bus\"{NET1 NET2}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "My Bus" ) );
+
+    std::vector<wxString> expected = { wxS( "NET1" ), wxS( "NET2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesBackslashEscapedSpacesInBusGroupMembers )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Backslash-escaped space in bus group member name should work.
+    // Members are stored with escaped spaces so ForEachBusMember recursion works correctly.
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "BUS{Net\\ One Net\\ Two}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "BUS" ) );
+
+    std::vector<wxString> expected = { wxS( "Net\\ One" ), wxS( "Net\\ Two" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesQuotedSpacesInBusGroupMembers )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Quoted member names with spaces should work.
+    // Members are stored with escaped spaces so ForEachBusMember recursion works correctly.
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "BUS{\"Net One\" \"Net Two\"}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "BUS" ) );
+
+    std::vector<wxString> expected = { wxS( "Net\\ One" ), wxS( "Net\\ Two" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesMixedEscapingInBusGroup )
+{
+    wxString              name;
+    std::vector<wxString> members;
+
+    // Mix of quoted and backslash-escaped names should work.
+    // Members are stored with escaped spaces so ForEachBusMember recursion works correctly.
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "BUS{\"Net One\" Net\\ Two PLAIN}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "BUS" ) );
+
+    std::vector<wxString> expected = { wxS( "Net\\ One" ), wxS( "Net\\ Two" ), wxS( "PLAIN" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ForEachBusMemberExpandsVectorWithSpacesInGroup )
+{
+    // Test that vector members with spaces inside bus groups are correctly expanded.
+    // This tests the fix for the bug where quoted vector members like "Data Bus"[1..2]
+    // would fail recursive parsing because the quotes were stripped without preserving
+    // space escaping.
+    std::vector<wxString> expandedMembers;
+    auto collector = [&expandedMembers]( const wxString& member )
+                     {
+                         expandedMembers.push_back( member );
+                     };
+
+    // Quoted vector member inside a bus group
+    NET_SETTINGS::ForEachBusMember( wxS( "BUS{\"Data Bus\"[1..2] PLAIN}" ), collector );
+
+    std::vector<wxString> expected = { wxS( "Data Bus1" ), wxS( "Data Bus2" ), wxS( "PLAIN" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( expandedMembers.begin(), expandedMembers.end(),
+                                   expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ForEachBusMemberExpandsEscapedVectorInGroup )
+{
+    // Test backslash-escaped vector member inside a bus group
+    std::vector<wxString> expandedMembers;
+    auto collector = [&expandedMembers]( const wxString& member )
+                     {
+                         expandedMembers.push_back( member );
+                     };
+
+    NET_SETTINGS::ForEachBusMember( wxS( "BUS{Data\\ Bus[1..2] PLAIN}" ), collector );
+
+    std::vector<wxString> expected = { wxS( "Data Bus1" ), wxS( "Data Bus2" ), wxS( "PLAIN" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( expandedMembers.begin(), expandedMembers.end(),
+                                   expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesOverbarInVectorBusPrefix )
+{
+    // Test overbar formatting in bus vector prefix (issue #22873)
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusVector( wxS( "bus_~{label}[0..2]" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "bus_label" ) );
+
+    std::vector<wxString> expected = { wxS( "bus_label0" ), wxS( "bus_label1" ), wxS( "bus_label2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesSuperscriptInVectorBusPrefix )
+{
+    // Test superscript formatting in bus vector prefix (issue #22873)
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusVector( wxS( "bus_^{label}[0..2]" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "bus_label" ) );
+
+    std::vector<wxString> expected = { wxS( "bus_label0" ), wxS( "bus_label1" ), wxS( "bus_label2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesSubscriptInVectorBusPrefix )
+{
+    // Test subscript formatting in bus vector prefix (issue #22873)
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusVector( wxS( "bus__{label}[0..2]" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "bus_label" ) );
+
+    std::vector<wxString> expected = { wxS( "bus_label0" ), wxS( "bus_label1" ), wxS( "bus_label2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesOverbarInGroupBusPrefix )
+{
+    // Test overbar formatting in bus group prefix (issue #22873)
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "bus_~{label}{net1 net2}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "bus_label" ) );
+
+    std::vector<wxString> expected = { wxS( "net1" ), wxS( "net2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesSuperscriptInGroupBusPrefix )
+{
+    // Test superscript formatting in bus group prefix (issue #22873)
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "bus_^{label}{net1 net2}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "bus_label" ) );
+
+    std::vector<wxString> expected = { wxS( "net1" ), wxS( "net2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ParsesSubscriptInGroupBusPrefix )
+{
+    // Test subscript formatting in bus group prefix (issue #22873)
+    wxString              name;
+    std::vector<wxString> members;
+
+    BOOST_CHECK( NET_SETTINGS::ParseBusGroup( wxS( "bus__{label}{net1 net2}" ), &name, &members ) );
+    BOOST_CHECK_EQUAL( name, wxS( "bus_label" ) );
+
+    std::vector<wxString> expected = { wxS( "net1" ), wxS( "net2" ) };
+
+    BOOST_CHECK_EQUAL_COLLECTIONS( members.begin(), members.end(), expected.begin(), expected.end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( PrintBusForUIUnescapesBackslashSpaces )
+{
+    // Test that PrintBusForUI converts backslash-escaped spaces to regular spaces (issue #22872)
+
+    // Simple case with backslash-escaped space
+    BOOST_CHECK_EQUAL( SCH_CONNECTION::PrintBusForUI( wxS( "net\\ name" ) ),
+                       wxS( "net name" ) );
+
+    // Bus group member with escaped space in prefix
+    BOOST_CHECK_EQUAL( SCH_CONNECTION::PrintBusForUI( wxS( "bus\\ name.net\\ 1" ) ),
+                       wxS( "bus name.net 1" ) );
+
+    // Multiple escaped spaces
+    BOOST_CHECK_EQUAL( SCH_CONNECTION::PrintBusForUI( wxS( "my\\ net\\ name" ) ),
+                       wxS( "my net name" ) );
+
+    // No escaped spaces (should pass through unchanged)
+    BOOST_CHECK_EQUAL( SCH_CONNECTION::PrintBusForUI( wxS( "simple_net" ) ),
+                       wxS( "simple_net" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( PrintBusForUIHandlesMixedFormatting )
+{
+    // Test that PrintBusForUI handles both super/sub/overbar formatting and escaped spaces
+
+    // Overbar formatting only
+    BOOST_CHECK_EQUAL( SCH_CONNECTION::PrintBusForUI( wxS( "~{reset}" ) ),
+                       wxS( "reset" ) );
+
+    // Both overbar and escaped space
+    BOOST_CHECK_EQUAL( SCH_CONNECTION::PrintBusForUI( wxS( "my\\ ~{signal}" ) ),
+                       wxS( "my signal" ) );
+}
+
+
+BOOST_AUTO_TEST_SUITE_END()

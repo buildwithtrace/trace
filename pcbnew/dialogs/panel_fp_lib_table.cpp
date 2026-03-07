@@ -48,6 +48,7 @@
 #include <lib_table_notebook_panel.h>
 #include <confirm.h>
 #include <lib_table_grid_data_model.h>
+#include <kiplatform/ui.h>
 #include <wildcards_and_files_ext.h>
 #include <pgm_base.h>
 #include <pcb_edit_frame.h>
@@ -56,7 +57,7 @@
 #include <dialogs/dialog_plugin_options.h>
 #include <footprint_viewer_frame.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <pcbnew_id.h>          // For ID_PCBNEW_END_LIST
 #include <settings/settings_manager.h>
 #include <paths.h>
@@ -107,7 +108,25 @@ protected:
     {
         FP_LIB_TABLE_GRID_DATA_MODEL* table = static_cast<FP_LIB_TABLE_GRID_DATA_MODEL*>( aGrid->GetTable() );
         LIBRARY_TABLE_ROW&            tableRow = table->at( aRow );
+
+        if( tableRow.Type() == LIBRARY_TABLE_ROW::TABLE_TYPE_NAME )
+        {
+            wxString filter = _( "Footprint Library Tables" );
+#ifndef __WXOSX__
+            filter << wxString::Format( _( " (%s)|%s" ), FILEEXT::FootprintLibraryTableFileName,
+                                        FILEEXT::FootprintLibraryTableFileName );
+#else
+            filter << wxString::Format( _( " (%s)|%s" ), wxFileSelectorDefaultWildcardStr,
+                                        wxFileSelectorDefaultWildcardStr );
+#endif
+            return filter;
+        }
+
         PCB_IO_MGR::PCB_FILE_T        fileType = PCB_IO_MGR::EnumFromStr( tableRow.Type() );
+
+        if( fileType == PCB_IO_MGR::PCB_FILE_UNKNOWN )
+            return wxEmptyString;
+
         const IO_BASE::IO_FILE_DESC&  pluginDesc = m_supportedFpFiles.at( fileType );
 
         if( pluginDesc.m_IsFile )
@@ -161,10 +180,10 @@ protected:
 
     void openTable( const LIBRARY_TABLE_ROW& aRow ) override
     {
-        wxFileName uri = LIBRARY_MANAGER::ExpandURI( aRow.URI(), Pgm().GetSettingsManager().Prj() );
-        auto       nestedTable = std::make_unique<LIBRARY_TABLE>( uri, LIBRARY_TABLE_SCOPE::GLOBAL );
+        wxFileName fn( LIBRARY_MANAGER::ExpandURI( aRow.URI(), Pgm().GetSettingsManager().Prj() ) );
+        std::shared_ptr<LIBRARY_TABLE> child = std::make_shared<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::GLOBAL );
 
-        m_panel->AddTable( nestedTable.get(), aRow.Nickname(), true );
+        m_panel->OpenTable( child, aRow.Nickname() );
     }
 
     wxString getTablePreamble() override
@@ -175,6 +194,31 @@ protected:
 protected:
     PANEL_FP_LIB_TABLE* m_panel;
 };
+
+
+void PANEL_FP_LIB_TABLE::OpenTable( const std::shared_ptr<LIBRARY_TABLE>& aTable, const wxString& aTitle )
+{
+    for( int ii = 2; ii < (int) m_notebook->GetPageCount(); ++ii )
+    {
+        if( m_notebook->GetPageText( ii ) == aTitle )
+        {
+            // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
+            // results in a re-entrant call where the second call is one page behind.
+            for( int attempts = 0; attempts < 3; ++attempts )
+                m_notebook->ChangeSelection( ii );
+
+            return;
+        }
+    }
+
+    m_nestedTables.push_back( aTable );
+    AddTable( aTable.get(), aTitle, true );
+
+    // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
+    // results in a re-entrant call where the second call is one page behind.
+    for( int attempts = 0; attempts < 3; ++attempts )
+        m_notebook->ChangeSelection( m_notebook->GetPageCount() - 1 );
+}
 
 
 void PANEL_FP_LIB_TABLE::AddTable( LIBRARY_TABLE* aTable, const wxString& aTitle, bool aClosable )
@@ -581,6 +625,8 @@ void PANEL_FP_LIB_TABLE::browseLibrariesHandler( wxCommandEvent& event )
         wxFileDialog dlg( m_parent, title, *lastDir, wxEmptyString, fileDesc.FileFilter(),
                           wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE );
 
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
         if( dlg.ShowModal() == wxID_CANCEL )
             return;
 
@@ -809,7 +855,7 @@ bool PANEL_FP_LIB_TABLE::TransferDataFromWindow()
             projectTable->Save().map_error(
                     []( const LIBRARY_ERROR& aError )
                     {
-                        wxMessageBox( _( "Error saving project-specific library table:\n\n" ) + aError.message,
+                        wxMessageBox( _( "Error saving project library table:\n\n" ) + aError.message,
                                       _( "File Save Error" ), wxOK | wxICON_ERROR );
                     } );
         }

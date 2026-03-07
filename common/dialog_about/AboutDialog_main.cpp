@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2010 Rafael Sokolowski <Rafael.Sokolowski@web.de>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -63,10 +64,10 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     /* Set title */
     aInfo.SetAppName( Pgm().App().GetAppName() );
 
-    /* KiCad build version */
+    /* Trace build version */
     wxString version;
     version << ( KIPLATFORM::APP::IsOperatingSystemUnsupported() ? wxString( wxS( "(UNSUPPORTED)" ) )
-                                                                 : GetBuildVersion() )
+                                                                 : GetTraceBuildVersion() )
 #ifdef DEBUG
             << wxT( ", debug" )
 #else
@@ -88,8 +89,8 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     libVersion << wxT( " ANSI " );
 #endif
 
-    // Just in case someone builds KiCad with the platform native of Boost instead of
-    // the version included with the KiCad source.
+    // Just in case someone builds with the platform native of Boost instead of
+    // the version included with the source.
     libVersion << wxT( "and Boost " ) << ( BOOST_VERSION / 100000 ) << wxT( "." )
                << ( BOOST_VERSION / 100 % 1000 ) << wxT( "." ) << ( BOOST_VERSION % 100 )
                << wxT( "\n" );
@@ -113,58 +114,21 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
                 << wxT( "</u></b>" ); // bold & underlined font for caption
 
     description << wxT( "<p>" )
-                << _( "The KiCad EDA Suite is a set of open source applications for the "
-                      "creation of electronic schematics and printed circuit boards." )
+                << _( "Trace is a free and open-source electronics design automation (EDA) suite, "
+                      "forked from KiCad. It features schematic capture, integrated circuit simulation, "
+                      "printed circuit board (PCB) layout, 3D rendering, and plotting/data export to "
+                      "numerous formats." )
                 << wxT( "</p>" );
 
-    description << wxT( "</p>" );
+    description << wxT( "<p>" )
+                << _( "Trace version: " ) << GetTraceBuildVersion() << wxT( "<br>" )
+                << _( "Based on KiCad version: " ) << GetBuildVersion()
+                << wxT( "</p>" );
 
-    /* websites */
-    description << wxT( "<p><b><u>" )
-                << _( "KiCad on the web" )
-                << wxT( "</u></b>" ); // bold & underlined font for caption
-
-    // bullet-ed list with some http links
-    description << wxT( "<ul>" );
-    description << wxT( "<li>" )
-                << _( "The official KiCad website - " )
-                << HtmlHyperlink( wxS( "http://www.kicad.org" ) )
-                << wxT( "</li>" );
-    description << wxT( "<li>" )
-                << _( "Developer website - " )
-                << HtmlHyperlink( wxS( "https://go.kicad.org/dev" ) )
-                << wxT( "</li>" );
-
-    description << wxT( "<li>" )
-                << _("Official KiCad library repositories - " )
-                << HtmlHyperlink( wxS( "https://go.kicad.org/libraries" ) )
-                << wxT( "</li>" );
-
-    description << wxT( "</ul></p>" );
-
-    description << wxT( "<p><b><u>" )
-                << _( "Bug tracker" )
-                << wxT( "</u></b>" ); // bold & underlined font caption
-
-    // bullet-ed list with some http links
-    description << wxT( "<ul>" );
-    description << wxT( "<li>" )
-                << _( "Report or examine bugs - " )
-                << HtmlHyperlink( wxS( "https://go.kicad.org/bugs" ) )
-                << wxT( "</li>" );
-    description << wxT( "</ul></p>" );
-
-    description << wxT( "<p><b><u>" )
-                << _( "KiCad users group and community" )
-                << wxT( "</u></b>" ); // bold & underlined font caption
-
-    description << wxT( "<ul>" );
-    description << wxT( "<li>" )
-                << _( "KiCad forum - " )
-                << HtmlHyperlink( wxS( "https://go.kicad.org/forum" ) )
-                << wxT( "</li>" );
-
-    description << wxT( "</ul></p>" );
+    description << wxT( "<p style='font-size: small;'>" )
+                << _( "Trace is an independent product not affiliated with or endorsed by the KiCad project. "
+                      "KiCad is a registered trademark of The Linux Foundation." )
+                << wxT( "</p>" );
 
     aInfo.SetDescription( description );
 
@@ -174,7 +138,7 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     license
         << wxT( "<div align='center'>" )
         << HtmlNewline( 4 )
-        << _( "The complete KiCad EDA Suite is released under the" ) << HtmlNewline( 2 )
+        << _( "Trace is released under the" ) << HtmlNewline( 2 )
         << HtmlHyperlink( wxS( "http://www.gnu.org/licenses" ),
                           _( "GNU General Public License (GPL) version 3 or any later version" ) )
         << wxT( "</div>" );
@@ -856,6 +820,8 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
 
     // Lead librarians
     ADD_LIBRARIAN( wxT( "Carsten Presser") );
+    // Librarian trainining/recruiting
+    ADD_LIBRARIAN( wxT( "Kliment Yanev" ) );
 
     // Active librarians (last 2 years)
     ADD_LIBRARIAN( wxT( "Geries AbuAkel" ) );
@@ -865,15 +831,19 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     ADD_LIBRARIAN( wxT( "Greg Cormier" ) );
     ADD_LIBRARIAN( wxT( "Tobias Falk" ) );
     ADD_LIBRARIAN( wxT( "Simon Fivat" ) );
+    ADD_LIBRARIAN( wxT( "Ferrum" ) );
     ADD_LIBRARIAN( wxT( "Jan Sebastian Götte (jaseg)" ) );
     ADD_LIBRARIAN( wxT( "Petr Hodina" ) );
     ADD_LIBRARIAN( wxT( "Mikkel Jeppesen" ) );
+    ADD_LIBRARIAN( wxT( "McDowell Johnson" ) );
+    ADD_LIBRARIAN( wxT( "Graham Keeth" ) );
     ADD_LIBRARIAN( wxT( "Aristeidis Kimirtzis" ) );
     ADD_LIBRARIAN( wxT( "Brandon Kirisaki" ) );
+    ADD_LIBRARIAN( wxT( "Thea Krug" ) );
     ADD_LIBRARIAN( wxT( "Uli Köhler" ) );
-    ADD_LIBRARIAN( wxT( "Graham Keeth" ) );
     ADD_LIBRARIAN( wxT( "Andrew Lutsenko" ) );
     ADD_LIBRARIAN( wxT( "Mojca Miklavec Groenhuis" ) );
+    ADD_LIBRARIAN( wxT( "Peniel Mubita" ) );
     ADD_LIBRARIAN( wxT( "Jorge Neiva" ) );
     ADD_LIBRARIAN( wxT( "Carlos Nieves Ónega" ) );
     ADD_LIBRARIAN( wxT( "Lynn Ochs" ) );
@@ -886,7 +856,7 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     ADD_LIBRARIAN( wxT( "Frank Severinsen" ) );
     ADD_LIBRARIAN( wxT( "Martin Sotirov" ) );
     ADD_LIBRARIAN( wxT( "Philipp Swoboda" ) );
-    ADD_LIBRARIAN( wxT( "Kliment Yanev" ) );
+    ADD_LIBRARIAN( wxT( "Christoph Werner" ) );
 
     // Previously active librarians
     ADD_LIBRARIAN( wxT( "Christian Schlüter" ) );

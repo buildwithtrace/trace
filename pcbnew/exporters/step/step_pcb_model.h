@@ -68,6 +68,7 @@ class PAD;
 
 class TDocStd_Document;
 class XCAFApp_Application;
+class XCAFDoc_ColorTool;
 class XCAFDoc_ShapeTool;
 
 typedef std::pair< std::string, TDF_Label > MODEL_DATUM;
@@ -155,7 +156,7 @@ public:
      * @param aPosition The center position of the countersink
      * @param aDiameter The diameter of the countersink at the board surface (in IU)
      * @param aDepth The depth of the countersink from the board surface (in IU)
-     * @param aAngle The total cone angle in decidegrees (e.g., 900 = 90°, 820 = 82°)
+     * @param aAngle The total cone angle in decidegrees (e.g., 900 = 90�, 820 = 82�)
      * @param aFrontSide True if countersink is on the front (top) side, false for back (bottom)
      * @param aOrigin The origin offset for coordinate transformation
      * @return true if successfully added
@@ -184,9 +185,10 @@ public:
                            const VECTOR2D& aOrigin, const wxString& aNetname );
 
     // add a component at the given position and orientation
-    bool AddComponent( const std::string& aFileName, const std::string& aRefDes, bool aBottom,
-                       const VECTOR2D& aPosition, double aRotation, const VECTOR3D& aOffset,
-                       const VECTOR3D& aOrientation, const VECTOR3D& aScale, bool aSubstituteModels = true );
+    bool AddComponent( const wxString& aBaseName, const wxString& aFileName,
+                       const std::vector<wxString>& aAltFilenames, const wxString& aRefDes,
+                       bool aBottom, VECTOR2D aPosition, double aRotation, VECTOR3D aOffset,
+                       VECTOR3D aOrientation, VECTOR3D aScale, bool aSubstituteModels = true );
 
     void SetCopperColor( double r, double g, double b );
     void SetPadColor( double r, double g, double b );
@@ -196,6 +198,7 @@ public:
     void SetSimplifyShapes( bool aValue );
     void SetStackup( const BOARD_STACKUP& aStackup );
     void SetNetFilter( const wxString& aFilter );
+    void SetExtraPadThickness( bool aValue );
 
     // Set the max distance (in mm) to consider 2 points have the same coordinates
     // and can be merged
@@ -300,17 +303,21 @@ private:
     /**
      * Load a 3D model data.
      *
-     * @param aFileNameUTF8 is the filename encoded UTF8 (different formats allowed)
+     * @param aBaseName is the model name to set.
+     * @param aFileName is the filename (different formats allowed)
      * but for WRML files a model data can be loaded instead of the vrml data,
      * not suitable in a step file.
+     * @param aAltFilenames provides additional filenames for WRL substitution.
      * @param aScale is the X,Y,Z scaling factors.
      * @param aLabel is the TDF_Label to store the data.
      * @param aSubstituteModels = true to allows data substitution, false to disallow.
      * @param aErrorMessage (can be nullptr) is an error message to be displayed on error.
      * @return true if successfully loaded, false on error.
      */
-    bool getModelLabel( const std::string& aFileNameUTF8, const VECTOR3D& aScale, TDF_Label& aLabel,
-                        bool aSubstituteModels, wxString* aErrorMessage = nullptr );
+    bool getModelLabel( const wxString& aBaseName, const wxString& aFileName,
+                        const std::vector<wxString>& aAltFilenames, VECTOR3D aScale,
+                        TDF_Label& aLabel, bool aSubstituteModels,
+                        wxString* aErrorMessage = nullptr );
 
     bool getModelLocation( bool aBottom, const VECTOR2D& aPosition, double aRotation, const VECTOR3D& aOffset,
                            const VECTOR3D& aOrientation, TopLoc_Location& aLocation );
@@ -324,6 +331,18 @@ private:
     TDF_Label transferModel( Handle( TDocStd_Document )& source, Handle( TDocStd_Document ) & dest,
                              const VECTOR3D& aScale );
 
+    /**
+     * Transfer color information from source document to destination document.
+     *
+     * This is necessary because TDocStd_XLinkTool::Copy may not properly transfer color
+     * associations which are stored separately in the ColorTool section of XDE documents.
+     * Colors are matched by searching for equivalent shapes in the destination document.
+     */
+    void transferColors( Handle( XCAFDoc_ShapeTool )& aSrcShapeTool,
+                         Handle( XCAFDoc_ColorTool )& aSrcColorTool,
+                         Handle( XCAFDoc_ShapeTool )& aDstShapeTool,
+                         Handle( XCAFDoc_ColorTool )& aDstColorTool );
+
     bool CompressSTEP( wxString& inputFile, wxString& outputFile );
 
     Handle( XCAFApp_Application )   m_app;
@@ -333,6 +352,7 @@ private:
     bool                            m_hasPCB;           // set true if CreatePCB() has been invoked
     bool                            m_simplifyShapes;   // convert parts of outlines to arcs where possible
     bool                            m_fuseShapes;       // fuse geometry together
+    bool                            m_extraPadThickness; // add extra thickness to pads
     std::vector<TDF_Label>          m_pcb_labels;       // labels for the PCB model (one by main outline)
     MODEL_MAP                       m_models;           // map of file names to model labels
     int                             m_components;       // number of successfully loaded components;

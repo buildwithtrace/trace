@@ -255,6 +255,8 @@ public:
 
     void HighlightSelectionFilter( const PCB_SELECTION_FILTER_OPTIONS& aOptions );
 
+    void ClearToolbarControl( int aId ) override;
+
 protected:
     void configureToolbars() override;
 
@@ -271,7 +273,7 @@ protected:
 
     void unitsChangeRefresh() override;
 
-    virtual void onDarkModeToggle();
+    void onDarkModeToggle( wxSysColourChangedEvent& aEvent );
 
 protected:
     bool                    m_undoRedoBlocked;
@@ -285,8 +287,6 @@ protected:
     PCB_LAYER_BOX_SELECTOR* m_SelLayerBox; // a combo box to display and select active layer
 
     wxAuiNotebook*          m_tabbedPanel;        /// Panel with Layers and Object Inspector tabs
-
-    bool                    m_darkMode;
 };
 
 #endif

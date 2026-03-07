@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2019 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -28,6 +29,7 @@
 #include <kicad_manager_frame.h>
 #include <kiplatform/policy.h>
 #include <kiplatform/secrets.h>
+#include <kiplatform/ui.h>
 #include <confirm.h>
 #include <kidialog.h>
 #include <project/project_file.h>
@@ -55,6 +57,7 @@
 #include <project_tree.h>
 #include <project_tree_traverser.h>
 #include <launch_ext.h>
+#include <amplitude_client.h>
 
 #include "widgets/filedlg_new_project.h"
 
@@ -86,6 +89,8 @@ wxFileName KICAD_MANAGER_CONTROL::newProjectDirectory( wxString* aFileName, bool
     // Add a "Create a new directory" checkbox
     FILEDLG_NEW_PROJECT newProjectHook;
     dlg.SetCustomizeHook( newProjectHook );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return wxFileName();
@@ -141,7 +146,7 @@ wxFileName KICAD_MANAGER_CONTROL::newProjectDirectory( wxString* aFileName, bool
 
 static wxFileName ensureDefaultProjectTemplate()
 {
-    ENV_VAR_MAP_CITER it = Pgm().GetLocalEnvVariables().find( "KICAD_USER_TEMPLATE_DIR" );
+    ENV_VAR_MAP_CITER it = Pgm().GetLocalEnvVariables().find( "TRACE_USER_TEMPLATE_DIR" );
 
     if( it == Pgm().GetLocalEnvVariables().end() || it->second.GetValue() == wxEmptyString )
         return wxFileName();
@@ -150,43 +155,52 @@ static wxFileName ensureDefaultProjectTemplate()
     templatePath.AssignDir( it->second.GetValue() );
     templatePath.AppendDir( "default" );
 
-    if( templatePath.DirExists() )
-        return templatePath;
-
-    if( !templatePath.Mkdir( wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
+    if( !templatePath.DirExists() && !templatePath.Mkdir( wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
         return wxFileName();
 
     wxFileName metaDir = templatePath;
     metaDir.AppendDir( METADIR );
 
-    if( !metaDir.Mkdir( wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
+    if( !metaDir.DirExists() && !metaDir.Mkdir( wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
         return wxFileName();
 
     wxFileName infoFile = metaDir;
     infoFile.SetFullName( METAFILE_INFO_HTML );
-    wxFFile info( infoFile.GetFullPath(), wxT( "w" ) );
 
-    if( !info.IsOpened() )
-        return wxFileName();
+    if( !infoFile.FileExists() )
+    {
+        wxFFile info( infoFile.GetFullPath(), wxT( "w" ) );
 
-    info.Write( wxT( "<html><head><title>Default</title></head><body></body></html>" ) );
-    info.Close();
+        if( !info.IsOpened() )
+            return wxFileName();
+
+        info.Write( wxT( "<html><head><title>Default</title></head><body><h3>Default KiCad project template.</h3></body></html>" ) );
+        info.Close();
+    }
 
     wxFileName proFile = templatePath;
     proFile.SetFullName( wxT( "default.kicad_pro" ) );
-    wxFFile proj( proFile.GetFullPath(), wxT( "w" ) );
 
-    if( !proj.IsOpened() )
+    if( !proFile.FileExists() )
+    {
+        wxFFile proj( proFile.GetFullPath(), wxT( "w" ) );
+
+        if( !proj.IsOpened() )
+            return wxFileName();
+
+        proj.Write( wxT( "{}" ) );
+        proj.Close();
+    }
+
+    if( infoFile.FileExists() && proFile.FileExists() )
+        return templatePath;
+    else
         return wxFileName();
-
-    proj.Write( wxT( "{}" ) );
-    proj.Close();
-
-    return templatePath;
 }
 
 int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "new_project_dialog" );
     wxFileName defaultTemplate = ensureDefaultProjectTemplate();
 
     if( !defaultTemplate.IsOk() )
@@ -202,16 +216,19 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
         return 0;
     }
 
-    KICAD_SETTINGS*                settings = GetAppSettings<KICAD_SETTINGS>( "kicad" );
-    std::vector<std::pair<wxString, wxFileName>> titleDirList;
-    wxFileName                     templatePath;
+    KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
-    ENV_VAR_MAP_CITER itUser = Pgm().GetLocalEnvVariables().find( "KICAD_USER_TEMPLATE_DIR" );
+    wxString userTemplatesPath;
+    wxString systemTemplatesPath;
+
+    ENV_VAR_MAP_CITER itUser = Pgm().GetLocalEnvVariables().find( "TRACE_USER_TEMPLATE_DIR" );
 
     if( itUser != Pgm().GetLocalEnvVariables().end() && itUser->second.GetValue() != wxEmptyString )
     {
+        wxFileName templatePath;
         templatePath.AssignDir( itUser->second.GetValue() );
-        titleDirList.emplace_back( _( "User Templates" ), templatePath );
+        templatePath.Normalize( FN_NORMALIZE_FLAGS | wxPATH_NORM_ENV_VARS );
+        userTemplatesPath = templatePath.GetFullPath();
     }
 
     std::optional<wxString> v = ENV_VAR::GetVersionedEnvVarValue( Pgm().GetLocalEnvVariables(),
@@ -219,23 +236,49 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
 
     if( v && !v->IsEmpty() )
     {
+        wxFileName templatePath;
         templatePath.AssignDir( *v );
-        titleDirList.emplace_back( _( "System Templates" ), templatePath );
+        templatePath.Normalize( FN_NORMALIZE_FLAGS | wxPATH_NORM_ENV_VARS );
+        systemTemplatesPath = templatePath.GetFullPath();
     }
 
-    DIALOG_TEMPLATE_SELECTOR ps( m_frame, settings->m_TemplateWindowPos, settings->m_TemplateWindowSize,
-                                 titleDirList, defaultTemplate );
+    // Use RunMainStack to show the dialog on the main stack instead of the coroutine stack.
+    // This is necessary because the template selector uses a WebView which triggers WebKit's
+    // JavaScript VM initialization. WebKit's stack validation fails on coroutine stacks.
+    int      result = wxID_CANCEL;
+    wxString selectedTemplatePath;
+    wxPoint  templateWindowPos;
+    wxSize   templateWindowSize;
+    wxString projectToEdit;
 
-    int result = ps.ShowModal();
+    RunMainStack(
+            [&]()
+            {
+                DIALOG_TEMPLATE_SELECTOR ps( m_frame, settings->m_TemplateWindowPos,
+                                             settings->m_TemplateWindowSize, userTemplatesPath,
+                                             systemTemplatesPath, settings->m_RecentTemplates );
 
-    settings->m_TemplateWindowPos = ps.GetPosition();
-    settings->m_TemplateWindowSize = ps.GetSize();
+                result = ps.ShowModal();
+                templateWindowPos = ps.GetPosition();
+                templateWindowSize = ps.GetSize();
+                projectToEdit = ps.GetProjectToEdit();
+
+                PROJECT_TEMPLATE* templ = ps.GetSelectedTemplate();
+
+                if( templ )
+                {
+                    wxFileName htmlFile = templ->GetHtmlFile();
+                    htmlFile.RemoveLastDir();
+                    selectedTemplatePath = htmlFile.GetPath();
+                }
+            } );
+
+    settings->m_TemplateWindowPos = templateWindowPos;
+    settings->m_TemplateWindowSize = templateWindowSize;
 
     // Check if user wants to edit a template instead of creating new project
     if( result == wxID_APPLY )
     {
-        wxString projectToEdit = ps.GetProjectToEdit();
-
         if( !projectToEdit.IsEmpty() && wxFileExists( projectToEdit ) )
         {
             m_frame->LoadProject( wxFileName( projectToEdit ) );
@@ -246,18 +289,16 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
     if( result != wxID_OK )
         return -1;
 
-    PROJECT_TEMPLATE* selectedTemplate = ps.GetSelectedTemplate();
-
-    if( !selectedTemplate )
-        selectedTemplate = ps.GetDefaultTemplate();
-
-    if( !selectedTemplate )
+    if( selectedTemplatePath.IsEmpty() )
     {
         wxMessageBox( _( "No project template was selected.  Cannot generate new project." ), _( "Error" ),
                       wxOK | wxICON_ERROR, m_frame );
 
         return -1;
     }
+
+    // Recreate the template object from the saved path
+    PROJECT_TEMPLATE selectedTemplate( selectedTemplatePath );
 
     wxString        default_dir = wxFileName( Prj().GetProjectFullName() ).GetPathWithSep();
     wxString        title = _( "New Project Folder" );
@@ -268,6 +309,8 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
 
     FILEDLG_NEW_PROJECT newProjectHook;
     dlg.SetCustomizeHook( newProjectHook );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return -1;
@@ -305,7 +348,7 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
 
     std::vector< wxFileName > destFiles;
 
-    if( selectedTemplate->GetDestinationFiles( fn, destFiles ) )
+    if( selectedTemplate.GetDestinationFiles( fn, destFiles ) )
     {
         std::vector<wxFileName> overwrittenFiles;
 
@@ -335,11 +378,27 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
 
     wxString errorMsg;
 
-    if( !selectedTemplate->CreateProject( fn, &errorMsg ) )
+    if( !selectedTemplate.CreateProject( fn, &errorMsg ) )
     {
         DisplayErrorMessage( m_frame, _( "A problem occurred creating new project from template." ), errorMsg );
         return -1;
     }
+
+    // Update MRU list with the used template
+    wxFileName templateDir = selectedTemplate.GetHtmlFile();
+    templateDir.RemoveLastDir();
+    wxString templatePath = templateDir.GetPath();
+
+    settings->m_LastUsedTemplate = templatePath;
+
+    // Add to front of recent templates, remove duplicates, trim to 5
+    std::vector<wxString>& recentTemplates = settings->m_RecentTemplates;
+    recentTemplates.erase( std::remove( recentTemplates.begin(), recentTemplates.end(), templatePath ),
+                           recentTemplates.end() );
+    recentTemplates.insert( recentTemplates.begin(), templatePath );
+
+    if( recentTemplates.size() > 5 )
+        recentTemplates.resize( 5 );
 
     m_frame->CreateNewProject( fn.GetFullPath() );
     m_frame->LoadProject( fn );
@@ -349,6 +408,7 @@ int KICAD_MANAGER_CONTROL::NewProject( const TOOL_EVENT& aEvent )
 
 int KICAD_MANAGER_CONTROL::NewFromRepository( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "new_from_repository" );
     DIALOG_GIT_REPOSITORY dlg( m_frame, nullptr );
 
     dlg.SetTitle( _( "Clone Project from Git Repository" ) );
@@ -418,6 +478,8 @@ int KICAD_MANAGER_CONTROL::NewJobsetFile( const TOOL_EVENT& aEvent )
     wxFileDialog dlg( m_frame, _( "Create New Jobset" ), default_dir, wxEmptyString, FILEEXT::JobsetFileWildcard(),
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return -1;
 
@@ -453,6 +515,8 @@ int KICAD_MANAGER_CONTROL::openProject( const wxString& aDefaultDir )
                       wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
     dlg.AddShortcut( PATHS::GetDefaultUserProjectsPath() );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return -1;
@@ -494,6 +558,8 @@ int KICAD_MANAGER_CONTROL::OpenJobsetFile( const TOOL_EVENT& aEvent )
     wxFileDialog dlg( m_frame, _( "Open Jobset" ), default_dir, wxEmptyString, FILEEXT::JobsetFileWildcard(),
                       wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return -1;
 
@@ -528,6 +594,8 @@ int KICAD_MANAGER_CONTROL::ArchiveProject( const TOOL_EVENT& aEvent )
 
     wxFileDialog dlg( m_frame, _( "Archive Project Files" ), fileName.GetPath(), fileName.GetFullName(),
                       FILEEXT::ZipFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return 0;
@@ -588,6 +656,7 @@ int KICAD_MANAGER_CONTROL::ViewDroppedViewers( const TOOL_EVENT& aEvent )
 
 int KICAD_MANAGER_CONTROL::SaveProjectAs( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "project_save_as" );
     wxString     msg;
 
     wxFileName   currentProjectFile( Prj().GetProjectFullName() );
@@ -611,6 +680,8 @@ int KICAD_MANAGER_CONTROL::SaveProjectAs( const TOOL_EVENT& aEvent )
     wxFileDialog dlg( m_frame, _( "Save Project To" ), default_dir, wxEmptyString, wxEmptyString, wxFD_SAVE );
 
     dlg.AddShortcut( PATHS::GetDefaultUserProjectsPath() );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return -1;
@@ -856,16 +927,11 @@ int KICAD_MANAGER_CONTROL::ShowPluginManager( const TOOL_EVENT& aEvent )
         m_frame->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_RELOAD_PLUGINS, payload );
     }
 
-    KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS* settings = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     if( changed.count( PCM_PACKAGE_TYPE::PT_LIBRARY )
         && ( settings->m_PcmLibAutoAdd || settings->m_PcmLibAutoRemove ) )
     {
-        // Reset project tables
-        Prj().SetElem( PROJECT::ELEM::SYMBOL_LIB_TABLE, nullptr );
-        Prj().SetElem( PROJECT::ELEM::FPTBL, nullptr );
-        Prj().SetElem( PROJECT::ELEM::DESIGN_BLOCK_LIB_TABLE, nullptr );
-
         KIWAY& kiway = m_frame->Kiway();
 
         // Reset state containing global lib tables

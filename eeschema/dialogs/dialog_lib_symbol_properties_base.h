@@ -75,6 +75,7 @@ class DIALOG_LIB_SYMBOL_PROPERTIES_BASE : public DIALOG_SHIM
 		wxCheckBox* m_excludeFromSimCheckBox;
 		wxCheckBox* m_excludeFromBomCheckBox;
 		wxCheckBox* m_excludeFromBoardCheckBox;
+		wxCheckBox* m_excludeFromPosFilesCheckBox;
 		wxPanel* m_PanelUnitsAndBodyStyles;
 		wxStaticText* m_staticTextNbUnits;
 		wxSpinCtrl* m_unitSpinCtrl;

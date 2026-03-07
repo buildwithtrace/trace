@@ -32,8 +32,8 @@
 #include <core/map_helpers.h>
 #include <fmt/core.h>
 #include <macros.h>
-#include <richio.h>                        // StrPrintf
 #include <string_utils.h>
+#include <widgets/kistatusbar.h>
 #include <wx_filename.h>
 #include <fmt/chrono.h>
 #include <wx/log.h>
@@ -41,6 +41,7 @@
 #include <wx/tokenzr.h>
 #include <libeval/numeric_evaluator.h>
 #include "locale_io.h"
+#include <wx/event.h>
 
 
 /**
@@ -48,7 +49,7 @@
  * platforms.  This is the list of illegal file name characters for Windows which includes
  * the illegal file name characters for Linux and OSX.
  */
-static const char illegalFileNameChars[] = "\\/:\"<>|*?";
+static constexpr std::string_view illegalFileNameChars = "\\/:\"<>|*?";
 
 static const wxChar defaultVariantName[] = wxT( "< Default >" );
 
@@ -159,7 +160,7 @@ bool ConvertSmartQuotesAndDashes( wxString* aString )
 
     for( wxString::iterator ii = aString->begin(); ii != aString->end(); ++ii )
     {
-        if( *ii == L'\u00B4' || *ii == L'\u2018' || *ii == L'\u2019' )
+        if( *ii == L'\u2018' || *ii == L'\u2019' )
         {
             *ii = '\'';
             retVal = true;
@@ -814,15 +815,7 @@ char* GetLine( FILE* File, char* Line, int* LineNum, int SizeLine )
 
 wxString GetISO8601CurrentDateTime()
 {
-    // on msys2 variant mingw64, in fmt::format the %z format
-    // (offset from UTC in the ISO 8601 format, e.g. -0430) does not work,
-    // and is in fact %Z (locale-dependent time zone name or abbreviation) and breaks our date.
-    // However, on msys2 variant ucrt64, it works (this is not the same code in fmt::format)
-#if defined(__MINGW32__) && !defined(_UCRT)
-    return fmt::format( "{:%FT%T}", fmt::localtime( std::time( nullptr ) ) );
-#else
-    return fmt::format( "{:%FT%T%z}", fmt::localtime( std::time( nullptr ) ) );
-#endif
+    return wxDateTime::Now().FormatISOCombined( 'T' );
 }
 
 
@@ -1323,37 +1316,49 @@ int GetTrailingInt( const wxString& aStr )
 
 wxString GetIllegalFileNameWxChars()
 {
-    return From_UTF8( illegalFileNameChars );
+    return wxString::FromUTF8( illegalFileNameChars.data(), illegalFileNameChars.length() );
 }
 
 
-bool ReplaceIllegalFileNameChars( std::string* aName, int aReplaceChar )
+bool ReplaceIllegalFileNameChars( std::string& aName, int aReplaceChar )
 {
-    bool changed = false;
-    std::string result;
-    result.reserve( aName->length() );
+    size_t first_illegal_pos = aName.find_first_of( illegalFileNameChars );
 
-    for( std::string::iterator it = aName->begin();  it != aName->end();  ++it )
+    if( first_illegal_pos == std::string::npos )
     {
-        if( strchr( illegalFileNameChars, *it ) )
+        return false;
+    }
+
+    std::string result;
+    // result will be at least equal to original, add 16 in case of hex replacements
+    result.reserve( aName.length() + 16 );
+    // append the valid part
+    result.append( aName, 0, first_illegal_pos );
+
+    for( size_t i = first_illegal_pos; i < aName.length(); ++i )
+    {
+        char c = aName[i];
+
+        // Check if this specific char is illegal
+        if( illegalFileNameChars.find( c ) != std::string_view::npos )
         {
             if( aReplaceChar )
-                StrPrintf( &result, "%c", aReplaceChar );
+            {
+                result.push_back( aReplaceChar );
+            }
             else
-                StrPrintf( &result, "%%%02x", *it );
-
-            changed = true;
+            {
+                fmt::format_to( std::back_inserter( result ), "%{:02x}", static_cast<unsigned char>( c ) );
+            }
         }
         else
         {
-            result += *it;
+            result.push_back( c );
         }
     }
 
-    if( changed )
-        *aName = std::move( result );
-
-    return changed;
+    aName = std::move( result );
+    return true;
 }
 
 
@@ -1670,24 +1675,33 @@ std::vector<wxString> ExpandStackedPinNotation( const wxString& aPinName, bool* 
 
 int CountStackedPinNotation( const wxString& aPinName, bool* aValid )
 {
-    if( aValid )
+    size_t len = aPinName.length();
+
+    if( !aValid )
+    {
+        // Fastest path when we're not interested in validity
+        if( len < 3 )
+            return 1;
+    }
+    else
+    {
         *aValid = true;
 
-    // Fast path: if no brackets, it's a single pin
-    const bool hasOpenBracket  = aPinName.Contains( wxT( "[" ) );
-    const bool hasCloseBracket = aPinName.Contains( wxT( "]" ) );
+        // Fast path: if no brackets, it's a single pin
+        const bool hasOpenBracket = aPinName.Contains( wxT( "[" ) );
+        const bool hasCloseBracket = aPinName.Contains( wxT( "]" ) );
 
-    if( hasOpenBracket || hasCloseBracket )
-    {
-        if( !aPinName.StartsWith( wxT( "[" ) ) || !aPinName.EndsWith( wxT( "]" ) ) )
+        if( hasOpenBracket || hasCloseBracket )
         {
-            if( aValid )
+            if( aPinName[0] != '[' || aPinName[len - 1] != ']' )
+            {
                 *aValid = false;
-            return 1;
+                return 1;
+            }
         }
     }
 
-    if( !aPinName.StartsWith( wxT( "[" ) ) || !aPinName.EndsWith( wxT( "]" ) ) )
+    if( aPinName[0] != '[' || aPinName[len - 1] != ']' )
         return 1;
 
     const wxString inner = aPinName.Mid( 1, aPinName.Length() - 2 );
@@ -1768,5 +1782,35 @@ int SortVariantNames( const wxString& aLhs, const wxString& aRhs )
         return 1;
 
     return StrNumCmp( aLhs, aRhs );
+}
+
+
+std::vector<LOAD_MESSAGE> ExtractLibraryLoadErrors( const wxString& aErrorString, int aSeverity )
+{
+    std::vector<LOAD_MESSAGE> messages;
+
+    if( aErrorString.IsEmpty() )
+        return messages;
+
+    // Errors are separated by newlines. We want to keep:
+    // - Lines starting with "Library '" (library-level errors)
+    // - Lines containing "Expecting" (file error location)
+    // And strip:
+    // - Lines starting with "from " (internal code location info)
+    wxStringTokenizer tokenizer( aErrorString, wxS( "\n" ), wxTOKEN_STRTOK );
+
+    while( tokenizer.HasMoreTokens() )
+    {
+        wxString line = tokenizer.GetNextToken();
+
+        // Skip internal code location lines (e.g., "from pcb_io_kicad_sexpr_parser.cpp : ...")
+        if( line.StartsWith( wxS( "from " ) ) )
+            continue;
+
+        if( line.StartsWith( wxS( "Library '" ) ) || line.Contains( wxS( "Expecting" ) ) )
+            messages.push_back( { line, static_cast<SEVERITY>( aSeverity ) } );
+    }
+
+    return messages;
 }
 

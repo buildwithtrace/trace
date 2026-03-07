@@ -25,7 +25,7 @@
 #include <pgm_base.h>
 #include <kiface_base.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <board.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
@@ -199,6 +199,8 @@ FOOTPRINT_CHOOSER_FRAME::FOOTPRINT_CHOOSER_FRAME( KIWAY* aKiway, wxWindow* aPare
     Layout();
     m_chooserPanel->FinishSetup();
 
+    Bind( wxEVT_CHAR_HOOK, &PANEL_FOOTPRINT_CHOOSER::OnChar, m_chooserPanel );
+
     if( !m_showDescription )
     {
         m_chooserPanel->GetVerticalSpliter()->SetMinimumPaneSize( 0 );
@@ -259,6 +261,12 @@ FOOTPRINT_CHOOSER_FRAME::FOOTPRINT_CHOOSER_FRAME( KIWAY* aKiway, wxWindow* aPare
 
 FOOTPRINT_CHOOSER_FRAME::~FOOTPRINT_CHOOSER_FRAME()
 {
+    Unbind( wxEVT_CHAR_HOOK, &PANEL_FOOTPRINT_CHOOSER::OnChar, m_chooserPanel );
+
+    // Shutdown all running tools
+    if( m_toolManager )
+        m_toolManager->ShutdownAllTools();
+
     // Work around assertion firing when we try to LockCtx on a hidden 3D canvas during dtor
     wxCloseEvent dummy;
     m_preview3DCanvas->Show();
@@ -462,7 +470,7 @@ COLOR_SETTINGS* FOOTPRINT_CHOOSER_FRAME::GetColorSettings( bool aForceRefresh ) 
 static wxRect s_dialogRect( 0, 0, 0, 0 );
 
 
-void FOOTPRINT_CHOOSER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void FOOTPRINT_CHOOSER_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
     const std::string& payload = mail.GetPayload();
 
@@ -868,19 +876,15 @@ void FOOTPRINT_CHOOSER_FRAME::setupUIConditions()
     // clang-format off
 #define CHECK( x )  ACTION_CONDITIONS().Check( x )
 
-    mgr->SetConditions( ACTIONS::toggleGrid,           CHECK( cond.GridVisible() ) );
-    mgr->SetConditions( ACTIONS::cursorSmallCrosshairs,    CHECK( cond.CursorSmallCrosshairs() ) );
-    mgr->SetConditions( ACTIONS::cursorFullCrosshairs,     CHECK( cond.CursorFullCrosshairs() ) );
-    mgr->SetConditions( ACTIONS::cursor45Crosshairs,       CHECK( cond.Cursor45Crosshairs() ) );
+    mgr->SetConditions( ACTIONS::toggleGrid,            CHECK( cond.GridVisible() ) );
+    mgr->SetConditions( ACTIONS::cursorSmallCrosshairs, CHECK( cond.CursorSmallCrosshairs() ) );
+    mgr->SetConditions( ACTIONS::cursorFullCrosshairs,  CHECK( cond.CursorFullCrosshairs() ) );
+    mgr->SetConditions( ACTIONS::cursor45Crosshairs,    CHECK( cond.Cursor45Crosshairs() ) );
 
-    mgr->SetConditions( ACTIONS::millimetersUnits,     CHECK( cond.Units( EDA_UNITS::MM ) ) );
-    mgr->SetConditions( ACTIONS::inchesUnits,          CHECK( cond.Units( EDA_UNITS::INCH ) ) );
-    mgr->SetConditions( ACTIONS::milsUnits,            CHECK( cond.Units( EDA_UNITS::MILS ) ) );
-
-    mgr->SetConditions( PCB_ACTIONS::showPadNumbers,   CHECK( cond.PadNumbersDisplay() ) );
-    mgr->SetConditions( PCB_ACTIONS::padDisplayMode,   CHECK( !cond.PadFillDisplay() ) );
-    mgr->SetConditions( PCB_ACTIONS::textOutlines,     CHECK( !cond.TextFillDisplay() ) );
-    mgr->SetConditions( PCB_ACTIONS::graphicsOutlines, CHECK( !cond.GraphicsFillDisplay() ) );
+    mgr->SetConditions( PCB_ACTIONS::showPadNumbers,    CHECK( cond.PadNumbersDisplay() ) );
+    mgr->SetConditions( PCB_ACTIONS::padDisplayMode,    CHECK( !cond.PadFillDisplay() ) );
+    mgr->SetConditions( PCB_ACTIONS::textOutlines,      CHECK( !cond.TextFillDisplay() ) );
+    mgr->SetConditions( PCB_ACTIONS::graphicsOutlines,  CHECK( !cond.GraphicsFillDisplay() ) );
 
 #undef CHECK
     // clang-format on

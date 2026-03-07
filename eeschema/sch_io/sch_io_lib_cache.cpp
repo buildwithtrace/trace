@@ -22,6 +22,7 @@
 #include "sch_io_lib_cache.h"
 
 #include <common.h>
+#include <kiplatform/io.h>
 #include <lib_symbol.h>
 #include <wx_filename.h>
 
@@ -29,12 +30,20 @@
 SCH_IO_LIB_CACHE::SCH_IO_LIB_CACHE( const wxString& aFullPathAndFileName ) :
     m_modHash( 1 ),
     m_fileName( aFullPathAndFileName ),
-    m_libFileName( aFullPathAndFileName ),
+    m_libFileName(),
     m_fileModTime( 0 ),
     m_isWritable( true ),
-    m_isModified( false )
+    m_isModified( false ),
+    m_hasParseError( false )
 {
     m_libType = SCH_LIB_TYPE::LT_EESCHEMA;
+
+    // Normalize the path: if it's a directory on the filesystem, ensure m_libFileName is marked
+    // as a directory so that IsDir() checks work correctly.
+    if( wxFileName::DirExists( aFullPathAndFileName ) )
+        m_libFileName.AssignDir( aFullPathAndFileName );
+    else
+        m_libFileName = aFullPathAndFileName;
 }
 
 
@@ -60,6 +69,13 @@ wxFileName SCH_IO_LIB_CACHE::GetRealFile() const
 
     // If m_libFileName is a symlink follow it to the real source file
     WX_FILENAME::ResolvePossibleSymlinks( fn );
+
+    // Normalize the path: if it's a directory on the filesystem, ensure fn is marked as a
+    // directory so that IsDir() checks work correctly. wxFileName::IsDir() only checks if
+    // the path string ends with a separator, not if the path is actually a directory.
+    if( !fn.IsDir() && wxFileName::DirExists( fn.GetFullPath() ) )
+        fn.AssignDir( fn.GetFullPath() );
+
     return fn;
 }
 
@@ -79,7 +95,7 @@ long long SCH_IO_LIB_CACHE::GetLibModificationTime()
     {
         m_isWritable = fn.IsDirWritable();
         wildcard = wxS( "*." ) + wxString( FILEEXT::KiCadSymbolLibFileExtension );
-        return TimestampDir( fn.GetPath(), wildcard );
+        return KIPLATFORM::IO::TimestampDir( fn.GetPath(), wildcard );
     }
 }
 
@@ -87,6 +103,20 @@ long long SCH_IO_LIB_CACHE::GetLibModificationTime()
 bool SCH_IO_LIB_CACHE::IsFile( const wxString& aFullPathAndFileName ) const
 {
     return m_fileName == aFullPathAndFileName;
+}
+
+
+void SCH_IO_LIB_CACHE::SetFileName( const wxString& aFileName )
+{
+    // Update both m_fileName and m_libFileName to keep them in sync
+    m_fileName = aFileName;
+
+    // Normalize the path: if it's a directory on the filesystem, ensure m_libFileName is marked
+    // as a directory so that IsDir() checks work correctly.
+    if( wxFileName::DirExists( aFileName ) )
+        m_libFileName.AssignDir( aFileName );
+    else
+        m_libFileName = aFileName;
 }
 
 
@@ -101,8 +131,11 @@ bool SCH_IO_LIB_CACHE::IsFileChanged() const
         return fn.GetModificationTime().GetValue().GetValue() != m_fileModTime;
 
     if( fn.IsDir() && fn.IsDirReadable() )
-        return TimestampDir( fn.GetPath(),
-                             wxS( "*." ) + wxString( FILEEXT::KiCadSymbolLibFileExtension ) ) != m_fileModTime;
+    {
+        return KIPLATFORM::IO::TimestampDir( fn.GetPath(),
+                             wxS( "*." ) + wxString( FILEEXT::KiCadSymbolLibFileExtension ) )
+               != m_fileModTime;
+    }
 
     return false;
 }

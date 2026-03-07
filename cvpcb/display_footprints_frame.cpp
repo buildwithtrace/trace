@@ -134,7 +134,7 @@ DISPLAY_FOOTPRINTS_FRAME::DISPLAY_FOOTPRINTS_FRAME( KIWAY* aKiway, wxWindow* aPa
     m_auimgr.AddPane( GetCanvas(), EDA_PANE().Canvas().Name( wxS( "DrawFrame" ) )
                       .Center() );
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( wxS( "MsgPanel" ) )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     RestoreAuiLayout();
     FinishAUIInitialization();
@@ -304,12 +304,12 @@ FOOTPRINT* DISPLAY_FOOTPRINTS_FRAME::GetFootprint( const wxString& aFootprintNam
 
     try
     {
-        if( const FOOTPRINT* fp = adapter->LoadFootprint( libNickname, fpName, false ) )
-            footprint = static_cast<FOOTPRINT*>( fp->Duplicate( IGNORE_PARENT_GROUP ) );
+        footprint = adapter->LoadFootprint( libNickname, fpName, false );
     }
     catch( const IO_ERROR& ioe )
     {
-        DisplayErrorMessage( this, _( "Error loading footprint" ), ioe.What() );
+        aReporter.Report( wxString::Format( _( "Error loading footprint: %s" ), ioe.What() ),
+                          RPT_SEVERITY_ERROR );
         return nullptr;
     }
 

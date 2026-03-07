@@ -3,7 +3,7 @@
   <assemblyIdentity
       version="0.64.1.0"
       processorArchitecture="*"
-      name="KiCad"
+      name="Trace"
       type="win32"
   />
   <dependency>

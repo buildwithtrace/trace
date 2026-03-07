@@ -32,7 +32,6 @@ include_directories( BEFORE ${INC_BEFORE} )
 include_directories(
     ${CMAKE_SOURCE_DIR}/common
     ${CMAKE_SOURCE_DIR}/common/dialogs
-    ${CMAKE_SOURCE_DIR}/libs/sexpr/include
     ${INC_AFTER}
     ./dialogs
     ${CMAKE_SOURCE_DIR}/kicad/pcm
@@ -65,6 +64,9 @@ set( EESCHEMA_SCH_IO
     # Database IO plugin
     sch_io/database/sch_io_database.cpp
 
+    # gEDA IO plugin
+    sch_io/geda/sch_io_geda.cpp
+
     # Eagle IO plugin
     sch_io/eagle/sch_io_eagle.cpp
 
@@ -89,6 +91,12 @@ set( EESCHEMA_SCH_IO
     # EasyEDA Pro IO plugin
     sch_io/easyedapro/sch_easyedapro_parser.cpp
     sch_io/easyedapro/sch_io_easyedapro.cpp
+
+    # PADS Logic IO plugin
+    sch_io/pads/sch_io_pads.cpp
+    sch_io/pads/pads_sch_parser.cpp
+    sch_io/pads/pads_sch_symbol_builder.cpp
+    sch_io/pads/pads_sch_schematic_builder.cpp
     )
 
 set( EESCHEMA_DLGS
@@ -116,6 +124,8 @@ set( EESCHEMA_DLGS
     dialogs/dialog_image_properties.cpp
     dialogs/dialog_image_properties_base.cpp
     dialogs/dialog_increment_annotations_base.cpp
+    dialogs/dialog_import_symbol_select.cpp
+    dialogs/dialog_import_symbol_select_base.cpp
     dialogs/dialog_junction_props.cpp
     dialogs/dialog_junction_props_base.cpp
     dialogs/dialog_label_properties.cpp
@@ -280,6 +290,7 @@ set( EESCHEMA_SIM_SRCS
     )
 
 set( EESCHEMA_WIDGETS
+    widgets/ai_chat_panel.cpp
     widgets/hierarchy_pane.cpp
     widgets/panel_sch_selection_filter_base.cpp
     widgets/panel_sch_selection_filter.cpp
@@ -391,6 +402,7 @@ set( EESCHEMA_SRCS
     sch_field.cpp
     sch_group.cpp
     sch_item.cpp
+    sch_item_alignment.cpp
     sch_junction.cpp
     sch_label.cpp
     sch_line.cpp
@@ -422,6 +434,7 @@ set( EESCHEMA_SRCS
     symbol.cpp
     symbol_checker.cpp
     symbol_chooser_frame.cpp
+    symbol_import_manager.cpp
 
     symbol_library_manager.cpp
     symbol_tree_model_adapter.cpp
@@ -606,6 +619,7 @@ target_include_directories( eeschema_kiface_objects
 target_link_libraries( eeschema_kiface_objects
     PUBLIC
         common
+        pads_common
         pcm )
 
 # Since we're not using target_link_libraries, we need to explicitly
@@ -627,10 +641,10 @@ target_link_libraries( eeschema_kiface
     PRIVATE
         common
         eeschema_kiface_objects
+        pads_common
         pcm
         markdown_lib
         scripting
-        sexpr
         core
         Boost::headers
         ${wxWidgets_LIBRARIES}
@@ -708,12 +722,16 @@ if( APPLE )
     # bundle libngspice and codemodels
     get_filename_component( ABS_LIBNGSPICE ${NGSPICE_LIBRARY} ABSOLUTE )
     get_filename_component( LIBNGSPICE_PATH ${ABS_LIBNGSPICE} DIRECTORY )
+    # Resolve symlink to get actual library file
+    get_filename_component( REAL_LIBNGSPICE ${ABS_LIBNGSPICE} REALPATH )
 
-    install( DIRECTORY "${LIBNGSPICE_PATH}/"
-            DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim"
-            FILES_MATCHING PATTERN "*.dylib")
-    install( DIRECTORY "${LIBNGSPICE_PATH}/ngspice"
-             DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim" )
+    # Install the actual libngspice dylib (resolved from symlink)
+    install( FILES "${REAL_LIBNGSPICE}" DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim" RENAME "libngspice.dylib" )
+
+    # Install ngspice code models directory (resolve symlink to actual directory)
+    get_filename_component( REAL_NGSPICE_DIR "${LIBNGSPICE_PATH}/ngspice" REALPATH )
+    install( DIRECTORY "${REAL_NGSPICE_DIR}/"
+             DESTINATION "${OSX_BUNDLE_INSTALL_PLUGIN_DIR}/sim/ngspice" )
 
     install( CODE [[
         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )

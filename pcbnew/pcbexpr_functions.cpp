@@ -466,18 +466,42 @@ static void intersectsBackCourtyardFunc( LIBEVAL::CONTEXT* aCtx, void* self )
 }
 
 
+static SHAPE_POLY_SET getDeflatedZoneOutline( BOARD* aBoard, ZONE* aArea )
+{
+    // Check cache first with read lock
+    {
+        std::shared_lock<std::shared_mutex> readLock( aBoard->m_CachesMutex );
+        auto it = aBoard->m_DeflatedZoneOutlineCache.find( aArea );
+
+        if( it != aBoard->m_DeflatedZoneOutlineCache.end() )
+            return it->second;
+    }
+
+    // Cache miss - compute deflated outline
+    SHAPE_POLY_SET areaOutline = aArea->Outline()->CloneDropTriangulation();
+    areaOutline.ClearArcs();
+    areaOutline.Deflate( aBoard->GetDesignSettings().GetDRCEpsilon(),
+                         CORNER_STRATEGY::ALLOW_ACUTE_CORNERS, ARC_LOW_DEF );
+
+    // Store in cache
+    {
+        std::unique_lock<std::shared_mutex> writeLock( aBoard->m_CachesMutex );
+        aBoard->m_DeflatedZoneOutlineCache[aArea] = areaOutline;
+    }
+
+    return areaOutline;
+}
+
+
 bool collidesWithArea( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer, PCBEXPR_CONTEXT* aCtx, ZONE* aArea )
 {
     BOARD* board = aArea->GetBoard();
     BOX2I  areaBBox = aArea->GetBoundingBox();
 
-    // Collisions include touching, so we need to deflate outline by enough to exclude it.
-    // This is particularly important for detecting copper fills as they will be exactly
-    // touching along the entire exclusion border.
-    SHAPE_POLY_SET areaOutline = aArea->Outline()->CloneDropTriangulation();
-    areaOutline.ClearArcs();
-    areaOutline.Deflate( board->GetDesignSettings().GetDRCEpsilon(),
-                         CORNER_STRATEGY::ALLOW_ACUTE_CORNERS, ARC_LOW_DEF );
+    // Get cached deflated outline. Collisions include touching, so we need to deflate outline
+    // by enough to exclude it. This is particularly important for detecting copper fills as
+    // they will be exactly touching along the entire exclusion border.
+    SHAPE_POLY_SET areaOutline = getDeflatedZoneOutline( board, aArea );
 
     if( aItem->GetFlags() & HOLE_PROXY )
     {
@@ -587,50 +611,62 @@ bool searchAreas( BOARD* aBoard, const wxString& aArg, PCBEXPR_CONTEXT* aCtx,
     {
         KIID target( aArg );
 
-        for( ZONE* area : aBoard->Zones() )
-        {
-            // Only a single zone can match the UUID; exit once we find a match whether
-            // "inside" or not
-            if( area->m_Uuid == target )
-                return aFunc( area );
-        }
+        // Use the board's item-by-ID cache for O(1) lookup instead of O(n) iteration.
+        // The cache includes both board zones and zones inside footprints.
+        const auto& cache = aBoard->GetItemByIdCache();
+        auto        it = cache.find( target );
 
-        for( FOOTPRINT* footprint : aBoard->Footprints() )
-        {
-            for( ZONE* area : footprint->Zones() )
-            {
-                // Only a single zone can match the UUID; exit once we find a match
-                // whether "inside" or not
-                if( area->m_Uuid == target )
-                    return aFunc( area );
-            }
-        }
+        if( it != cache.end() && it->second->Type() == PCB_ZONE_T )
+            return aFunc( static_cast<ZONE*>( it->second ) );
 
         return false;
     }
     else  // Match on zone name
     {
-        for( ZONE* area : aBoard->Zones() )
+        // Use cached zone name lookup to avoid O(n) iteration through all zones for each call.
+        // This is a significant performance improvement for boards with many area-based DRC rules.
+        std::vector<ZONE*> matchingZones;
+        bool               cacheHit = false;
+
         {
-            if( area->GetZoneName().Matches( aArg ) )
+            std::shared_lock<std::shared_mutex> readLock( aBoard->m_CachesMutex );
+            auto it = aBoard->m_ZonesByNameCache.find( aArg );
+
+            if( it != aBoard->m_ZonesByNameCache.end() )
             {
-                // Many zones can match the name; exit only when we find an "inside"
-                if( aFunc( area ) )
-                    return true;
+                matchingZones = it->second;
+                cacheHit = true;
             }
         }
 
-        for( FOOTPRINT* footprint : aBoard->Footprints() )
+        if( !cacheHit )
         {
-            for( ZONE* area : footprint->Zones() )
+            for( ZONE* area : aBoard->Zones() )
             {
-                // Many zones can match the name; exit only when we find an "inside"
                 if( area->GetZoneName().Matches( aArg ) )
+                    matchingZones.push_back( area );
+            }
+
+            for( FOOTPRINT* footprint : aBoard->Footprints() )
+            {
+                for( ZONE* area : footprint->Zones() )
                 {
-                    if( aFunc( area ) )
-                        return true;
+                    if( area->GetZoneName().Matches( aArg ) )
+                        matchingZones.push_back( area );
                 }
             }
+
+            // Store in cache for future lookups
+            {
+                std::unique_lock<std::shared_mutex> writeLock( aBoard->m_CachesMutex );
+                aBoard->m_ZonesByNameCache[aArg] = matchingZones;
+            }
+        }
+
+        for( ZONE* area : matchingZones )
+        {
+            if( aFunc( area ) )
+                return true;
         }
 
         return false;
@@ -729,33 +765,58 @@ static void intersectsAreaFunc( LIBEVAL::CONTEXT* aCtx, void* self )
                             else
                                 testLayers = commonLayers;
 
-                            for( PCB_LAYER_ID layer : testLayers.UIOrder() )
+                            bool isTransient = ( item->GetFlags() & ROUTER_TRANSIENT ) != 0;
+                            std::vector<PCB_LAYER_ID> layersToCompute;
+
+                            if( !isTransient )
                             {
-                                PTR_PTR_LAYER_CACHE_KEY key = { aArea, item, layer };
+                                std::shared_lock<std::shared_mutex> readLock( board->m_CachesMutex );
 
-                                if( ( item->GetFlags() & ROUTER_TRANSIENT ) == 0 )
+                                for( PCB_LAYER_ID layer : testLayers.UIOrder() )
                                 {
-                                    std::shared_lock<std::shared_mutex> readLock( board->m_CachesMutex );
-
+                                    PTR_PTR_LAYER_CACHE_KEY key = { aArea, item, layer };
                                     auto i = board->m_IntersectsAreaCache.find( key );
 
-                                    if( i != board->m_IntersectsAreaCache.end() && i->second )
-                                        return true;
+                                    if( i != board->m_IntersectsAreaCache.end() )
+                                    {
+                                        if( i->second )
+                                            return true;
+                                    }
+                                    else
+                                    {
+                                        layersToCompute.push_back( layer );
+                                    }
                                 }
-
-                                bool collides = collidesWithArea( item, layer, context, aArea );
-
-                                if( ( item->GetFlags() & ROUTER_TRANSIENT ) == 0 )
-                                {
-                                    std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
-                                    board->m_IntersectsAreaCache[ key ] = collides;
-                                }
-
-                                if( collides )
-                                    return true;
+                            }
+                            else
+                            {
+                                for( PCB_LAYER_ID layer : testLayers.UIOrder() )
+                                    layersToCompute.push_back( layer );
                             }
 
-                            return false;
+                            std::vector<std::pair<PTR_PTR_LAYER_CACHE_KEY, bool>> results;
+                            bool anyCollision = false;
+
+                            for( PCB_LAYER_ID layer : layersToCompute )
+                            {
+                                bool collides = collidesWithArea( item, layer, context, aArea );
+
+                                if( !isTransient )
+                                    results.push_back( { { aArea, item, layer }, collides } );
+
+                                if( collides )
+                                    anyCollision = true;
+                            }
+
+                            if( !isTransient && !results.empty() )
+                            {
+                                std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
+
+                                for( const auto& [key, collides] : results )
+                                    board->m_IntersectsAreaCache[key] = collides;
+                            }
+
+                            return anyCollision;
                         } ) )
                 {
                     return 1.0;
@@ -1314,7 +1375,7 @@ static void hasNetclassFunc( LIBEVAL::CONTEXT* aCtx, void* self )
                 BOARD_CONNECTED_ITEM* bcItem = static_cast<BOARD_CONNECTED_ITEM*>( item );
                 NETCLASS*             netclass = bcItem->GetEffectiveNetClass();
 
-                if( netclass->ContainsNetclassWithName( arg->AsString() ) )
+                if( netclass && netclass->ContainsNetclassWithName( arg->AsString() ) )
                     return 1.0;
 
                 return 0.0;
@@ -1351,12 +1412,34 @@ static void hasExactNetclassFunc( LIBEVAL::CONTEXT* aCtx, void* self )
                     return 0.0;
 
                 BOARD_CONNECTED_ITEM* bcItem = static_cast<BOARD_CONNECTED_ITEM*>( item );
-                NETCLASS*             netclass = bcItem->GetEffectiveNetClass();
+                BOARD*                board = bcItem->GetBoard();
+                wxString              netclassName;
 
-                if( netclass->GetName() == arg->AsString() )
-                    return 1.0;
+                if( board && ( item->GetFlags() & ROUTER_TRANSIENT ) == 0 )
+                {
+                    std::shared_lock<std::shared_mutex> readLock( board->m_CachesMutex );
 
-                return 0.0;
+                    auto it = board->m_ItemNetclassCache.find( item );
+
+                    if( it != board->m_ItemNetclassCache.end() )
+                        netclassName = it->second;
+                }
+
+                if( netclassName.empty() )
+                {
+                    NETCLASS* netclass = bcItem->GetEffectiveNetClass();
+
+                    if( netclass )
+                        netclassName = netclass->GetName();
+
+                    if( board && !netclassName.empty() && ( item->GetFlags() & ROUTER_TRANSIENT ) == 0 )
+                    {
+                        std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
+                        board->m_ItemNetclassCache[item] = netclassName;
+                    }
+                }
+
+                return ( netclassName == arg->AsString() ) ? 1.0 : 0.0;
             } );
 }
 

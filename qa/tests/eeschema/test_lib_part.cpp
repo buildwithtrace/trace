@@ -86,7 +86,7 @@ BOOST_AUTO_TEST_CASE( DefaultDrawings )
 {
     // default drawings exist
     BOOST_CHECK_EQUAL( m_part_no_data.GetDrawItems().size(), 5 );
-    BOOST_CHECK_EQUAL( m_part_no_data.GetPins().size(), 0 );
+    BOOST_CHECK_EQUAL( m_part_no_data.GetGraphicalPins( 0, 0 ).size(), 0 );
 }
 
 
@@ -485,6 +485,14 @@ BOOST_AUTO_TEST_CASE( Compare )
     m_part_no_data.SetExcludedFromBoard( true );
     BOOST_CHECK( m_part_no_data.Compare( testPart, SCH_ITEM::COMPARE_FLAGS::EQUALITY ) < 0 );
     m_part_no_data.SetExcludedFromBoard( false );
+
+    // Include in position files support tests.
+    testPart.SetExcludedFromPosFiles( true );
+    BOOST_CHECK( m_part_no_data.Compare( testPart, SCH_ITEM::COMPARE_FLAGS::EQUALITY ) > 0 );
+    testPart.SetExcludedFromPosFiles( false );
+    m_part_no_data.SetExcludedFromPosFiles( true );
+    BOOST_CHECK( m_part_no_data.Compare( testPart, SCH_ITEM::COMPARE_FLAGS::EQUALITY ) < 0 );
+    m_part_no_data.SetExcludedFromPosFiles( false );
 
     // Show pin names flag comparison tests.
     m_part_no_data.SetShowPinNames( false );

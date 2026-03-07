@@ -25,10 +25,11 @@
 #include <confirm.h>
 #include <dialog_footprint_properties_fp_editor.h>
 #include <footprint_edit_frame.h>
+#include <footprint_info.h>
 #include <footprint_tree_pane.h>
 #include <footprint_library_adapter.h>
 #include <functional>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <pcb_group.h>
 #include <pcb_marker.h>
 #include <pcb_textbox.h>
@@ -215,8 +216,7 @@ void FOOTPRINT_EDIT_FRAME::OnEditItemRequest( BOARD_ITEM* aItem )
     {
         DIALOG_DIMENSION_PROPERTIES dlg( this, static_cast<PCB_DIMENSION_BASE*>( aItem ) );
 
-        // TODO: why is this QuasiModal?
-        dlg.ShowQuasiModal();
+        dlg.ShowModal();
         break;
     }
 
@@ -327,7 +327,7 @@ bool FOOTPRINT_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileS
 }
 
 
-void FOOTPRINT_EDIT_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void FOOTPRINT_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
     const std::string& payload = mail.GetPayload();
 

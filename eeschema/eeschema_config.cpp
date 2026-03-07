@@ -127,8 +127,7 @@ void SCH_EDIT_FRAME::ShowSchematicSetupDialog( const wxString& aInitialPage )
     // No, this does not escape the function context.
     NULLER raii_nuller( (void*&) m_schematicSetupDialog ); m_schematicSetupDialog = &dlg;
 
-    // TODO: is QuasiModal required here?
-    if( dlg.ShowQuasiModal() == wxID_OK )
+    if( dlg.ShowModal() == wxID_OK )
     {
         // Mark document as modified so that project settings can be saved as part of doc save
         OnModify();
@@ -382,6 +381,9 @@ void SCH_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
             cfg->m_AuiPanels.remote_symbol_panel_float_height = remoteSymbolPane.floating_size.y;
             cfg->m_AuiPanels.remote_symbol_panel_float_width = remoteSymbolPane.floating_size.x;
         }
+
+        wxAuiPaneInfo& aiChatPane = m_auimgr.GetPane( wxS( "AIChat" ) );
+        cfg->m_AuiPanels.ai_chat_show = aiChatPane.IsShown();
     }
 }
 

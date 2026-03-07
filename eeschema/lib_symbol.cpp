@@ -46,14 +46,66 @@
 #include <advanced_config.h>
 
 
+/**
+ * Helper to safely get the root symbol, detecting and logging circular inheritance.
+ *
+ * @param aSymbol The symbol to start from
+ * @param aCallerName Name of the calling function for logging
+ * @return The root symbol, or the input symbol if a cycle is detected or no parent exists
+ */
+static std::shared_ptr<LIB_SYMBOL> GetSafeRootSymbol( const LIB_SYMBOL* aSymbol, const char* aCallerName )
+{
+    std::set<const LIB_SYMBOL*> visited;
+    visited.insert( aSymbol );
+
+    std::shared_ptr<LIB_SYMBOL> current = aSymbol->SharedPtr();
+    std::shared_ptr<LIB_SYMBOL> parent = aSymbol->GetParent().lock();
+
+    while( parent )
+    {
+        if( visited.count( parent.get() ) )
+        {
+            // Build chain description for logging
+            wxString chain = aSymbol->GetName();
+
+            for( const LIB_SYMBOL* sym : visited )
+            {
+                if( sym != aSymbol )
+                    chain += wxT( " -> " ) + sym->GetName();
+            }
+
+            chain += wxT( " -> " ) + parent->GetName() + wxT( " (CYCLE)" );
+
+            wxLogTrace( traceSymbolInheritance,
+                        wxT( "%s: Circular inheritance detected in symbol '%s' (lib: %s). Chain: %s" ),
+                        aCallerName,
+                        aSymbol->GetName(),
+                        aSymbol->GetLibId().GetLibNickname().wx_str(),
+                        chain );
+
+            // Return current (last valid symbol before cycle)
+            return current;
+        }
+
+        visited.insert( parent.get() );
+        current = parent;
+        parent = parent->GetParent().lock();
+    }
+
+    return current;
+}
+
+
 wxString LIB_SYMBOL::GetShownDescription( int aDepth ) const
 {
     wxString shownText = GetDescriptionField().GetShownText( false, aDepth );
 
     if( shownText.IsEmpty() && IsDerived() )
     {
-        if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-            shownText = parent->GetShownDescription( aDepth );
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            shownText = root->GetDescriptionField().GetShownText( false, aDepth );
     }
 
     return shownText;
@@ -62,21 +114,14 @@ wxString LIB_SYMBOL::GetShownDescription( int aDepth ) const
 
 wxString LIB_SYMBOL::GetShownKeyWords( int aDepth ) const
 {
-    static EXPRESSION_EVALUATOR evaluator;
-
     wxString text = GetKeyWords();
 
-    std::function<bool( wxString* )> libSymbolResolver =
-            [&]( wxString* token ) -> bool
-            {
-                return ResolveTextVar( token, aDepth + 1 );
-            };
+    std::function<bool( wxString* )> libSymbolResolver = [&]( wxString* token ) -> bool
+    {
+        return ResolveTextVar( token, aDepth + 1 );
+    };
 
-    while( text.Contains( wxT( "${" ) ) && aDepth++ <= ADVANCED_CFG::GetCfg().m_ResolveTextRecursionDepth )
-        text = ExpandTextVars( text, &libSymbolResolver );
-
-    if( text.Contains( wxT( "@{" ) ) )
-        text = evaluator.Evaluate( text );
+    text = ResolveTextVars( text, &libSymbolResolver, aDepth );
 
     return text;
 }
@@ -110,13 +155,18 @@ std::vector<SEARCH_TERM> LIB_SYMBOL::GetSearchTerms()
 
 void LIB_SYMBOL::GetChooserFields( std::map<wxString, wxString>& aColumnMap )
 {
-    for( SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         SCH_FIELD* field = static_cast<SCH_FIELD*>( &item );
 
         if( field->ShowInChooser() )
             aColumnMap[field->GetName()] = field->EDA_TEXT::GetShownText( false );
     }
+
+    // If the user has a field named "Keywords", then prefer that.  Otherwise add the KiCad
+    // keywords.
+    if( !aColumnMap.contains( _( "Keywords" ) ) )
+        aColumnMap[_( "Keywords" )] = GetShownKeyWords();
 }
 
 
@@ -129,9 +179,7 @@ bool operator<( const LIB_SYMBOL& aItem1, const LIB_SYMBOL& aItem2 )
 /// http://www.boost.org/doc/libs/1_55_0/libs/smart_ptr/sp_techniques.html#weak_without_shared
 struct null_deleter
 {
-    void operator()(void const *) const
-    {
-    }
+    void operator()( void const* ) const {}
 };
 
 
@@ -139,27 +187,26 @@ LIB_SYMBOL::LIB_SYMBOL( const wxString& aName, LIB_SYMBOL* aParent, LEGACY_SYMBO
         SYMBOL( LIB_SYMBOL_T ),
         m_me( this, null_deleter() )
 {
-    m_lastModDate    = 0;
-    m_unitCount      = 1;
-    m_demorgan       = false;
-    m_pinNameOffset  = schIUScale.MilsToIU( DEFAULT_PIN_NAME_OFFSET );
-    m_options        = ENTRY_NORMAL;
-    m_unitsLocked    = false;
+    m_lastModDate = 0;
+    m_unitCount = 1;
+    m_demorgan = false;
+    m_pinNameOffset = schIUScale.MilsToIU( DEFAULT_PIN_NAME_OFFSET );
+    m_options = ENTRY_NORMAL;
+    m_unitsLocked = false;
     m_duplicatePinNumbersAreJumpers = false;
 
-    auto addField =
-            [&]( FIELD_T id, bool visible )
-            {
-                SCH_FIELD* field = new SCH_FIELD( this, id );
-                field->SetVisible( visible );
-                m_drawings[SCH_FIELD_T].push_back( field );
-            };
+    auto addField = [&]( FIELD_T id, bool visible )
+    {
+        SCH_FIELD* field = new SCH_FIELD( this, id );
+        field->SetVisible( visible );
+        m_drawings[SCH_FIELD_T].push_back( field );
+    };
 
     // construct only the mandatory fields
-    addField( FIELD_T::REFERENCE,   true  );
-    addField( FIELD_T::VALUE,       true  );
-    addField( FIELD_T::FOOTPRINT,   false );
-    addField( FIELD_T::DATASHEET,   false );
+    addField( FIELD_T::REFERENCE, true );
+    addField( FIELD_T::VALUE, true );
+    addField( FIELD_T::FOOTPRINT, false );
+    addField( FIELD_T::DATASHEET, false );
     addField( FIELD_T::DESCRIPTION, false );
 
     SetName( aName );
@@ -168,21 +215,21 @@ LIB_SYMBOL::LIB_SYMBOL( const wxString& aName, LIB_SYMBOL* aParent, LEGACY_SYMBO
 }
 
 
-LIB_SYMBOL::LIB_SYMBOL( const LIB_SYMBOL& aSymbol, LEGACY_SYMBOL_LIB* aLibrary ) :
+LIB_SYMBOL::LIB_SYMBOL( const LIB_SYMBOL& aSymbol, LEGACY_SYMBOL_LIB* aLibrary, bool aCopyEmbeddedFiles ) :
         SYMBOL( aSymbol ),
-        EMBEDDED_FILES( aSymbol ),
+        EMBEDDED_FILES( aSymbol, aCopyEmbeddedFiles ),
         m_me( this, null_deleter() )
 {
-    m_library        = aLibrary;
-    m_name           = aSymbol.m_name;
-    m_fpFilters      = wxArrayString( aSymbol.m_fpFilters );
-    m_unitCount      = aSymbol.m_unitCount;
-    m_demorgan       = aSymbol.m_demorgan;
-    m_unitsLocked    = aSymbol.m_unitsLocked;
-    m_lastModDate    = aSymbol.m_lastModDate;
-    m_options        = aSymbol.m_options;
-    m_libId          = aSymbol.m_libId;
-    m_keyWords       = aSymbol.m_keyWords;
+    m_library = aLibrary;
+    m_name = aSymbol.m_name;
+    m_fpFilters = wxArrayString( aSymbol.m_fpFilters );
+    m_unitCount = aSymbol.m_unitCount;
+    m_demorgan = aSymbol.m_demorgan;
+    m_unitsLocked = aSymbol.m_unitsLocked;
+    m_lastModDate = aSymbol.m_lastModDate;
+    m_options = aSymbol.m_options;
+    m_libId = aSymbol.m_libId;
+    m_keyWords = aSymbol.m_keyWords;
 
     m_jumperPinGroups = aSymbol.m_jumperPinGroups;
     m_duplicatePinNumbersAreJumpers = aSymbol.m_duplicatePinNumbersAreJumpers;
@@ -222,16 +269,16 @@ const LIB_SYMBOL& LIB_SYMBOL::operator=( const LIB_SYMBOL& aSymbol )
 
     SYMBOL::operator=( aSymbol );
 
-    m_library     = aSymbol.m_library;
-    m_name        = aSymbol.m_name;
-    m_fpFilters   = wxArrayString( aSymbol.m_fpFilters );
-    m_unitCount   = aSymbol.m_unitCount;
-    m_demorgan    = aSymbol.m_demorgan;
+    m_library = aSymbol.m_library;
+    m_name = aSymbol.m_name;
+    m_fpFilters = wxArrayString( aSymbol.m_fpFilters );
+    m_unitCount = aSymbol.m_unitCount;
+    m_demorgan = aSymbol.m_demorgan;
     m_unitsLocked = aSymbol.m_unitsLocked;
     m_lastModDate = aSymbol.m_lastModDate;
-    m_options     = aSymbol.m_options;
-    m_libId       = aSymbol.m_libId;
-    m_keyWords    = aSymbol.m_keyWords;
+    m_options = aSymbol.m_options;
+    m_libId = aSymbol.m_libId;
+    m_keyWords = aSymbol.m_keyWords;
 
     m_jumperPinGroups = aSymbol.m_jumperPinGroups;
     m_duplicatePinNumbersAreJumpers = aSymbol.m_duplicatePinNumbersAreJumpers;
@@ -292,19 +339,59 @@ LIB_SYMBOL* LIB_SYMBOL::GetDummy()
 
 unsigned LIB_SYMBOL::GetInheritanceDepth() const
 {
-    if( const std::shared_ptr<LIB_SYMBOL> parent = GetParent().lock() )
-        return parent->GetInheritanceDepth() + 1;
+    unsigned depth = 0;
+    std::set<const LIB_SYMBOL*> visited;
+    visited.insert( this );
 
-    return 0;
+    std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock();
+
+    while( parent )
+    {
+        // Cycle detected - parent chain points back to an already visited symbol
+        if( visited.count( parent.get() ) )
+        {
+            wxLogTrace( traceSymbolInheritance,
+                        wxT( "GetInheritanceDepth: Circular inheritance detected in symbol '%s' "
+                             "(lib: %s)" ),
+                        m_name, m_libId.GetLibNickname().wx_str() );
+            break;
+        }
+
+        visited.insert( parent.get() );
+        depth++;
+        parent = parent->m_parent.lock();
+    }
+
+    return depth;
 }
 
 
 std::shared_ptr<LIB_SYMBOL> LIB_SYMBOL::GetRootSymbol() const
 {
-    if( const std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->GetRootSymbol();
+    std::set<const LIB_SYMBOL*> visited;
+    visited.insert( this );
 
-    return m_me;
+    std::shared_ptr<LIB_SYMBOL> current = m_me;
+    std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock();
+
+    while( parent )
+    {
+        // Cycle detected - parent chain points back to an already visited symbol
+        if( visited.count( parent.get() ) )
+        {
+            wxLogTrace( traceSymbolInheritance,
+                        wxT( "GetRootSymbol: Circular inheritance detected in symbol '%s' "
+                             "(lib: %s)" ),
+                        m_name, m_libId.GetLibNickname().wx_str() );
+            break;
+        }
+
+        visited.insert( parent.get() );
+        current = parent;
+        parent = parent->m_parent.lock();
+    }
+
+    return current;
 }
 
 
@@ -331,7 +418,7 @@ wxString LIB_SYMBOL::GetBodyStyleDescription( int aBodyStyle, bool aLabel ) cons
     else if( IsMultiBodyStyle() )
     {
         if( aBodyStyle <= (int) m_bodyStyleNames.size() )
-            return m_bodyStyleNames[aBodyStyle-1];
+            return m_bodyStyleNames[aBodyStyle - 1];
     }
 
     return wxT( "?" );
@@ -348,28 +435,127 @@ void LIB_SYMBOL::SetName( const wxString& aName )
 void LIB_SYMBOL::SetParent( LIB_SYMBOL* aParent )
 {
     if( aParent )
+    {
+        // Prevent circular inheritance by checking if aParent is derived from this symbol
+        std::set<const LIB_SYMBOL*> visited;
+        visited.insert( this );
+
+        std::shared_ptr<LIB_SYMBOL> ancestor = aParent->SharedPtr();
+
+        while( ancestor )
+        {
+            if( visited.count( ancestor.get() ) )
+            {
+                wxLogTrace( traceSymbolInheritance,
+                            wxT( "SetParent: Rejecting parent '%s' for symbol '%s' - would create "
+                                 "circular inheritance (lib: %s)" ),
+                            aParent->GetName(), m_name, m_libId.GetLibNickname().wx_str() );
+
+                // Don't set the parent - it would create circular inheritance
+                return;
+            }
+
+            visited.insert( ancestor.get() );
+            ancestor = ancestor->m_parent.lock();
+        }
+
         m_parent = aParent->SharedPtr();
+    }
     else
+    {
         m_parent.reset();
+    }
 }
 
 
-std::unique_ptr< LIB_SYMBOL > LIB_SYMBOL::Flatten() const
+std::unique_ptr<LIB_SYMBOL> LIB_SYMBOL::Flatten() const
 {
-    std::unique_ptr< LIB_SYMBOL > retv;
+    std::unique_ptr<LIB_SYMBOL> retv;
 
     if( IsDerived() )
     {
+        // Build parent chain with cycle detection - collect from this symbol up to root
+        std::vector<const LIB_SYMBOL*> parentChain;
+        std::set<const LIB_SYMBOL*> visited;
+        visited.insert( this );
+
         std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock();
 
         wxCHECK_MSG( parent, retv, wxString::Format( "Parent of derived symbol '%s' undefined", m_name ) );
 
-        // Copy the parent.
-        if( parent->IsDerived() )
-            retv = parent->Flatten();
-        else
-            retv = std::make_unique<LIB_SYMBOL>( *parent.get() );
+        while( parent )
+        {
+            // Cycle detected - parent chain points back to an already visited symbol
+            if( visited.count( parent.get() ) )
+            {
+                wxLogTrace( traceSymbolInheritance,
+                            wxT( "Flatten: Circular inheritance detected in symbol '%s' (lib: %s)" ),
+                            m_name, m_libId.GetLibNickname().wx_str() );
+                break;
+            }
 
+            visited.insert( parent.get() );
+            parentChain.push_back( parent.get() );
+            parent = parent->m_parent.lock();
+        }
+
+        // Start with the root (last in chain) and work down
+        if( !parentChain.empty() )
+        {
+            retv = std::make_unique<LIB_SYMBOL>( *parentChain.back() );
+
+            // Apply each derived symbol's overrides from root down (skip the root itself)
+            for( int i = static_cast<int>( parentChain.size() ) - 2; i >= 0; --i )
+            {
+                const LIB_SYMBOL* derived = parentChain[i];
+
+                // Overwrite parent's mandatory fields for fields which are defined in derived.
+                for( FIELD_T fieldId : MANDATORY_FIELDS )
+                {
+                    if( !derived->GetField( fieldId )->GetText().IsEmpty() )
+                        *retv->GetField( fieldId ) = *derived->GetField( fieldId );
+                }
+
+                // Grab all the rest of derived symbol fields.
+                for( const SCH_ITEM& item : derived->m_drawings[SCH_FIELD_T] )
+                {
+                    const SCH_FIELD* field = static_cast<const SCH_FIELD*>( &item );
+
+                    if( field->IsMandatory() )
+                        continue;
+
+                    SCH_FIELD* newField = new SCH_FIELD( *field );
+                    newField->SetParent( retv.get() );
+
+                    SCH_FIELD* parentField = retv->GetField( field->GetName() );
+
+                    if( !parentField )
+                    {
+                        retv->AddDrawItem( newField );
+                    }
+                    else
+                    {
+                        retv->RemoveDrawItem( parentField );
+                        retv->AddDrawItem( newField );
+                    }
+                }
+
+                if( !derived->m_keyWords.IsEmpty() )
+                    retv->SetKeyWords( derived->m_keyWords );
+
+                if( !derived->m_fpFilters.IsEmpty() )
+                    retv->SetFPFilters( derived->m_fpFilters );
+            }
+        }
+        else
+        {
+            // Cycle detected at immediate parent level - just copy this symbol
+            retv = std::make_unique<LIB_SYMBOL>( *this );
+            retv->m_parent.reset();
+            return retv;
+        }
+
+        // Now apply this symbol's overrides (the original "this" symbol)
         retv->m_name = m_name;
         retv->SetLibId( m_libId );
 
@@ -381,7 +567,7 @@ std::unique_ptr< LIB_SYMBOL > LIB_SYMBOL::Flatten() const
         }
 
         // Grab all the rest of derived symbol fields.
-        for( const SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+        for( const SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
         {
             const SCH_FIELD* field = static_cast<const SCH_FIELD*>( &item );
 
@@ -394,23 +580,37 @@ std::unique_ptr< LIB_SYMBOL > LIB_SYMBOL::Flatten() const
 
             SCH_FIELD* parentField = retv->GetField( field->GetName() );
 
-            if( !parentField )  // Derived symbol field does not exist in parent symbol.
+            if( !parentField ) // Derived symbol field does not exist in parent symbol.
             {
                 retv->AddDrawItem( newField );
             }
-            else                // Derived symbol field overrides the parent symbol field.
+            else // Derived symbol field overrides the parent symbol field.
             {
                 retv->RemoveDrawItem( parentField );
                 retv->AddDrawItem( newField );
             }
         }
 
-        retv->SetKeyWords( m_keyWords.IsEmpty() ? parent->GetKeyWords() : m_keyWords );
-        retv->SetFPFilters( m_fpFilters.IsEmpty() ? parent->GetFPFilters() : m_fpFilters );
+        // Use this symbol's keywords/filters if set, otherwise keep inherited ones
+        if( !m_keyWords.IsEmpty() )
+            retv->SetKeyWords( m_keyWords );
 
-        retv->SetExcludedFromSim( parent->GetExcludedFromSim() );
-        retv->SetExcludedFromBOM( parent->GetExcludedFromBOM() );
-        retv->SetExcludedFromBoard( parent->GetExcludedFromBoard() );
+        if( !m_fpFilters.IsEmpty() )
+            retv->SetFPFilters( m_fpFilters );
+
+        for( const auto& file : EmbeddedFileMap() )
+        {
+            EMBEDDED_FILES::EMBEDDED_FILE* newFile = new EMBEDDED_FILES::EMBEDDED_FILE( *file.second );
+            retv->AddFile( newFile );
+        }
+
+        // Get excluded flags from the immediate parent (first in chain)
+        if( !parentChain.empty() )
+        {
+            retv->SetExcludedFromSim( parentChain.front()->GetExcludedFromSim() );
+            retv->SetExcludedFromBOM( parentChain.front()->GetExcludedFromBOM() );
+            retv->SetExcludedFromBoard( parentChain.front()->GetExcludedFromBoard() );
+        }
 
         retv->m_parent.reset();
     }
@@ -434,8 +634,13 @@ const wxString LIB_SYMBOL::GetLibraryName() const
 
 bool LIB_SYMBOL::IsLocalPower() const
 {
-    if( const std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->IsLocalPower();
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->IsLocalPower();
+    }
 
     return m_options == ENTRY_LOCAL_POWER;
 }
@@ -443,10 +648,15 @@ bool LIB_SYMBOL::IsLocalPower() const
 
 void LIB_SYMBOL::SetLocalPower()
 {
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
+    if( IsDerived() )
     {
-        parent->SetLocalPower();
-        return;
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+        {
+            root->SetLocalPower();
+            return;
+        }
     }
 
     m_options = ENTRY_LOCAL_POWER;
@@ -455,8 +665,13 @@ void LIB_SYMBOL::SetLocalPower()
 
 bool LIB_SYMBOL::IsGlobalPower() const
 {
-    if( const std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->IsGlobalPower();
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->IsGlobalPower();
+    }
 
     return m_options == ENTRY_GLOBAL_POWER;
 }
@@ -470,10 +685,15 @@ bool LIB_SYMBOL::IsPower() const
 
 void LIB_SYMBOL::SetGlobalPower()
 {
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
+    if( IsDerived() )
     {
-        parent->SetGlobalPower();
-        return;
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+        {
+            root->SetGlobalPower();
+            return;
+        }
     }
 
     m_options = ENTRY_GLOBAL_POWER;
@@ -482,8 +702,13 @@ void LIB_SYMBOL::SetGlobalPower()
 
 bool LIB_SYMBOL::IsNormal() const
 {
-    if( const std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->IsNormal();
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->IsNormal();
+    }
 
     return m_options == ENTRY_NORMAL;
 }
@@ -491,10 +716,15 @@ bool LIB_SYMBOL::IsNormal() const
 
 void LIB_SYMBOL::SetNormal()
 {
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
+    if( IsDerived() )
     {
-        parent->SetNormal();
-        return;
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+        {
+            root->SetNormal();
+            return;
+        }
     }
 
     m_options = ENTRY_NORMAL;
@@ -533,8 +763,7 @@ bool LIB_SYMBOL::ResolveTextVar( wxString* token, int aDepth ) const
             if( field.GetId() == FIELD_T::FOOTPRINT )
                 footprint = field.GetShownText( nullptr, false, aDepth + 1 );
 
-            if( token->IsSameAs( field.GetCanonicalName().Upper() )
-               || token->IsSameAs( field.GetName(), false ) )
+            if( token->IsSameAs( field.GetCanonicalName().Upper() ) || token->IsSameAs( field.GetName(), false ) )
             {
                 *token = field.GetShownText( nullptr, false, aDepth + 1 );
                 return true;
@@ -543,12 +772,9 @@ bool LIB_SYMBOL::ResolveTextVar( wxString* token, int aDepth ) const
     }
 
     // Consider missing simulation fields as empty, not un-resolved
-    if( token->IsSameAs( wxT( "SIM.DEVICE" ) )
-            || token->IsSameAs( wxT( "SIM.TYPE" ) )
-            || token->IsSameAs( wxT( "SIM.PINS" ) )
-            || token->IsSameAs( wxT( "SIM.PARAMS" ) )
-            || token->IsSameAs( wxT( "SIM.LIBRARY" ) )
-            || token->IsSameAs( wxT( "SIM.NAME" ) ) )
+    if( token->IsSameAs( wxT( "SIM.DEVICE" ) ) || token->IsSameAs( wxT( "SIM.TYPE" ) )
+        || token->IsSameAs( wxT( "SIM.PINS" ) ) || token->IsSameAs( wxT( "SIM.PARAMS" ) )
+        || token->IsSameAs( wxT( "SIM.LIBRARY" ) ) || token->IsSameAs( wxT( "SIM.NAME" ) ) )
     {
         *token = wxEmptyString;
         return true;
@@ -559,7 +785,7 @@ bool LIB_SYMBOL::ResolveTextVar( wxString* token, int aDepth ) const
         wxArrayString parts = wxSplit( footprint, ':' );
 
         if( parts.Count() > 0 )
-            *token = parts[ 0 ];
+            *token = parts[0];
         else
             *token = wxEmptyString;
 
@@ -570,7 +796,7 @@ bool LIB_SYMBOL::ResolveTextVar( wxString* token, int aDepth ) const
         wxArrayString parts = wxSplit( footprint, ':' );
 
         if( parts.Count() > 1 )
-            *token = parts[ std::min( 1, (int) parts.size() - 1 ) ];
+            *token = parts[std::min( 1, (int) parts.size() - 1 )];
         else
             *token = wxEmptyString;
 
@@ -621,8 +847,8 @@ bool LIB_SYMBOL::ResolveTextVar( wxString* token, int aDepth ) const
 }
 
 
-void LIB_SYMBOL::Plot( PLOTTER *aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts,
-                       int aUnit, int aBodyStyle, const VECTOR2I &aOffset, bool aDimmed )
+void LIB_SYMBOL::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts, int aUnit, int aBodyStyle,
+                       const VECTOR2I& aOffset, bool aDimmed )
 {
     wxASSERT( aPlotter != nullptr );
 
@@ -633,9 +859,12 @@ void LIB_SYMBOL::Plot( PLOTTER *aPlotter, bool aBackground, const SCH_PLOT_OPTS&
     if( bg == COLOR4D::UNSPECIFIED || !aPlotter->GetColorMode() )
         bg = COLOR4D::WHITE;
 
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
+
     if( aDimmed )
     {
-        color.Desaturate( );
+        color.Desaturate();
         color = color.Mix( bg, 0.5f );
     }
 
@@ -663,8 +892,8 @@ void LIB_SYMBOL::Plot( PLOTTER *aPlotter, bool aBackground, const SCH_PLOT_OPTS&
 }
 
 
-void LIB_SYMBOL::PlotFields( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts,
-                             int aUnit, int aBodyStyle, const VECTOR2I& aOffset, bool aDimmed )
+void LIB_SYMBOL::PlotFields( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts, int aUnit,
+                             int aBodyStyle, const VECTOR2I& aOffset, bool aDimmed )
 {
     wxASSERT( aPlotter != nullptr );
 
@@ -677,13 +906,13 @@ void LIB_SYMBOL::PlotFields( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT
 
     if( aDimmed )
     {
-        color.Desaturate( );
+        color.Desaturate();
         color = color.Mix( bg, 0.5f );
     }
 
     aPlotter->SetColor( color );
 
-    for( SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         SCH_FIELD& field = static_cast<SCH_FIELD&>( item );
 
@@ -756,7 +985,7 @@ void LIB_SYMBOL::RemoveDrawItem( SCH_ITEM* aItem )
             return;
     }
 
-    LIB_ITEMS& items = m_drawings[ aItem->Type() ];
+    LIB_ITEMS& items = m_drawings[aItem->Type()];
 
     for( LIB_ITEMS::iterator i = items.begin(); i != items.end(); i++ )
     {
@@ -783,12 +1012,17 @@ void LIB_SYMBOL::AddDrawItem( SCH_ITEM* aItem, bool aSort )
 }
 
 
-std::vector<SCH_PIN*> LIB_SYMBOL::GetGraphicalPins( int aUnit, int aBodyStyle ) const
+std::vector<const SCH_PIN*> LIB_SYMBOL::GetGraphicalPins( int aUnit, int aBodyStyle ) const
 {
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->GetGraphicalPins( aUnit, aBodyStyle );
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
 
-    std::vector<SCH_PIN*> pins;
+        if( root.get() != this )
+            return const_cast<const LIB_SYMBOL*>( root.get() )->GetGraphicalPins( aUnit, aBodyStyle );
+    }
+
+    std::vector<const SCH_PIN*> pins;
 
     /* Notes:
      * when aUnit == 0: no unit filtering
@@ -803,17 +1037,47 @@ std::vector<SCH_PIN*> LIB_SYMBOL::GetGraphicalPins( int aUnit, int aBodyStyle ) 
         if( aUnit && item.m_unit && ( item.m_unit != aUnit ) )
             continue;
 
-        // De Morgan variant filtering:
+        // Body style filtering:
         if( aBodyStyle && item.m_bodyStyle && ( item.m_bodyStyle != aBodyStyle ) )
             continue;
 
-        // TODO: get rid of const_cast.  (It used to be a C-style cast so was less noticeable.)
-        SCH_PIN* pin = const_cast<SCH_PIN*>( static_cast<const SCH_PIN*>( &item ) );
-    wxLogTrace( traceStackedPins,
-            wxString::Format( "GetGraphicalPins: lib='%s' unit=%d body=%d -> include pin name='%s' number='%s' shownNum='%s'",
-                      GetLibId().Format().wx_str(), aUnit, aBodyStyle,
-                      pin->GetName(), pin->GetNumber(), pin->GetShownNumber() ) );
-        pins.push_back( pin );
+        pins.push_back( static_cast<const SCH_PIN*>( &item ) );
+    }
+
+    return pins;
+}
+
+
+std::vector<SCH_PIN*> LIB_SYMBOL::GetGraphicalPins( int aUnit, int aBodyStyle )
+{
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->GetGraphicalPins( aUnit, aBodyStyle );
+    }
+
+    std::vector<SCH_PIN*> pins;
+
+    /* Notes:
+     * when aUnit == 0: no unit filtering
+     * when aBodyStyle == 0: no body style filtering
+     * when m_unit == 0, the item is common to all units
+     * when m_bodyStyle == 0, the item is common to all body styles
+     */
+
+    for( SCH_ITEM& item : m_drawings[SCH_PIN_T] )
+    {
+        // Unit filtering:
+        if( aUnit && item.m_unit && ( item.m_unit != aUnit ) )
+            continue;
+
+        // Body style filtering:
+        if( aBodyStyle && item.m_bodyStyle && ( item.m_bodyStyle != aBodyStyle ) )
+            continue;
+
+        pins.push_back( static_cast<SCH_PIN*>( &item ) );
     }
 
     return pins;
@@ -826,29 +1090,30 @@ std::vector<LIB_SYMBOL::UNIT_PIN_INFO> LIB_SYMBOL::GetUnitPinInfo() const
 
     int unitCount = std::max( GetUnitCount(), 1 );
 
-    auto compareByPosition = []( SCH_PIN* a, SCH_PIN* b )
-    {
-        VECTOR2I positionA = a->GetPosition();
-        VECTOR2I positionB = b->GetPosition();
+    auto compareByPosition =
+            []( const SCH_PIN* a, const SCH_PIN* b )
+            {
+                VECTOR2I positionA = a->GetPosition();
+                VECTOR2I positionB = b->GetPosition();
 
-        if( positionA.x != positionB.x )
-            return positionA.x < positionB.x;
+                if( positionA.x != positionB.x )
+                    return positionA.x < positionB.x;
 
-        return positionA.y < positionB.y;
-    };
+                return positionA.y < positionB.y;
+            };
 
     for( int unitIdx = 1; unitIdx <= unitCount; ++unitIdx )
     {
         UNIT_PIN_INFO unitInfo;
         unitInfo.m_unitName = GetUnitDisplayName( unitIdx, false );
 
-        std::vector<SCH_PIN*> pinList = GetGraphicalPins( unitIdx, 0 );
+        std::vector<const SCH_PIN*> pinList = GetGraphicalPins( unitIdx, 0 );
 
         std::sort( pinList.begin(), pinList.end(), compareByPosition );
 
         std::unordered_set<wxString> seenNumbers;
 
-        for( SCH_PIN* basePin : pinList )
+        for( const SCH_PIN* basePin : pinList )
         {
             bool                  stackedValid = false;
             std::vector<wxString> expandedNumbers = basePin->GetStackedPinNumbers( &stackedValid );
@@ -881,9 +1146,9 @@ std::vector<LIB_SYMBOL::LOGICAL_PIN> LIB_SYMBOL::GetLogicalPins( int aUnit, int 
 {
     std::vector<LOGICAL_PIN> out;
 
-    for( SCH_PIN* pin : GetGraphicalPins( aUnit, aBodyStyle ) )
+    for( const SCH_PIN* pin : GetGraphicalPins( aUnit, aBodyStyle ) )
     {
-        bool valid = false;
+        bool                  valid = false;
         std::vector<wxString> expanded = pin->GetStackedPinNumbers( &valid );
 
         if( valid && !expanded.empty() )
@@ -891,17 +1156,13 @@ std::vector<LIB_SYMBOL::LOGICAL_PIN> LIB_SYMBOL::GetLogicalPins( int aUnit, int 
             for( const wxString& num : expanded )
             {
                 out.push_back( LOGICAL_PIN{ pin, num } );
-                wxLogTrace( traceStackedPins,
-                            wxString::Format( "GetLogicalPins: base='%s' -> '%s'",
-                                              pin->GetShownNumber(), num ) );
+                wxLogTrace( traceStackedPins, "GetLogicalPins: base='%s' -> '%s'", pin->GetShownNumber(), num );
             }
         }
         else
         {
             out.push_back( LOGICAL_PIN{ pin, pin->GetShownNumber() } );
-            wxLogTrace( traceStackedPins,
-                        wxString::Format( "GetLogicalPins: base='%s' (no expansion)",
-                                          pin->GetShownNumber() ) );
+            wxLogTrace( traceStackedPins, "GetLogicalPins: base='%s' (no expansion)", pin->GetShownNumber() );
         }
     }
 
@@ -915,20 +1176,17 @@ int LIB_SYMBOL::GetPinCount()
 
     for( SCH_PIN* pin : GetGraphicalPins( 0 /* all units */, 1 /* single body style */ ) )
     {
-        int  pinCount = pin->GetStackedPinCount();
+        int pinCount = pin->GetStackedPinCount();
         count += pinCount;
     }
-
-    wxLogTrace( "CVPCB_PINCOUNT", "LIB_SYMBOL::GetPinCount total for lib='%s' => %d", GetLibId().Format().wx_str(),
-                count );
 
     return count;
 }
 
 
-SCH_PIN* LIB_SYMBOL::GetPin( const wxString& aNumber, int aUnit, int aBodyStyle ) const
+const SCH_PIN* LIB_SYMBOL::GetPin( const wxString& aNumber, int aUnit, int aBodyStyle ) const
 {
-    for( SCH_PIN* pin : GetGraphicalPins( aUnit, aBodyStyle ) )
+    for( const SCH_PIN* pin : GetGraphicalPins( aUnit, aBodyStyle ) )
     {
         if( aNumber == pin->GetNumber() )
             return pin;
@@ -938,8 +1196,22 @@ SCH_PIN* LIB_SYMBOL::GetPin( const wxString& aNumber, int aUnit, int aBodyStyle 
 }
 
 
-bool LIB_SYMBOL::PinsConflictWith( const LIB_SYMBOL& aOtherPart, bool aTestNums, bool aTestNames,
-                                   bool aTestType, bool aTestOrientation, bool aTestLength ) const
+std::vector<SCH_PIN*> LIB_SYMBOL::GetPinsByNumber( const wxString& aNumber, int aUnit, int aBodyStyle )
+{
+    std::vector<SCH_PIN*> pins;
+
+    for( SCH_PIN* pin : GetGraphicalPins( aUnit, aBodyStyle ) )
+    {
+        if( aNumber == pin->GetNumber() )
+            pins.push_back( pin );
+    }
+
+    return pins;
+}
+
+
+bool LIB_SYMBOL::PinsConflictWith( const LIB_SYMBOL& aOtherPart, bool aTestNums, bool aTestNames, bool aTestType,
+                                   bool aTestOrientation, bool aTestLength ) const
 {
     for( const SCH_PIN* pin : GetGraphicalPins() )
     {
@@ -975,8 +1247,7 @@ bool LIB_SYMBOL::PinsConflictWith( const LIB_SYMBOL& aOtherPart, bool aTestNums,
                 continue;
 
             // Same orientation?
-            if( aTestOrientation
-              && ( pin->GetOrientation() != otherPin->GetOrientation() ) )
+            if( aTestOrientation && ( pin->GetOrientation() != otherPin->GetOrientation() ) )
                 continue;
 
             // Same length?
@@ -984,7 +1255,7 @@ bool LIB_SYMBOL::PinsConflictWith( const LIB_SYMBOL& aOtherPart, bool aTestNums,
                 continue;
 
             foundMatch = true;
-            break;                    // Match found so search is complete.
+            break; // Match found so search is complete.
         }
 
         if( !foundMatch )
@@ -1001,18 +1272,23 @@ bool LIB_SYMBOL::PinsConflictWith( const LIB_SYMBOL& aOtherPart, bool aTestNums,
 
 std::vector<SCH_PIN*> LIB_SYMBOL::GetPins() const
 {
-    // Back-compat shim: return graphical pins for all units/body styles
-    return GetGraphicalPins( 0, 0 );
+    // Back-compat shim: return graphical pins for all units/body styles, violating const
+    return const_cast<LIB_SYMBOL*>( this )->GetGraphicalPins( 0, 0 );
 }
 
 
 const BOX2I LIB_SYMBOL::GetUnitBoundingBox( int aUnit, int aBodyStyle, bool aIgnoreHiddenFields,
                                             bool aIgnoreLabelsOnInvisiblePins ) const
 {
-    BOX2I bBox;     // Start with a fresh BOX2I so the Merge algorithm works
+    BOX2I bBox; // Start with a fresh BOX2I so the Merge algorithm works
 
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        bBox = parent->GetUnitBoundingBox( aUnit, aBodyStyle, aIgnoreHiddenFields, aIgnoreLabelsOnInvisiblePins );
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            bBox = root->GetUnitBoundingBox( aUnit, aBodyStyle, aIgnoreHiddenFields, aIgnoreLabelsOnInvisiblePins );
+    }
 
     for( const SCH_ITEM& item : m_drawings )
     {
@@ -1089,7 +1365,7 @@ const BOX2I LIB_SYMBOL::GetBodyBoundingBox( int aUnit, int aBodyStyle, bool aInc
 
 void LIB_SYMBOL::deleteAllFields()
 {
-    m_drawings[ SCH_FIELD_T ].clear();
+    m_drawings[SCH_FIELD_T].clear();
 }
 
 
@@ -1118,7 +1394,7 @@ void LIB_SYMBOL::SetFields( const std::vector<SCH_FIELD>& aFieldsList )
 
 void LIB_SYMBOL::GetFields( std::vector<SCH_FIELD*>& aList, bool aVisibleOnly ) const
 {
-    for( const SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( const SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         const SCH_FIELD* field = static_cast<const SCH_FIELD*>( &item );
 
@@ -1152,9 +1428,9 @@ void LIB_SYMBOL::CopyFields( std::vector<SCH_FIELD>& aList )
 
 int LIB_SYMBOL::GetNextFieldOrdinal() const
 {
-    int ordinal = 42;     // Arbitrarily larger than any mandatory FIELD_T id
+    int ordinal = 42; // Arbitrarily larger than any mandatory FIELD_T id
 
-    for( const SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( const SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
         ordinal = std::max( ordinal, static_cast<const SCH_FIELD*>( &item )->GetOrdinal() + 1 );
 
     return ordinal;
@@ -1163,7 +1439,7 @@ int LIB_SYMBOL::GetNextFieldOrdinal() const
 
 const SCH_FIELD* LIB_SYMBOL::GetField( FIELD_T aFieldType ) const
 {
-    for( const SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( const SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         const SCH_FIELD* field = static_cast<const SCH_FIELD*>( &item );
 
@@ -1177,7 +1453,7 @@ const SCH_FIELD* LIB_SYMBOL::GetField( FIELD_T aFieldType ) const
 
 SCH_FIELD* LIB_SYMBOL::GetField( FIELD_T aFieldType )
 {
-    for( SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         SCH_FIELD* field = static_cast<SCH_FIELD*>( &item );
 
@@ -1191,7 +1467,7 @@ SCH_FIELD* LIB_SYMBOL::GetField( FIELD_T aFieldType )
 
 const SCH_FIELD* LIB_SYMBOL::GetField( const wxString& aFieldName ) const
 {
-    for( const SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( const SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         const SCH_FIELD& field = static_cast<const SCH_FIELD&>( item );
 
@@ -1205,7 +1481,7 @@ const SCH_FIELD* LIB_SYMBOL::GetField( const wxString& aFieldName ) const
 
 SCH_FIELD* LIB_SYMBOL::GetField( const wxString& aFieldName )
 {
-    for( SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         SCH_FIELD& field = static_cast<SCH_FIELD&>( item );
 
@@ -1219,7 +1495,7 @@ SCH_FIELD* LIB_SYMBOL::GetField( const wxString& aFieldName )
 
 SCH_FIELD* LIB_SYMBOL::FindFieldCaseInsensitive( const wxString& aFieldName )
 {
-    for( SCH_ITEM& item : m_drawings[ SCH_FIELD_T ] )
+    for( SCH_ITEM& item : m_drawings[SCH_FIELD_T] )
     {
         SCH_FIELD& field = static_cast<SCH_FIELD&>( item );
 
@@ -1323,8 +1599,13 @@ bool LIB_SYMBOL::HasLegacyAlternateBodyStyle() const
             return true;
     }
 
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->HasLegacyAlternateBodyStyle();
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->HasLegacyAlternateBodyStyle();
+    }
 
     return false;
 }
@@ -1332,8 +1613,13 @@ bool LIB_SYMBOL::HasLegacyAlternateBodyStyle() const
 
 int LIB_SYMBOL::GetMaxPinNumber() const
 {
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->GetMaxPinNumber();
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->GetMaxPinNumber();
+    }
 
     int maxPinNumber = 0;
 
@@ -1368,14 +1654,13 @@ void LIB_SYMBOL::ClearEditFlags()
 }
 
 
-SCH_ITEM* LIB_SYMBOL::LocateDrawItem( int aUnit, int aBodyStyle, KICAD_T aType,
-                                      const VECTOR2I& aPoint )
+SCH_ITEM* LIB_SYMBOL::LocateDrawItem( int aUnit, int aBodyStyle, KICAD_T aType, const VECTOR2I& aPoint )
 {
     for( SCH_ITEM& item : m_drawings )
     {
         if( ( aUnit && item.m_unit && aUnit != item.m_unit )
-                || ( aBodyStyle && item.m_bodyStyle && aBodyStyle != item.m_bodyStyle )
-                || ( item.Type() != aType && aType != TYPE_NOT_INIT ) )
+            || ( aBodyStyle && item.m_bodyStyle && aBodyStyle != item.m_bodyStyle )
+            || ( item.Type() != aType && aType != TYPE_NOT_INIT ) )
         {
             continue;
         }
@@ -1388,8 +1673,8 @@ SCH_ITEM* LIB_SYMBOL::LocateDrawItem( int aUnit, int aBodyStyle, KICAD_T aType,
 }
 
 
-SCH_ITEM* LIB_SYMBOL::LocateDrawItem( int aUnit, int aBodyStyle, KICAD_T aType,
-                                      const VECTOR2I& aPoint, const TRANSFORM& aTransform )
+SCH_ITEM* LIB_SYMBOL::LocateDrawItem( int aUnit, int aBodyStyle, KICAD_T aType, const VECTOR2I& aPoint,
+                                      const TRANSFORM& aTransform )
 {
     /* we use LocateDrawItem( int aUnit, int convert, KICAD_T type, const
      * VECTOR2I& pt ) to search items.
@@ -1408,8 +1693,7 @@ SCH_ITEM* LIB_SYMBOL::LocateDrawItem( int aUnit, int aBodyStyle, KICAD_T aType,
 }
 
 
-INSPECT_RESULT LIB_SYMBOL::Visit( INSPECTOR aInspector, void* aTestData,
-                                  const std::vector<KICAD_T>& aScanTypes )
+INSPECT_RESULT LIB_SYMBOL::Visit( INSPECTOR aInspector, void* aTestData, const std::vector<KICAD_T>& aScanTypes )
 {
     // The part itself is never inspected, only its children
     for( SCH_ITEM& item : m_drawings )
@@ -1479,8 +1763,13 @@ void LIB_SYMBOL::SetUnitCount( int aCount, bool aDuplicateDrawItems )
 
 int LIB_SYMBOL::GetUnitCount() const
 {
-    if( std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock() )
-        return parent->GetUnitCount();
+    if( IsDerived() )
+    {
+        std::shared_ptr<LIB_SYMBOL> root = GetSafeRootSymbol( this, __FUNCTION__ );
+
+        if( root.get() != this )
+            return root->GetUnitCount();
+    }
 
     return m_unitCount;
 }
@@ -1496,7 +1785,7 @@ void LIB_SYMBOL::SetBodyStyleCount( int aCount, bool aDuplicateDrawItems, bool a
     {
         if( aDuplicateDrawItems || aDuplicatePins )
         {
-            std::vector<SCH_ITEM*> tmp;     // Temporarily store the duplicated pins here.
+            std::vector<SCH_ITEM*> tmp; // Temporarily store the duplicated pins here.
 
             for( SCH_ITEM& item : m_drawings )
             {
@@ -1543,9 +1832,8 @@ std::vector<SCH_ITEM*> LIB_SYMBOL::GetUnitDrawItems( int aUnit, int aBodyStyle )
         if( item.Type() == SCH_FIELD_T )
             continue;
 
-        if( ( aBodyStyle == -1 && item.GetUnit() == aUnit )
-                || ( aUnit == -1 && item.GetBodyStyle() == aBodyStyle )
-                || ( aUnit == item.GetUnit() && aBodyStyle == item.GetBodyStyle() ) )
+        if( ( aBodyStyle == -1 && item.GetUnit() == aUnit ) || ( aUnit == -1 && item.GetBodyStyle() == aBodyStyle )
+            || ( aUnit == item.GetUnit() && aBodyStyle == item.GetBodyStyle() ) )
         {
             unitItems.push_back( &item );
         }
@@ -1568,10 +1856,10 @@ std::vector<LIB_SYMBOL_UNIT> LIB_SYMBOL::GetUnitDrawItems()
         int bodyStyle = item.GetBodyStyle();
 
         auto it = std::find_if( units.begin(), units.end(),
-                [unit, bodyStyle]( const LIB_SYMBOL_UNIT& a )
-                {
-                    return a.m_unit == unit && a.m_bodyStyle == bodyStyle;
-                } );
+                                [unit, bodyStyle]( const LIB_SYMBOL_UNIT& a )
+                                {
+                                    return a.m_unit == unit && a.m_bodyStyle == bodyStyle;
+                                } );
 
         if( it == units.end() )
         {
@@ -1591,9 +1879,11 @@ std::vector<LIB_SYMBOL_UNIT> LIB_SYMBOL::GetUnitDrawItems()
 }
 
 
-
-
-#define REPORT( msg ) { if( aReporter ) aReporter->Report( msg ); }
+#define REPORT( msg )                                                                                                  \
+    {                                                                                                                  \
+        if( aReporter )                                                                                                \
+            aReporter->Report( msg );                                                                                  \
+    }
 #define ITEM_DESC( item ) ( item )->GetItemDescription( &unitsProvider, false )
 
 int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aReporter ) const
@@ -1647,11 +1937,11 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
     for( auto it = m_drawings.begin(); it != m_drawings.end(); ++it )
     {
         if( it->Type() == SCH_SHAPE_T )
-            aShapes.insert( &(*it) );
+            aShapes.insert( &( *it ) );
         else if( it->Type() == SCH_FIELD_T )
-            aFields.insert( static_cast<const SCH_FIELD*>( &(*it) ) );
+            aFields.insert( static_cast<const SCH_FIELD*>( &( *it ) ) );
         else if( it->Type() == SCH_PIN_T )
-            aPins.insert( static_cast<const SCH_PIN*>( &(*it) ) );
+            aPins.insert( static_cast<const SCH_PIN*>( &( *it ) ) );
     }
 
     std::set<const SCH_ITEM*, SCH_ITEM::cmp_items> bShapes;
@@ -1661,11 +1951,11 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
     for( auto it = aRhs.m_drawings.begin(); it != aRhs.m_drawings.end(); ++it )
     {
         if( it->Type() == SCH_SHAPE_T )
-            bShapes.insert( &(*it) );
+            bShapes.insert( &( *it ) );
         else if( it->Type() == SCH_FIELD_T )
-            bFields.insert( static_cast<const SCH_FIELD*>( &(*it) ) );
+            bFields.insert( static_cast<const SCH_FIELD*>( &( *it ) ) );
         else if( it->Type() == SCH_PIN_T )
-            bPins.insert( static_cast<const SCH_PIN*>( &(*it) ) );
+            bPins.insert( static_cast<const SCH_PIN*>( &( *it ) ) );
     }
 
     if( int tmp = static_cast<int>( aShapes.size() - bShapes.size() ) )
@@ -1680,11 +1970,10 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
     {
         for( auto aIt = aShapes.begin(), bIt = bShapes.begin(); aIt != aShapes.end(); aIt++, bIt++ )
         {
-            if( int tmp2 = (*aIt)->compare( *(*bIt), aCompareFlags ) )
+            if( int tmp2 = ( *aIt )->compare( *( *bIt ), aCompareFlags ) )
             {
                 retv = tmp2;
-                REPORT( wxString::Format( _( "Graphic item differs: %s; %s." ),
-                                          ITEM_DESC( *aIt ),
+                REPORT( wxString::Format( _( "Graphic item differs: %s; %s." ), ITEM_DESC( *aIt ),
                                           ITEM_DESC( *bIt ) ) );
 
                 if( !aReporter )
@@ -1708,9 +1997,7 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
         else if( int tmp = aPin->SCH_ITEM::compare( *bPin, aCompareFlags ) )
         {
             retv = tmp;
-            REPORT( wxString::Format( _( "Pin %s differs: %s; %s" ),
-                                      aPin->GetNumber(),
-                                      ITEM_DESC( aPin ),
+            REPORT( wxString::Format( _( "Pin %s differs: %s; %s" ), aPin->GetNumber(), ITEM_DESC( aPin ),
                                       ITEM_DESC( bPin ) ) );
 
             if( !aReporter )
@@ -1770,10 +2057,8 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
             if( tmp != 0 )
             {
                 retv = tmp;
-                REPORT( wxString::Format( _( "Field '%s' differs: %s; %s." ),
-                                          aField->GetName( false ),
-                                          ITEM_DESC( aField ),
-                                          ITEM_DESC( bField ) ) );
+                REPORT( wxString::Format( _( "Field '%s' differs: %s; %s." ), aField->GetName( false ),
+                                          ITEM_DESC( aField ), ITEM_DESC( bField ) ) );
 
                 if( !aReporter )
                     return retv;
@@ -1887,6 +2172,15 @@ int LIB_SYMBOL::Compare( const LIB_SYMBOL& aRhs, int aCompareFlags, REPORTER* aR
             if( !aReporter )
                 return retv;
         }
+
+        if( m_excludedFromPosFiles != aRhs.m_excludedFromPosFiles )
+        {
+            retv = ( m_excludedFromPosFiles ) ? -1 : 1;
+            REPORT( _( "Exclude from position files settings differ." ) );
+
+            if( !aReporter )
+                return retv;
+        }
     }
 
     if( !aReporter )
@@ -1950,12 +2244,12 @@ double LIB_SYMBOL::Similarity( const SCH_ITEM& aOther ) const
         similarity += max_similarity;
     }
 
-    for( const SCH_PIN* pin : GetPins() )
+    for( const SCH_PIN* pin : GetGraphicalPins( 0, 0 ) )
     {
         totalItems += 1;
         double max_similarity = 0.0;
 
-        for( const SCH_PIN* otherPin : other.GetPins() )
+        for( const SCH_PIN* otherPin : other.GetGraphicalPins( 0, 0 ) )
         {
             double temp_similarity = pin->Similarity( *otherPin );
             max_similarity = std::max( max_similarity, temp_similarity );
@@ -1979,6 +2273,9 @@ double LIB_SYMBOL::Similarity( const SCH_ITEM& aOther ) const
         similarity *= 0.9;
 
     if( m_excludedFromSim != other.m_excludedFromSim )
+        similarity *= 0.9;
+
+    if( m_excludedFromPosFiles != other.m_excludedFromPosFiles )
         similarity *= 0.9;
 
     if( m_flags != other.m_flags )
@@ -2017,6 +2314,32 @@ const EMBEDDED_FILES* LIB_SYMBOL::GetEmbeddedFiles() const
 }
 
 
+void LIB_SYMBOL::AppendParentEmbeddedFiles( std::vector<EMBEDDED_FILES*>& aStack ) const
+{
+    std::set<const LIB_SYMBOL*> visited;
+    visited.insert( this );
+
+    std::shared_ptr<LIB_SYMBOL> parent = m_parent.lock();
+
+    while( parent )
+    {
+        // Cycle detected - parent chain points back to an already visited symbol
+        if( visited.count( parent.get() ) )
+        {
+            wxLogTrace( traceSymbolInheritance,
+                        wxT( "AppendParentEmbeddedFiles: Circular inheritance detected in "
+                             "symbol '%s' (lib: %s)" ),
+                        m_name, m_libId.GetLibNickname().wx_str() );
+            break;
+        }
+
+        visited.insert( parent.get() );
+        aStack.push_back( parent->GetEmbeddedFiles() );
+        parent = parent->GetParent().lock();
+    }
+}
+
+
 std::set<KIFONT::OUTLINE_FONT*> LIB_SYMBOL::GetFonts() const
 {
     using EMBEDDING_PERMISSION = KIFONT::OUTLINE_FONT::EMBEDDING_PERMISSION;
@@ -2032,10 +2355,9 @@ std::set<KIFONT::OUTLINE_FONT*> LIB_SYMBOL::GetFonts() const
             if( auto* font = text.GetFont(); font && !font->IsStroke() )
             {
                 auto* outline = static_cast<KIFONT::OUTLINE_FONT*>( font );
-                auto permission = outline->GetEmbeddingPermission();
+                auto  permission = outline->GetEmbeddingPermission();
 
-                if( permission == EMBEDDING_PERMISSION::EDITABLE
-                    || permission == EMBEDDING_PERMISSION::INSTALLABLE )
+                if( permission == EMBEDDING_PERMISSION::EDITABLE || permission == EMBEDDING_PERMISSION::INSTALLABLE )
                 {
                     fonts.insert( outline );
                 }
@@ -2080,93 +2402,102 @@ static struct LIB_SYMBOL_DESC
 
         const wxString groupFields = _HKI( "Fields" );
 
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Reference" ),
-                    &LIB_SYMBOL::SetRefProp, &LIB_SYMBOL::GetRefProp ),
-                    groupFields );
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Value" ),
-                    &LIB_SYMBOL::SetValueProp, &LIB_SYMBOL::GetValueProp ),
-                    groupFields );
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Footprint" ),
-                    &LIB_SYMBOL::SetFootprintProp, &LIB_SYMBOL::GetFootprintProp ),
-                    groupFields );
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Datasheet" ),
-                    &LIB_SYMBOL::SetDatasheetProp, &LIB_SYMBOL::GetDatasheetProp ),
-                    groupFields );
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Keywords" ),
-                    &LIB_SYMBOL::SetKeywordsProp, &LIB_SYMBOL::GetKeywordsProp ),
-                    groupFields );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Reference" ), &LIB_SYMBOL::SetRefProp,
+                                                                 &LIB_SYMBOL::GetRefProp ),
+                             groupFields );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Value" ), &LIB_SYMBOL::SetValueProp,
+                                                                 &LIB_SYMBOL::GetValueProp ),
+                             groupFields );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Footprint" ), &LIB_SYMBOL::SetFootprintProp,
+                                                                 &LIB_SYMBOL::GetFootprintProp ),
+                             groupFields );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Datasheet" ), &LIB_SYMBOL::SetDatasheetProp,
+                                                                 &LIB_SYMBOL::GetDatasheetProp ),
+                             groupFields );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Keywords" ), &LIB_SYMBOL::SetKeywordsProp,
+                                                                 &LIB_SYMBOL::GetKeywordsProp ),
+                             groupFields );
 
         const wxString groupSymbolDef = _HKI( "Symbol Definition" );
 
         propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Define as Power Symbol" ),
-                    &LIB_SYMBOL::SetPowerSymbolProp, &LIB_SYMBOL::GetPowerSymbolProp ),
-                    groupSymbolDef );
+                                                             &LIB_SYMBOL::SetPowerSymbolProp,
+                                                             &LIB_SYMBOL::GetPowerSymbolProp ),
+                             groupSymbolDef );
         propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Define as Local Power Symbol" ),
-                    &LIB_SYMBOL::SetLocalPowerSymbolProp, &LIB_SYMBOL::GetLocalPowerSymbolProp ),
-                    groupSymbolDef );
+                                                             &LIB_SYMBOL::SetLocalPowerSymbolProp,
+                                                             &LIB_SYMBOL::GetLocalPowerSymbolProp ),
+                             groupSymbolDef );
 
         const wxString groupPinDisplay = _HKI( "Pin Display" );
 
-        propMgr.AddProperty( new PROPERTY<SYMBOL, bool>( _HKI( "Show Pin Number" ),
-                    &SYMBOL::SetShowPinNumbers, &SYMBOL::GetShowPinNumbers ),
-                    groupPinDisplay );
-        propMgr.AddProperty( new PROPERTY<SYMBOL, bool>( _HKI( "Show Pin Name" ),
-                    &SYMBOL::SetShowPinNames, &SYMBOL::GetShowPinNames ),
-                    groupPinDisplay );
+        propMgr.AddProperty( new PROPERTY<SYMBOL, bool>( _HKI( "Show Pin Number" ), &SYMBOL::SetShowPinNumbers,
+                                                         &SYMBOL::GetShowPinNumbers ),
+                             groupPinDisplay );
+        propMgr.AddProperty( new PROPERTY<SYMBOL, bool>( _HKI( "Show Pin Name" ), &SYMBOL::SetShowPinNames,
+                                                         &SYMBOL::GetShowPinNames ),
+                             groupPinDisplay );
         propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Place Pin Names Inside" ),
-                    &LIB_SYMBOL::SetPinNamesInsideProp, &LIB_SYMBOL::GetPinNamesInsideProp ),
-                    groupPinDisplay );
-        propMgr.AddProperty( new PROPERTY<SYMBOL, int>( _HKI( "Pin Name Position Offset" ),
-                    &SYMBOL::SetPinNameOffset, &SYMBOL::GetPinNameOffset,
-                    PROPERTY_DISPLAY::PT_SIZE ),
-                    groupPinDisplay );
+                                                             &LIB_SYMBOL::SetPinNamesInsideProp,
+                                                             &LIB_SYMBOL::GetPinNamesInsideProp ),
+                             groupPinDisplay );
+        propMgr.AddProperty( new PROPERTY<SYMBOL, int>( _HKI( "Pin Name Position Offset" ), &SYMBOL::SetPinNameOffset,
+                                                        &SYMBOL::GetPinNameOffset, PROPERTY_DISPLAY::PT_SIZE ),
+                             groupPinDisplay );
 
         const wxString groupAttributes = _HKI( "Attributes" );
 
         propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Exclude from Simulation" ),
-                    &LIB_SYMBOL::SetExcludedFromSimProp, &LIB_SYMBOL::GetExcludedFromSimProp ),
-                    groupAttributes );
-        propMgr.AddProperty( new PROPERTY<SYMBOL, bool>( _HKI( "Exclude from Board" ),
-                    &SYMBOL::SetExcludedFromBoard, &SYMBOL::GetExcludedFromBoard ),
-                    groupAttributes );
+                                                             &LIB_SYMBOL::SetExcludedFromSimProp,
+                                                             &LIB_SYMBOL::GetExcludedFromSimProp ),
+                             groupAttributes );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Exclude from Board" ),
+                                                             &LIB_SYMBOL::SetExcludedFromBoardProp,
+                                                             &LIB_SYMBOL::GetExcludedFromBoardProp ),
+                             groupAttributes );
         propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Exclude from Bill of Materials" ),
-                    &LIB_SYMBOL::SetExcludedFromBOMProp, &LIB_SYMBOL::GetExcludedFromBOMProp ),
-                    groupAttributes );
+                                                             &LIB_SYMBOL::SetExcludedFromBOMProp,
+                                                             &LIB_SYMBOL::GetExcludedFromBOMProp ),
+                             groupAttributes );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Exclude from Position Files" ),
+                                                             &LIB_SYMBOL::SetExcludedFromPosFilesProp,
+                                                             &LIB_SYMBOL::GetExcludedFromPosFilesProp ),
+                             groupAttributes );
 
         const wxString groupUnits = _HKI( "Units and Body Styles" );
 
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, int>( _HKI( "Number of Symbol Units" ),
-                    &LIB_SYMBOL::SetUnitProp, &LIB_SYMBOL::GetUnitProp ),
-                    groupUnits );
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, int>( _HKI( "Number of Symbol Units" ), &LIB_SYMBOL::SetUnitProp,
+                                                            &LIB_SYMBOL::GetUnitProp ),
+                             groupUnits );
         propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, bool>( _HKI( "Units are Interchangeable" ),
-                    &LIB_SYMBOL::SetUnitsInterchangeableProp, &LIB_SYMBOL::GetUnitsInterchangeableProp ),
-                    groupUnits );
+                                                             &LIB_SYMBOL::SetUnitsInterchangeableProp,
+                                                             &LIB_SYMBOL::GetUnitsInterchangeableProp ),
+                             groupUnits );
 
-        auto multiBodyStyle =
-                [=]( INSPECTABLE* aItem ) -> bool
-                {
-                    if( LIB_SYMBOL* symbol = dynamic_cast<LIB_SYMBOL*>( aItem ) )
-                        return symbol->IsMultiBodyStyle();
+        auto multiBodyStyle = [=]( INSPECTABLE* aItem ) -> bool
+        {
+            if( LIB_SYMBOL* symbol = dynamic_cast<LIB_SYMBOL*>( aItem ) )
+                return symbol->IsMultiBodyStyle();
 
-                    return false;
-                };
+            return false;
+        };
 
-        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Body Styles" ),
-                    &LIB_SYMBOL::SetBodyStyleProp, &LIB_SYMBOL::GetBodyStyleProp ),
-                    groupUnits )
+        propMgr.AddProperty( new PROPERTY<LIB_SYMBOL, wxString>( _HKI( "Body Styles" ), &LIB_SYMBOL::SetBodyStyleProp,
+                                                                 &LIB_SYMBOL::GetBodyStyleProp ),
+                             groupUnits )
                 .SetAvailableFunc( multiBodyStyle )
-                .SetChoicesFunc( []( INSPECTABLE* aItem )
-                                 {
-                                     wxPGChoices choices;
+                .SetChoicesFunc(
+                        []( INSPECTABLE* aItem )
+                        {
+                            wxPGChoices choices;
 
-                                     if( LIB_SYMBOL* symbol = dynamic_cast<LIB_SYMBOL*>( aItem ) )
-                                     {
-                                         for( int ii = 1; ii <= symbol->GetBodyStyleCount(); ii++ )
-                                             choices.Add( symbol->GetBodyStyleDescription( ii, false ) );
-                                     }
+                            if( LIB_SYMBOL* symbol = dynamic_cast<LIB_SYMBOL*>( aItem ) )
+                            {
+                                for( int ii = 1; ii <= symbol->GetBodyStyleCount(); ii++ )
+                                    choices.Add( symbol->GetBodyStyleDescription( ii, false ) );
+                            }
 
-                                     return choices;
-                                 } );
+                            return choices;
+                        } );
     }
 } _LIB_SYMBOL_DESC;
-

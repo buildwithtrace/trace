@@ -19,8 +19,6 @@
 
 #pragma once
 
-#include <memory>
-
 #include <panel_fp_editor_field_defaults_base.h>
 
 class BOARD_DESIGN_SETTINGS;

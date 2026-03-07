@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  *
  * This program is free software; you can redistribute it and/or
@@ -41,7 +42,7 @@
 
 using namespace KIGFX;
 
-static const wxString productName = wxT( "KiCad E.D.A." );
+static const wxString productName = wxT( "Trace" );
 
 DS_RENDER_SETTINGS::DS_RENDER_SETTINGS()
 {
@@ -120,7 +121,7 @@ wxString DS_DRAW_ITEM_LIST::BuildFullText( const wxString& aTextbase )
 
                 if( token->IsSameAs( wxT( "KICAD_VERSION" ) ) && PgmOrNull() )
                 {
-                    *token = wxString::Format( wxT( "%s %s" ), productName, GetBaseVersion() );
+                    *token = wxString::Format( wxT( "%s %s" ), productName, GetTraceBaseVersion() );
                     tokenUpdated = true;
                 }
                 else if( token->IsSameAs( wxT( "#" ) ) )

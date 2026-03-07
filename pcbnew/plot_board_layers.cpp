@@ -46,8 +46,7 @@
 #include <gbr_metadata.h>
 #include <advanced_config.h>
 
-
-void GenerateLayerPoly( SHAPE_POLY_SET* aResult, BOARD *aBoard, PCB_LAYER_ID aLayer,
+void GenerateLayerPoly( SHAPE_POLY_SET* aResult, BOARD *aBoard, PLOTTER* aPlotter, PCB_LAYER_ID aLayer,
                         bool aPlotFPText, bool aPlotReferences, bool aPlotValues );
 
 
@@ -102,7 +101,7 @@ void PlotSolderMaskLayer( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerMa
     SHAPE_POLY_SET solderMask;
     PCB_LAYER_ID   layer = aLayerMask[B_Mask] ? B_Mask : F_Mask;
 
-    GenerateLayerPoly( &solderMask, aBoard, layer, aPlotOpt.GetPlotFPText(),
+    GenerateLayerPoly( &solderMask, aBoard, aPlotter, layer, aPlotOpt.GetPlotFPText(),
                        aPlotOpt.GetPlotReference(), aPlotOpt.GetPlotValue() );
 
     PlotPolySet( aBoard, aPlotter, aPlotOpt, &solderMask, layer );
@@ -116,9 +115,9 @@ void PlotClippedSilkLayer( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerM
     PCB_LAYER_ID   silkLayer = aLayerMask[F_SilkS] ? F_SilkS : B_SilkS;
     PCB_LAYER_ID   maskLayer = aLayerMask[F_SilkS] ? F_Mask : B_Mask;
 
-    GenerateLayerPoly( &silkscreen, aBoard, silkLayer, aPlotOpt.GetPlotFPText(),
+    GenerateLayerPoly( &silkscreen, aBoard, aPlotter, silkLayer, aPlotOpt.GetPlotFPText(),
                        aPlotOpt.GetPlotReference(), aPlotOpt.GetPlotValue() );
-    GenerateLayerPoly( &solderMask, aBoard, maskLayer, aPlotOpt.GetPlotFPText(),
+    GenerateLayerPoly( &solderMask, aBoard, aPlotter, maskLayer, aPlotOpt.GetPlotFPText(),
                        aPlotOpt.GetPlotReference(), aPlotOpt.GetPlotValue() );
 
     silkscreen.BooleanSubtract( solderMask );
@@ -173,6 +172,8 @@ void PlotInteractiveLayer( BOARD* aBoard, PLOTTER* aPlotter, const PCB_PLOT_PARA
 
         for( const PCB_FIELD* field : fp->GetFields() )
         {
+            wxCHECK2( field, continue );
+
             if( field->IsReference() || field->IsValue() )
                 continue;
 
@@ -336,6 +337,7 @@ void PlotStandardLayer( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerMask
     bool onFrontFab = ( LSET( { F_Fab } ) & aLayerMask ).any();
     bool onBackFab  = ( LSET( { B_Fab } ) & aLayerMask ).any();
     bool sketchPads = ( onFrontFab || onBackFab ) && aPlotOpt.GetSketchPadsOnFabLayers();
+    const wxString variantName = aBoard->GetCurrentVariant();
 
     // Plot edge layer and graphic items
     for( const BOARD_ITEM* item : aBoard->Drawings() )
@@ -352,6 +354,8 @@ void PlotStandardLayer( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerMask
     // Plot footprint pads
     for( FOOTPRINT* footprint : aBoard->Footprints() )
     {
+        const bool dnp = footprint->GetDNPForVariant( variantName );
+
         aPlotter->StartBlock( nullptr );
 
         for( PAD* pad : footprint->Pads() )
@@ -632,7 +636,7 @@ void PlotStandardLayer( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerMask
                 plotPadLayer( layer );
         }
 
-        if( footprint->IsDNP()
+        if( dnp
                 && !itemplotter.GetHideDNPFPsOnFabLayers()
                 && itemplotter.GetCrossoutDNPFPsOnFabLayers()
                 && (   ( onFrontFab && footprint->GetLayer() == F_Cu )
@@ -647,6 +651,13 @@ void PlotStandardLayer( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerMask
                 rect = courtyard.BBox();
 
             int   width = aBoard->GetDesignSettings().m_LineThickness[ LAYER_CLASS_FAB ];
+
+            // Use DNP cross color from color scheme
+            COLOR4D dnpMarkerColor = aPlotOpt.ColorSettings()->GetColor( LAYER_DNP_MARKER );
+            if( dnpMarkerColor != COLOR4D::UNSPECIFIED )
+                aPlotter->SetColor( dnpMarkerColor );
+            else
+                aPlotter->SetColor( aPlotOpt.ColorSettings()->GetColor( onFrontFab ? F_Fab : B_Fab ) );
 
             aPlotter->ThickSegment( rect.GetOrigin(), rect.GetEnd(), width, nullptr );
             aPlotter->ThickSegment( VECTOR2I( rect.GetLeft(), rect.GetBottom() ),
@@ -936,7 +947,7 @@ void PlotLayerOutlines( BOARD* aBoard, PLOTTER* aPlotter, const LSET& aLayerMask
 /**
  * Generates a SHAPE_POLY_SET representing the plotted items on a layer.
  */
-void GenerateLayerPoly( SHAPE_POLY_SET* aResult, BOARD *aBoard, PCB_LAYER_ID aLayer,
+void GenerateLayerPoly( SHAPE_POLY_SET* aResult, BOARD *aBoard, PLOTTER* aPlotter, PCB_LAYER_ID aLayer,
                          bool aPlotFPText, bool aPlotReferences, bool aPlotValues )
 {
     int             maxError = aBoard->GetDesignSettings().m_MaxError;
@@ -992,6 +1003,8 @@ void GenerateLayerPoly( SHAPE_POLY_SET* aResult, BOARD *aBoard, PCB_LAYER_ID aLa
 
             for( const PCB_FIELD* field : footprint->GetFields() )
             {
+                wxCHECK2( field, continue );
+
                 if( field->IsReference() && !aPlotReferences )
                     continue;
 
@@ -1052,9 +1065,11 @@ void GenerateLayerPoly( SHAPE_POLY_SET* aResult, BOARD *aBoard, PCB_LAYER_ID aLa
                 else
                 {
                     if( inflate != 0 )
-                        item->TransformShapeToPolygon( exactPolys, aLayer, 0, maxError, ERROR_OUTSIDE );
+                        item->TransformShapeToPolySet( exactPolys, aLayer, 0, maxError, ERROR_OUTSIDE,
+                                                       aPlotter->RenderSettings() );
 
-                    item->TransformShapeToPolygon( *aResult, aLayer, inflate, maxError, ERROR_OUTSIDE );
+                    item->TransformShapeToPolySet( *aResult, aLayer, inflate, maxError,
+                                                    ERROR_OUTSIDE, aPlotter->RenderSettings() );
                 }
             }
         }
@@ -1199,18 +1214,20 @@ static void FillNegativeKnockout( PLOTTER *aPlotter, const BOX2I &aBbbox )
 
 static void plotPdfBackground( BOARD* aBoard, const PCB_PLOT_PARAMS* aPlotOpts, PLOTTER* aPlotter )
 {
+    const PAGE_INFO& pageInfo = aPlotter->PageSettings();
+    const VECTOR2I   plotOffset = aPlotter->GetPlotOffsetUserUnits();
+    const VECTOR2I   pageSizeIU( pageInfo.GetWidthIU( pcbIUScale.IU_PER_MILS ),
+                                 pageInfo.GetHeightIU( pcbIUScale.IU_PER_MILS ) );
+
     if( aPlotter->GetColorMode()
         && aPlotOpts->GetPDFBackgroundColor() != COLOR4D::UNSPECIFIED )
     {
         aPlotter->SetColor( aPlotOpts->GetPDFBackgroundColor() );
 
-        // Use page size selected in pcb to know the schematic bg area
-        const PAGE_INFO& actualPage = aBoard->GetPageSettings();
+        // Use plotter page size and offset so background matches the plotted output.
+        VECTOR2I end = plotOffset + pageSizeIU;
 
-        VECTOR2I end( actualPage.GetWidthIU( pcbIUScale.IU_PER_MILS ),
-                      actualPage.GetHeightIU( pcbIUScale.IU_PER_MILS ) );
-
-        aPlotter->Rect( VECTOR2I( 0, 0 ), end, FILL_T::FILLED_SHAPE, 1.0 );
+        aPlotter->Rect( plotOffset, end, FILL_T::FILLED_SHAPE, 1.0 );
     }
 }
 

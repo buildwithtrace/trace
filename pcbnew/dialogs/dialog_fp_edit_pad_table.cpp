@@ -100,7 +100,7 @@ DIALOG_FP_EDIT_PAD_TABLE::DIALOG_FP_EDIT_PAD_TABLE( PCB_BASE_FRAME* aParent, FOO
     topSizer->Add( bSummarySizer, 0, wxEXPAND|wxTOP|wxBOTTOM, 5 );
 
     m_grid = new WX_GRID( this, wxID_ANY );
-    m_grid->CreateGrid( 0, 11 );
+    m_grid->CreateGrid( m_footprint->GetPadCount(), 11 );
     m_grid->SetColLabelValue( COL_NUMBER, _( "Number" ) );
     m_grid->SetColLabelValue( COL_TYPE,   _( "Type" ) );
     m_grid->SetColLabelValue( COL_SHAPE,  _( "Shape" ) );
@@ -215,6 +215,8 @@ DIALOG_FP_EDIT_PAD_TABLE::DIALOG_FP_EDIT_PAD_TABLE( PCB_BASE_FRAME* aParent, FOO
           },
           wxID_CANCEL );
 
+    Layout();
+    topSizer->Fit( this );
     finishDialogSettings();
 }
 
@@ -242,7 +244,9 @@ bool DIALOG_FP_EDIT_PAD_TABLE::TransferDataToWindow()
 
     for( PAD* pad : m_footprint->Pads() )
     {
-        m_grid->AppendRows( 1 );
+        if( row >= m_grid->GetNumberRows() )
+            continue;
+
         m_grid->SetCellValue( row, COL_NUMBER, pad->GetNumber() );
 
         // Pad attribute to string
@@ -306,7 +310,8 @@ bool DIALOG_FP_EDIT_PAD_TABLE::TransferDataToWindow()
 
         // Pad to die metrics
         if( pad->GetPadToDieLength() )
-            m_grid->SetCellValue( row, COL_P2D_LENGTH, m_unitsProvider->StringFromValue( pad->GetPadToDieLength(), true ) );
+            m_grid->SetCellValue( row, COL_P2D_LENGTH, m_unitsProvider->StringFromValue( pad->GetPadToDieLength(),
+                                                                                         true ) );
 
         if( pad->GetPadToDieDelay() )
             m_grid->SetCellValue( row, COL_P2D_DELAY, wxString::Format( "%d", pad->GetPadToDieDelay() ) );
@@ -365,6 +370,7 @@ bool DIALOG_FP_EDIT_PAD_TABLE::TransferDataToWindow()
     if( m_grid->GetNumberRows() > 0 )
     {
         m_grid->SetGridCursor( 0, 0 );
+
         // Construct event with required parameters (id, type, obj, row, col,...)
         wxGridEvent ev( m_grid->GetId(), wxEVT_GRID_SELECT_CELL, m_grid, 0, 0, -1, -1, true );
         OnSelectCell( ev );
@@ -698,6 +704,7 @@ void DIALOG_FP_EDIT_PAD_TABLE::OnCellChanged( wxGridEvent& aEvent )
             m_grid->SetReadOnly( row, COL_DRILL_Y, !drillsEditable );
             needCanvasRefresh = true;
         }
+
         break;
     }
 
@@ -743,10 +750,15 @@ void DIALOG_FP_EDIT_PAD_TABLE::OnCellChanged( wxGridEvent& aEvent )
         {
             int dx = m_grid->GetUnitValue( row, COL_DRILL_X );
             int dy = m_grid->GetUnitValue( row, COL_DRILL_Y );
+
             if( dx > 0 || dy > 0 )
             {
-                if( dx <= 0 ) dx = dy;
-                if( dy <= 0 ) dy = dx;
+                if( dx <= 0 )
+                    dx = dy;
+
+                if( dy <= 0 )
+                    dy = dx;
+
                 target->SetDrillSize( { dx, dy } );
                 needCanvasRefresh = true;
             }

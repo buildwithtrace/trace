@@ -27,13 +27,11 @@
 #include <wx/dataobj.h>
 #include <wx/image.h>
 #include <wx/log.h>
+#include <wx/mstream.h>
 #include <wx/string.h>
 #include <wx/sstream.h>
 
-#include <sstream>
-
 #include <io/csv.h>
-
 
 bool SaveClipboard( const std::string& aTextUTF8 )
 {
@@ -55,14 +53,99 @@ bool SaveClipboard( const std::string& aTextUTF8 )
 }
 
 
+bool SaveClipboard( const std::string& aTextUTF8, const std::vector<CLIPBOARD_MIME_DATA>& aMimeData )
+{
+    if( aMimeData.empty() )
+        return SaveClipboard( aTextUTF8 );
+
+    wxLogNull doNotLog; // disable logging of failed clipboard actions
+
+    if( wxTheClipboard->Open() )
+    {
+        wxDataObjectComposite* data = new wxDataObjectComposite();
+        data->Add( new wxTextDataObject( wxString( aTextUTF8.c_str(), wxConvUTF8 ) ), true );
+
+        for( const CLIPBOARD_MIME_DATA& entry : aMimeData )
+        {
+            // Skip entries with no data (check both buffer and image)
+            if( entry.m_data.GetDataLen() == 0 && !entry.m_image.has_value() )
+                continue;
+
+            // Handle pre-encoded PNG data (GTK optimization path).
+            // Use wxDF_BITMAP to prevent wx from setting the type to Private
+            if( entry.m_useRawPngData && entry.m_data.GetDataLen() > 0 )
+            {
+                wxCustomDataObject* custom = new wxCustomDataObject( wxDF_BITMAP );
+                custom->Alloc( entry.m_data.GetDataLen() );
+                custom->SetData( entry.m_data.GetDataLen(), entry.m_data.GetData() );
+                data->Add( custom );
+
+                continue;
+            }
+
+            // Handle bitmap image data using platform-native clipboard format.
+            // wxBitmapDataObject automatically converts to the appropriate format:
+            // - Windows: CF_DIB
+            // - macOS: kUTTypeTIFF
+            if( entry.m_image.has_value() && entry.m_image->IsOk() )
+            {
+                data->Add( new wxBitmapDataObject( *entry.m_image ) );
+                continue;
+            }
+
+            // Add custom format data - note that on GTK, custom MIME types may not work
+            // with all applications (they often become wxDF_PRIVATE internally), but they
+            // work for KiCad-to-KiCad transfers.
+            // We allocate and set data in a way that ensures the object is fully initialized.
+            wxDataFormat format( entry.m_mimeType );
+            wxCustomDataObject* custom = new wxCustomDataObject( format );
+
+            // Allocate buffer first, then copy data - this ensures proper initialization
+            custom->Alloc( entry.m_data.GetDataLen() );
+            custom->SetData( entry.m_data.GetDataLen(), entry.m_data.GetData() );
+            data->Add( custom );
+        }
+
+        wxTheClipboard->SetData( data );
+        wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
+        wxTheClipboard->Close();
+
+        return true;
+    }
+
+    return false;
+}
+
+
 std::string GetClipboardUTF8()
 {
     std::string result;
 
     wxLogNull doNotLog; // disable logging of failed clipboard actions
 
-    if( wxTheClipboard->Open() )
+    // Check if clipboard is already open. This can happen if another event handler (such as
+    // wxTextEntry::CanPaste() called during UPDATE_UI processing) opened the clipboard and
+    // didn't close it. We handle this by reusing the existing session.
+    bool wasAlreadyOpen = wxTheClipboard->IsOpened();
+    bool isOpen = wasAlreadyOpen || wxTheClipboard->Open();
+
+    if( isOpen )
     {
+        if( wxTheClipboard->IsSupported( wxDataFormat( wxS( "application/kicad" ) ) ) )
+        {
+            wxCustomDataObject data( wxDataFormat( wxS( "application/kicad" ) ) );
+
+            if( wxTheClipboard->GetData( data ) )
+            {
+                result.assign( static_cast<const char*>( data.GetData() ), data.GetSize() );
+
+                if( !wasAlreadyOpen )
+                    wxTheClipboard->Close();
+
+                return result;
+            }
+        }
+
         if( wxTheClipboard->IsSupported( wxDF_TEXT )
             || wxTheClipboard->IsSupported( wxDF_UNICODETEXT ) )
         {
@@ -74,45 +157,69 @@ std::string GetClipboardUTF8()
             result = data.GetText().utf8_str();
         }
 
-        wxTheClipboard->Close();
+        if( !wasAlreadyOpen )
+            wxTheClipboard->Close();
     }
 
     return result;
 }
 
 
-std::unique_ptr<wxImage> GetImageFromClipboard()
+std::unique_ptr<wxBitmap> GetImageFromClipboard()
 {
-    std::unique_ptr<wxImage> image;
-    wxLogNull                doNotLog; // disable logging of failed clipboard actions
+    std::unique_ptr<wxBitmap> bitmap;
+    wxLogNull                 doNotLog; // disable logging of failed clipboard actions
 
-    // First try for an image
-    if( wxTheClipboard->Open() )
+    // Check if clipboard is already open (same handling as GetClipboardUTF8)
+    bool wasAlreadyOpen = wxTheClipboard->IsOpened();
+    bool isOpen = wasAlreadyOpen || wxTheClipboard->Open();
+
+    if( isOpen )
     {
         if( wxTheClipboard->IsSupported( wxDF_BITMAP ) )
         {
             wxBitmapDataObject data;
+
             if( wxTheClipboard->GetData( data ) )
             {
-                image = std::make_unique<wxImage>( data.GetBitmap().ConvertToImage() );
+                bitmap = std::make_unique<wxBitmap>( data.GetBitmap() );
             }
         }
+#ifdef __APPLE__
+        // macOS screenshots use PNG format with UTI "public.png"
+        else if( wxDataFormat pngFormat( wxS( "public.png" ) ); wxTheClipboard->IsSupported( pngFormat ) )
+        {
+            wxCustomDataObject pngData( pngFormat );
+
+            if( wxTheClipboard->GetData( pngData ) && pngData.GetSize() > 0 )
+            {
+                wxMemoryInputStream stream( pngData.GetData(), pngData.GetSize() );
+                wxImage             img( stream, wxBITMAP_TYPE_PNG );
+
+                if( img.IsOk() )
+                    bitmap = std::make_unique<wxBitmap>( img );
+            }
+        }
+#endif
         else if( wxTheClipboard->IsSupported( wxDF_FILENAME ) )
         {
             wxFileDataObject data;
+
             if( wxTheClipboard->GetData( data ) && data.GetFilenames().size() == 1 )
             {
-                image = std::make_unique<wxImage>( data.GetFilenames()[0] );
+                wxImage img( data.GetFilenames()[0] );
+                bitmap = std::make_unique<wxBitmap>( img );
 
-                if( !image->IsOk() )
-                    image.reset();
+                if( !bitmap->IsOk() )
+                    bitmap.reset();
             }
         }
 
-        wxTheClipboard->Close();
+        if( !wasAlreadyOpen )
+            wxTheClipboard->Close();
     }
 
-    return image;
+    return bitmap;
 }
 
 
@@ -157,12 +264,16 @@ bool GetTabularDataFromClipboard( std::vector<std::vector<wxString>>& aData )
 
     bool ok = false;
 
-    // First try for text data
-    if( wxTheClipboard->Open() )
+    // Check if clipboard is already open (same handling as GetClipboardUTF8)
+    bool wasAlreadyOpen = wxTheClipboard->IsOpened();
+    bool isOpen = wasAlreadyOpen || wxTheClipboard->Open();
+
+    if( isOpen )
     {
         if( wxTheClipboard->IsSupported( wxDF_TEXT ) )
         {
             wxTextDataObject data;
+
             if( wxTheClipboard->GetData( data ) )
             {
                 ok = AutoDecodeCSV( data.GetText(), aData );
@@ -171,8 +282,84 @@ bool GetTabularDataFromClipboard( std::vector<std::vector<wxString>>& aData )
 
         // We could also handle .csv wxDF_FILENAMEs here
 
-        wxTheClipboard->Close();
+        if( !wasAlreadyOpen )
+            wxTheClipboard->Close();
     }
 
     return ok;
+}
+
+
+bool EncodeImageToPng( const wxImage& aImage, wxMemoryBuffer& aOutput )
+{
+    if( !aImage.IsOk() )
+        return false;
+
+    wxImage imageCopy( aImage );
+
+    // Fast PNG settings optimized for clipboard graphics
+    imageCopy.SetOption( wxIMAGE_OPTION_PNG_COMPRESSION_LEVEL, 1 );   // Z_BEST_SPEED
+    imageCopy.SetOption( wxIMAGE_OPTION_PNG_COMPRESSION_STRATEGY, 3 ); // Z_RLE
+    imageCopy.SetOption( wxIMAGE_OPTION_PNG_FILTER, 0x08 );            // PNG_FILTER_NONE
+
+    wxMemoryOutputStream   memStream;
+    wxBufferedOutputStream bufferedStream( memStream );
+
+    if( !imageCopy.SaveFile( bufferedStream, wxBITMAP_TYPE_PNG ) )
+    {
+        wxLogDebug( wxS( "Failed to encode PNG" ) );
+        return false;
+    }
+
+    bufferedStream.Close();
+
+    auto stBuf = memStream.GetOutputStreamBuffer();
+    aOutput.SetDataLen( 0 );
+    aOutput.AppendData( stBuf->GetBufferStart(), stBuf->GetIntPosition() );
+
+    return true;
+}
+
+
+bool AddPngToClipboardData( wxDataObjectComposite* aData, const wxMemoryBuffer& aPngData,
+                            const wxImage* aFallbackImage )
+{
+    wxCHECK( wxTheClipboard->IsOpened(), false );
+    wxCHECK( aPngData.GetDataLen() > 0, false );
+
+#if defined( __WXMSW__ )
+    aData->Add( new wxCustomDataObject( wxDataFormat( wxDataFormatId::wxDF_BITMAP ) ) );
+
+    wxCustomDataObject* pngObj = new wxCustomDataObject( wxDataFormat( "PNG" ) );
+    pngObj->SetData( aPngData.GetDataLen(), aPngData.GetData() );
+    aData->Add( pngObj );
+#elif defined( __WXGTK__ )
+    wxCustomDataObject* pngObj = new wxCustomDataObject( wxDF_BITMAP );
+    pngObj->SetData( aPngData.GetDataLen(), aPngData.GetData() );
+    aData->Add( pngObj );
+#else // __WXOSX__
+    wxCHECK( aFallbackImage && aFallbackImage->IsOk(), false );
+    aData->Add( new wxBitmapDataObject( wxBitmap( *aFallbackImage ) ) );
+#endif
+
+    return true;
+}
+
+
+bool AddTransparentImageToClipboardData( wxDataObjectComposite* aData, wxImage aImage )
+{
+    wxCHECK( wxTheClipboard->IsOpened(), false );
+    wxCHECK( aImage.IsOk(), false );
+
+#if defined( __WXGTK__ ) || defined( __WXMSW__ )
+    wxMemoryBuffer pngData;
+
+    if( !EncodeImageToPng( aImage, pngData ) )
+        return false;
+
+    return AddPngToClipboardData( aData, pngData );
+#else // __WXOSX__
+    aData->Add( new wxBitmapDataObject( wxBitmap( aImage ) ) );
+    return true;
+#endif
 }

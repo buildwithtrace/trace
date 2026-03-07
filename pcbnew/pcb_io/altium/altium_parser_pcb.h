@@ -249,7 +249,7 @@ struct ALTIUM_VERTICE
     }
 };
 
-enum class ALTIUM_LAYER
+enum class ALTIUM_LAYER : uint32_t
 {
     UNKNOWN = 0,
 
@@ -340,6 +340,93 @@ enum class ALTIUM_LAYER
     VISIBLE_GRID_2    = 80,
     PAD_HOLES         = 81,
     VIA_HOLES         = 82,
+
+    // V7 format layers
+    V7_START = 0x01000000,
+
+    V7_COPPER_BASE  = 0x01000000,
+    V7_TOP_LAYER    = V7_COPPER_BASE + 1,
+    V7_BOTTOM_LAYER = V7_COPPER_BASE + 65535,
+
+    V7_MECHANICAL_BASE = 0x01020000,
+    V7_MECHANICAL_1    = V7_MECHANICAL_BASE + 1,
+    V7_MECHANICAL_17   = V7_MECHANICAL_BASE + 17,
+    V7_MECHANICAL_LAST = V7_MECHANICAL_BASE + 65535,
+
+    // V8 format layers
+    V8_OTHER_BASE         = 0x01030000,
+    V8_TOP_OVERLAY        = V8_OTHER_BASE + 6,
+    V8_BOTTOM_OVERLAY     = V8_OTHER_BASE + 7,
+    V8_TOP_PASTE          = V8_OTHER_BASE + 8,
+    V8_BOTTOM_PASTE       = V8_OTHER_BASE + 9,
+    V8_TOP_SOLDER         = V8_OTHER_BASE + 10,
+    V8_BOTTOM_SOLDER      = V8_OTHER_BASE + 11,
+    V8_DRILL_GUIDE        = V8_OTHER_BASE + 12,
+    V8_KEEP_OUT_LAYER     = V8_OTHER_BASE + 13,
+    V8_DRILL_DRAWING      = V8_OTHER_BASE + 14,
+    V8_MULTI_LAYER        = V8_OTHER_BASE + 15,
+    V8_CONNECTIONS        = V8_OTHER_BASE + 16,
+    V8_BACKGROUND         = V8_OTHER_BASE + 17,
+    V8_DRC_ERROR_MARKERS  = V8_OTHER_BASE + 18,
+    V8_SELECTIONS         = V8_OTHER_BASE + 19,
+    V8_VISIBLE_GRID_1     = V8_OTHER_BASE + 20,
+    V8_VISIBLE_GRID_2     = V8_OTHER_BASE + 21,
+    V8_PAD_HOLES          = V8_OTHER_BASE + 22,
+    V8_VIA_HOLES          = V8_OTHER_BASE + 23,
+    V8_TOP_PAD_MASTER     = V8_OTHER_BASE + 24,
+    V8_BOTTOM_PAD_MASTER  = V8_OTHER_BASE + 25,
+    V8_DRC_DETAIL_MARKERS = V8_OTHER_BASE + 26,
+};
+
+// Specifies values from LayerKindMapping
+enum class ALTIUM_MECHKIND
+{
+    UNKNOWN = 0,
+
+    ASSEMBLY_TOP = 0x01,
+    ASSEMBLY_BOT = 0x02,
+
+    ASSEMBLY_NOTES = 0x03,
+    BOARD = 0x04,
+
+    COATING_TOP = 0x05,
+    COATING_BOT = 0x06,
+
+    COMPONENT_CENTER_TOP = 0x07,
+    COMPONENT_CENTER_BOT = 0x08,
+
+    COMPONENT_OUTLINE_TOP = 0x09,
+    COMPONENT_OUTLINE_BOT = 0x0A,
+
+    COURTYARD_TOP = 0x0B,
+    COURTYARD_BOT = 0x0C,
+
+    DESIGNATOR_TOP = 0x0D,
+    DESIGNATOR_BOT = 0x0E,
+
+    DIMENSIONS = 0x0F,
+    DIMENSIONS_TOP = 0x10,
+    DIMENSIONS_BOT = 0x11,
+
+    FAB_NOTES = 0x12,
+
+    GLUE_POINTS_TOP = 0x13,
+    GLUE_POINTS_BOT = 0x14,
+
+    GOLD_PLATING_TOP = 0x15,
+    GOLD_PLATING_BOT = 0x16,
+
+    VALUE_TOP = 0x17,
+    VALUE_BOT = 0x18,
+
+    V_CUT = 0x19,
+
+    BODY_3D_TOP = 0x1A,
+    BODY_3D_BOT = 0x1B,
+
+    ROUTE_TOOL_PATH = 0x1C,
+    SHEET = 0x1D,
+    BOARD_SHAPE = 0x1E
 };
 
 class ALTIUM_BINARY_PARSER;
@@ -369,6 +456,7 @@ struct AEXTENDED_PRIMITIVE_INFORMATION
 
 struct ABOARD6_LAYER_STACKUP
 {
+    uint32_t layerId = 0;
     wxString name;
 
     size_t nextId;
@@ -379,6 +467,21 @@ struct ABOARD6_LAYER_STACKUP
     double   dielectricconst;
     int32_t  dielectricthick;
     wxString dielectricmaterial;
+
+    bool            mechenabled = false;
+    ALTIUM_MECHKIND mechkind = ALTIUM_MECHKIND::UNKNOWN;
+
+    explicit ABOARD6_LAYER_STACKUP( const std::map<wxString, wxString>& aProps, const wxString& aPrefix,
+                                    uint32_t aLayerIdFallback );
+};
+
+struct ALIBRARY
+{
+    int                                layercount;
+    std::vector<ABOARD6_LAYER_STACKUP> stackup;
+    std::set<wxString>                 layerNames;
+
+    explicit ALIBRARY( ALTIUM_BINARY_PARSER& aReader );
 };
 
 struct ABOARD6
@@ -431,7 +534,9 @@ struct ACOMPONENT6
 
 struct ADIMENSION6
 {
-    ALTIUM_LAYER          layer;
+    ALTIUM_LAYER          layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER          layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER          layer = ALTIUM_LAYER::UNKNOWN;
     ALTIUM_DIMENSION_KIND kind;
 
     wxString textformat;
@@ -483,7 +588,9 @@ struct ANET6
 
 struct APOLYGON6
 {
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     net;
     bool         locked;
 
@@ -556,11 +663,14 @@ struct ARULE6
 struct AREGION6
 {
     bool is_locked;
+    bool is_teardrop;
     bool is_keepout;
 
     bool is_shapebased;
 
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     net;
     uint16_t     component;
     uint16_t     polygon;
@@ -582,7 +692,9 @@ struct AARC6
     bool is_keepout;
     bool is_polygonoutline;
 
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     net;
     uint16_t     component;
     uint16_t     polygon;
@@ -660,7 +772,9 @@ struct APAD6
 
     wxString name;
 
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     net;
     uint16_t     component;
 
@@ -727,7 +841,7 @@ struct AVIA6
     // In PAD_MODE::SIMPLE, this is the same as the diameter
     // In PAD_MODE::TOP_MIDDLE_BOTTOM, layer 0 is top, layer 1 is middle, layer 31 is bottom
     // In PAD_MODE::FULL_STACK, layers correspond to the layer number
-    uint32_t diameter_by_layer[32];
+    uint32_t diameter_by_layer[32]{ 0 };
 
     explicit AVIA6( ALTIUM_BINARY_PARSER& aReader );
 };
@@ -738,7 +852,9 @@ struct ATRACK6
     bool is_keepout;
     bool is_polygonoutline;
 
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     net;
     uint16_t     component;
     uint16_t     polygon;
@@ -762,7 +878,9 @@ struct ATEXT6
     };
 
 
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     component = 0;
 
     VECTOR2I             position;
@@ -815,7 +933,9 @@ struct AFILL6
     bool is_locked;
     bool is_keepout;
 
-    ALTIUM_LAYER layer;
+    ALTIUM_LAYER layer_v6 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer_v7 = ALTIUM_LAYER::UNKNOWN;
+    ALTIUM_LAYER layer = ALTIUM_LAYER::UNKNOWN;
     uint16_t     component;
     uint16_t     net;
     uint8_t      keepoutrestrictions;

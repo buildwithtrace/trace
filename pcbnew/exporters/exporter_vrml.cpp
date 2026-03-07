@@ -776,7 +776,7 @@ void EXPORTER_PCB_VRML::ExportVrmlPolygonSet( VRML_LAYER* aVlayer, const SHAPE_P
 
 void EXPORTER_PCB_VRML::ExportVrmlBoard()
 {
-    if( !m_board->GetBoardPolygonOutlines( m_pcbOutlines ) )
+    if( !m_board->GetBoardPolygonOutlines( m_pcbOutlines, true ) )
     {
         wxLogWarning( _( "Board outline is malformed. Run DRC for a full analysis." ) );
     }
@@ -1017,7 +1017,8 @@ void EXPORTER_PCB_VRML::ExportVrmlFootprint( FOOTPRINT* aFootprint, std::ostream
         return;
     }
 
-    if( !m_includeDNP && aFootprint->IsDNP() )
+    if( !m_includeDNP
+            && aFootprint->GetDNPForVariant( m_board ? m_board->GetCurrentVariant() : wxString() ) )
         return;
 
     std::vector<const EMBEDDED_FILES*> embeddedFilesStack;

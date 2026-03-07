@@ -54,6 +54,11 @@ public:
      */
     void ImportFiles( int aImportedSchFileType, int aImportedPcbFileType );
 
+    /**
+     * @brief Converts PADS ASCII schematic and PCB files to KiCad type files.
+     */
+    void ImportPadsFiles();
+
     wxFileName m_InputFile;
     wxFileName m_TargetProj;
 
@@ -77,6 +82,8 @@ private:
     void EasyEDAProProjectHandler();
 
     void AltiumProjectHandler();
+
+    void GedaProjectHandler();
 };
 
 #endif

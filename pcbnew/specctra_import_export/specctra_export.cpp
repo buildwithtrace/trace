@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2007-2015 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -60,6 +61,7 @@
 #include <convert_basic_shapes_to_polygon.h>
 #include <geometry/geometry_utils.h>
 #include <pcbnew_settings.h>
+#include <richio.h>
 
 
 using namespace DSN;
@@ -135,6 +137,47 @@ void ExportBoardToSpecctraFile( BOARD* aBoard, const wxString& aFullFilename )
 
         // if an exception is thrown by FromBOARD() or ExportPCB(), then ~SPECCTRA_DB() will
         // close the file.
+    }
+    catch( ... )
+    {
+        db.RevertFOOTPRINTs( aBoard );
+        throw;
+    }
+}
+
+
+std::string ExportBoardToSpecctraString( BOARD* aBoard )
+{
+    SPECCTRA_DB db;
+
+    db.SetPCB( SPECCTRA_DB::MakePCB() );
+
+    LOCALE_IO toggle; // Switch the locale to standard C
+
+    // Build the board outlines *before* flipping footprints
+    if( !db.BuiltBoardOutlines( aBoard ) )
+        wxLogWarning( _( "Board outline is malformed. Run DRC for a full analysis." ) );
+
+    // DSN Images (=KiCad FOOTPRINTs and PADs) must be presented from the top view.  So we
+    // temporarily flip any footprints which are on the back side of the board to the front,
+    // and record this in the FOOTPRINT's flag field.
+    db.FlipFOOTPRINTs( aBoard );
+
+    try
+    {
+        aBoard->SynchronizeNetsAndNetClasses( false );
+        db.FromBOARD( aBoard );
+
+        // Use STRING_FORMATTER instead of FILE_OUTPUTFORMATTER
+        STRING_FORMATTER formatter;
+        DSN::PCB* pcb = db.GetPCB();
+        if( pcb )
+        {
+            pcb->Format( &formatter, 0 );
+        }
+
+        db.RevertFOOTPRINTs( aBoard );
+        return formatter.GetString();
     }
     catch( ... )
     {
@@ -236,7 +279,7 @@ static PATH* makePath( const POINT& aStart, const POINT& aEnd, const std::string
 
 bool SPECCTRA_DB::BuiltBoardOutlines( BOARD* aBoard  )
 {
-    return aBoard->GetBoardPolygonOutlines( m_brd_outlines );
+    return aBoard->GetBoardPolygonOutlines( m_brd_outlines, true );
 }
 
 
@@ -571,9 +614,9 @@ PADSTACK* SPECCTRA_DB::makePADSTACK( BOARD* aBoard, PAD* aPad )
 
             polygon->SetLayerId( layerName[ndx] );
 
-            for( unsigned idx = 0; idx < polygonal_shape.size(); idx++ )
+            for( const VECTOR2I& pt : polygonal_shape )
             {
-                POINT corner( scale( polygonal_shape[idx].x ), scale( -polygonal_shape[idx].y ) );
+                POINT corner( scale( pt.x ), scale( -pt.y ) );
                 corner += dsnOffset;
                 polygon->AppendPoint( corner );
             }
@@ -657,8 +700,8 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
             if( !mask_copper_layers.any() )
                 continue;
 
-            PADSTACK*               padstack = makePADSTACK( aBoard, pad );
-            PADSTACKSET::iterator   iter = m_padstackset.find( *padstack );
+            PADSTACK* padstack = makePADSTACK( aBoard, pad );
+            auto      iter = m_padstackset.find( *padstack );
 
             if( iter != m_padstackset.end() )
             {
@@ -703,6 +746,32 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
         }
     }
 
+    SHAPE_POLY_SET crtYd = aFootprint->GetCourtyard( F_CrtYd );
+    crtYd.Append( aFootprint->GetCourtyard( B_CrtYd ) );
+    crtYd.Simplify();
+
+    // Specctra only supports the first outline, so add courtyard first
+    for( const SHAPE_POLY_SET::POLYGON& polygon : crtYd.CPolygons() )
+    {
+        for( const SHAPE_LINE_CHAIN& chain : polygon )
+        {
+            SHAPE* outline = new SHAPE( image, T_outline );
+            image->Append( outline );
+
+            PATH* path = new PATH( outline, T_polygon );
+
+            outline->SetShape( path );
+            path->SetAperture( 0 );
+            path->SetLayerId( "signal" );
+
+            for( int ii = 0; ii < chain.PointCount(); ++ii )
+            {
+                VECTOR2I corner( chain.CPoint( ii ).x, chain.CPoint( ii ).y );
+                path->AppendPoint( mapPt( corner, aFootprint ) );
+            }
+        }
+    }
+
     // get all the FOOTPRINT's SHAPEs and convert those to DSN outlines.
     fpItems.Collect( aFootprint, { PCB_SHAPE_T } );
 
@@ -711,6 +780,9 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
         PCB_SHAPE* graphic = static_cast<PCB_SHAPE*>( fpItems[i] );
         SHAPE*     outline;
         PATH*      path;
+
+        if( graphic->IsOnLayer( F_CrtYd ) || graphic->IsOnLayer( B_CrtYd ) )
+            continue; // Courtyard already handled above 
 
         switch( graphic->GetShape() )
         {
@@ -777,6 +849,9 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
 
             corner.x = graphic->GetStart().x;
             path->AppendPoint( mapPt( corner, aFootprint ) );
+
+            corner = graphic->GetStart();
+            path->AppendPoint( mapPt( corner, aFootprint ) );
             break;
         }
 
@@ -784,70 +859,22 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
         {
             // this is best done by QARC's but freerouter does not yet support QARCs.
             // for now, support by using line segments.
-            // So we use a polygon (PATH) to create a approximate arc shape
+            // So we use a "polygon" (PATH) to create a approximate arc shape
+            // Note we can't use "path" with aperture width because FreeRouting converts it to a convex polygon
             outline = new SHAPE( image, T_outline );
 
             image->Append( outline );
-            path = new PATH( outline );
+            path = new PATH( outline, T_polygon );
 
             outline->SetShape( path );
-            path->SetAperture( 0 );//scale( graphic->GetWidth() ) );
+            path->SetAperture( 0 );
             path->SetLayerId( "signal" );
 
-            VECTOR2I  arc_centre = graphic->GetCenter();
-            double    radius = graphic->GetRadius() + graphic->GetWidth()/2;
-            EDA_ANGLE arcAngle = graphic->GetArcAngle();
-
-            VECTOR2I  startRadial = graphic->GetStart() - graphic->GetCenter();
-            EDA_ANGLE arcStart( startRadial );
-
-            arcStart.Normalize();
-
-            // For some obscure reason, FreeRouter does not show the same polygonal
-            // shape for polygons CW and CCW. So used only the order of corners
-            // giving the best look.
-            if( arcAngle < ANGLE_0 )
-            {
-                VECTOR2I endRadial = graphic->GetEnd() - graphic->GetCenter();
-                arcStart = EDA_ANGLE( endRadial );
-                arcStart.Normalize();
-
-                arcAngle = -arcAngle;
-            }
-
-            SHAPE_LINE_CHAIN polyline;
-            ConvertArcToPolyline( polyline, VECTOR2I( arc_centre ), radius, arcStart, arcAngle,
-                                  ARC_HIGH_DEF, ERROR_INSIDE );
-
             SHAPE_POLY_SET polyBuffer;
-            polyBuffer.AddOutline( polyline );
+            graphic->TransformShapeToPolygon( polyBuffer, graphic->GetLayer(), 0, ARC_HIGH_DEF,
+                                              ERROR_INSIDE, false );
 
-            radius -= graphic->GetWidth();
-
-            if( radius > 0 )
-            {
-                polyline.Clear();
-                ConvertArcToPolyline( polyline, VECTOR2I( arc_centre ), radius, arcStart, arcAngle,
-                                      ARC_HIGH_DEF, ERROR_INSIDE );
-
-                // Add points in reverse order, to create a closed polygon
-                for( int ii = polyline.PointCount() - 1; ii >= 0; --ii )
-                    polyBuffer.Append( polyline.CPoint( ii ) );
-            }
-
-            // ensure the polygon is closed
-            polyBuffer.Append( polyBuffer.Outline( 0 ).CPoint( 0 ) );
-
-            VECTOR2I move = graphic->GetCenter() - arc_centre;
-
-            TransformCircleToPolygon( polyBuffer, graphic->GetStart() - move,
-                                      graphic->GetWidth() / 2, ARC_HIGH_DEF, ERROR_INSIDE );
-
-            TransformCircleToPolygon( polyBuffer, graphic->GetEnd() - move,
-                                      graphic->GetWidth() / 2, ARC_HIGH_DEF, ERROR_INSIDE );
-
-            polyBuffer.Simplify();
-            SHAPE_LINE_CHAIN& poly = polyBuffer.Outline( 0 );
+            const SHAPE_LINE_CHAIN& poly = polyBuffer.COutline( 0 );
 
             for( int ii = 0; ii < poly.PointCount(); ++ii )
             {
@@ -1185,7 +1212,7 @@ void SPECCTRA_DB::FromBOARD( BOARD* aBoard )
         int       defaultClearance = netSettings->GetDefaultNetclass()->GetClearance();
         double    clearance         = scale( defaultClearance );
 
-        STRINGS&  rules = m_pcb->m_structure->m_rules->m_rules;
+        std::vector<std::string>& rules = m_pcb->m_structure->m_rules->m_rules;
 
         std::snprintf( rule, sizeof( rule ), "(width %.6g)", scale( defaultTrackWidth ) );
         rules.push_back( rule );
@@ -1460,10 +1487,9 @@ void SPECCTRA_DB::FromBOARD( BOARD* aBoard )
             // necessarily long.  The exported netlist will have some fabricated pin names in it.
             // If you don't like fabricated pin names, then make sure all pads within your
             // FOOTPRINTs are uniquely named!
-            for( unsigned p = 0; p < image->m_pins.size(); ++p )
+            for( PIN& pin : image->m_pins )
             {
-                PIN* pin = &image->m_pins[p];
-                int  netcode = pin->m_kiNetCode;
+                int  netcode = pin.m_kiNetCode;
 
                 if( netcode > 0 )
                 {
@@ -1474,7 +1500,7 @@ void SPECCTRA_DB::FromBOARD( BOARD* aBoard )
                     PIN_REF& pin_ref = net->m_pins.back();
 
                     pin_ref.component_id = componentId;
-                    pin_ref.pin_id = pin->m_pin_id;
+                    pin_ref.pin_id = pin.m_pin_id;
                 }
             }
 
@@ -1510,10 +1536,9 @@ void SPECCTRA_DB::FromBOARD( BOARD* aBoard )
 
         // copy the SPECCTRA_DB::padstackset to the LIBRARY.  Since we are
         // removing, do not increment the iterator
-        for( PADSTACKSET::iterator i = m_padstackset.begin(); i != m_padstackset.end();
-             i = m_padstackset.begin() )
+        for( auto i = m_padstackset.begin(); i != m_padstackset.end(); i = m_padstackset.begin() )
         {
-            PADSTACKSET::auto_type ps = m_padstackset.release( i );
+            boost::ptr_set<PADSTACK>::auto_type ps = m_padstackset.release( i );
             PADSTACK* padstack = ps.release();
 
             m_pcb->m_library->AddPadstack( padstack );
@@ -1577,8 +1602,7 @@ void SPECCTRA_DB::FromBOARD( BOARD* aBoard )
         // output the non-Default netclass vias
         for( const auto& [name, netclass] : netclassesInUse )
         {
-            via = makeVia( netclass->GetViaDiameter(), netclass->GetViaDrill(),
-                           m_top_via_layer, m_bot_via_layer );
+            via = makeVia( netclass->GetViaDiameter(), netclass->GetViaDrill(), m_top_via_layer, m_bot_via_layer );
 
             // maybe add 'via' to the library, but only if unique.
             PADSTACK* registered = m_pcb->m_library->LookupVia( via );

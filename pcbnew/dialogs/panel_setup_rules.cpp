@@ -95,6 +95,7 @@ PANEL_SETUP_RULES::~PANEL_SETUP_RULES( )
     Pgm().GetCommonSettings()->m_Appearance.text_editor_zoom = m_textEditor->GetZoom();
 
     delete m_scintillaTricks;
+    m_scintillaTricks = nullptr;
 
     if( m_helpWindow )
         m_helpWindow->Destroy();
@@ -754,7 +755,7 @@ void PANEL_SETUP_RULES::checkPlausibility( const std::vector<std::shared_ptr<DRC
     LSET                   enabledLayers = board->GetEnabledLayers();
 
     std::unordered_map<wxString, wxString> seenConditions;
-    std::regex                             netclassPattern( "NetClass\\s*[!=]=\\s*\"?([^\"\\s]+)\"?" );
+    std::regex netclassPattern( "NetClass\\s*[!=]=\\s*'\"?([^\"\\s]+)'\"?" );
 
     for( const auto& rule : aRules )
     {

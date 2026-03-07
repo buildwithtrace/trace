@@ -51,15 +51,17 @@ class ZONE_PREVIEW_NOTEBOOK_PAGE : public wxPanel
 {
 public:
     ZONE_PREVIEW_NOTEBOOK_PAGE( wxWindow* aParent, BOARD* aBoard, ZONE* aZone, PCB_LAYER_ID aLayer,
-                                GAL_DISPLAY_OPTIONS_IMPL& aOpts ) :
+                                GAL_DISPLAY_OPTIONS_IMPL& aOpts, EDA_DRAW_PANEL_GAL::GAL_TYPE aGalType ) :
             wxPanel( aParent ),
             m_layer( aLayer ),
             m_canvas( nullptr )
     {
         SetSizer( new wxBoxSizer( wxHORIZONTAL ) );
 
-        m_canvas = new ZONE_PREVIEW_CANVAS( aBoard, aZone->Clone( aLayer ), aLayer, this, aOpts );
+        m_canvas = new ZONE_PREVIEW_CANVAS( aBoard, aZone->Clone( aLayer ), aLayer, this, aOpts, aGalType );
         GetSizer()->Add( m_canvas, 1, wxEXPAND );
+        Layout();
+        GetSizer()->Fit( this );
     }
 
     int  GetLayer() const { return m_layer; }
@@ -95,6 +97,9 @@ ZONE_PREVIEW_NOTEBOOK::ZONE_PREVIEW_NOTEBOOK( wxWindow* aParent, PCB_BASE_FRAME*
     }
 
     AssignImageList( imageList );
+
+    Layout();
+    GetSizer()->Fit( this );
 }
 
 
@@ -118,7 +123,8 @@ void ZONE_PREVIEW_NOTEBOOK::OnZoneSelectionChanged( ZONE* aZone )
         BOARD*                      board = m_pcbFrame->GetBoard();
         wxString                    layerName = board->GetLayerName( layer );
         ZONE_PREVIEW_NOTEBOOK_PAGE* page = new ZONE_PREVIEW_NOTEBOOK_PAGE( this, board, aZone, layer,
-                                                                           m_pcbFrame->GetGalDisplayOptions() );
+                                                                           m_pcbFrame->GetGalDisplayOptions(),
+                                                                           m_pcbFrame->GetCanvas()->GetBackend() );
 
         AddPage( page, layerName, false, layer );
         page->Layout();

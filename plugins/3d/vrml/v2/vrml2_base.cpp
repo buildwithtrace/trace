@@ -47,12 +47,13 @@
 #include "plugins/3dapi/ifsg_all.h"
 
 
-SCENEGRAPH* LoadVRML( const wxString& aFileName, bool useInline );
+SCENEGRAPH* LoadVRML( const wxString& aFileName, bool useInline, bool applyUnitConversion );
 
 
 WRL2BASE::WRL2BASE() : WRL2NODE()
 {
     m_useInline = false;
+    m_applyUnitConversion = true;  // default to legacy behavior
     m_Type = WRL2NODES::WRL2_BASE;
 }
 
@@ -86,6 +87,18 @@ bool WRL2BASE::SetParent( WRL2NODE* aParent, bool /* doUnlink */ )
 void WRL2BASE::SetEnableInline( bool enable )
 {
     m_useInline = enable;
+}
+
+
+bool WRL2BASE::GetApplyUnitConversion( void ) const
+{
+    return m_applyUnitConversion;
+}
+
+
+void WRL2BASE::SetApplyUnitConversion( bool apply )
+{
+    m_applyUnitConversion = apply;
 }
 
 
@@ -135,7 +148,11 @@ SGNODE* WRL2BASE::GetInlineData( const std::string& aName )
         return nullptr;
     }
 
-    SCENEGRAPH* sp = LoadVRML( fn.GetFullPath(), false );
+    // Load the inline model with the same unit conversion setting as the parent.
+    // This ensures that submodels referenced via Inline{} nodes in PCBnew-exported VRML
+    // files (which have top-level scale and disabled unit conversion) are also loaded
+    // without unit conversion.
+    SCENEGRAPH* sp = LoadVRML( fn.GetFullPath(), false, m_applyUnitConversion );
 
     if( nullptr == sp )
     {

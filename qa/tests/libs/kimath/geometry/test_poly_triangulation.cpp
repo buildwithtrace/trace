@@ -458,6 +458,63 @@ BOOST_AUTO_TEST_CASE( SelfIntersectingPolygon )
     }
 }
 
+
+/**
+ * Test case for GitLab issue #18083: Self-intersecting filled shape is not completely filled.
+ *
+ * A self-touching polygon where one vertex lies on a non-adjacent edge creates a "pinch point".
+ * The polygon appears to form a figure-8 shape that should be fully filled on both sides.
+ *
+ * The polygon from the issue has points: (165,87), (179,87), (174,94), (169,87), (167,94)
+ * where vertex (169,87) lies on the segment from (165,87) to (179,87).
+ *
+ * This test verifies that the triangulation correctly fills both regions of the self-touching
+ * polygon by checking that the total triangulated area equals the sum of both triangular lobes.
+ */
+BOOST_AUTO_TEST_CASE( Issue18083_SelfIntersectingPolygonArea )
+{
+    SHAPE_POLY_SET polySet;
+    SHAPE_LINE_CHAIN outline;
+
+    // Coordinates from the issue (converted to internal units: 1mm = 1000000)
+    const int SCALE = 1000000;
+    outline.Append( 165 * SCALE, 87 * SCALE );
+    outline.Append( 179 * SCALE, 87 * SCALE );
+    outline.Append( 174 * SCALE, 94 * SCALE );
+    outline.Append( 169 * SCALE, 87 * SCALE );
+    outline.Append( 167 * SCALE, 94 * SCALE );
+    outline.SetClosed( true );
+
+    polySet.AddOutline( outline );
+
+    // Verify the polygon is detected as self-intersecting
+    BOOST_TEST( polySet.IsSelfIntersecting() );
+
+    // Triangulate via SHAPE_POLY_SET
+    polySet.CacheTriangulation( false );
+    BOOST_TEST( polySet.IsTriangulationUpToDate() );
+
+    // Calculate the triangulated area
+    double triangulatedArea = 0.0;
+
+    for( int ii = 0; ii < polySet.TriangulatedPolyCount(); ii++ )
+    {
+        const auto triPoly = polySet.TriangulatedPolygon( ii );
+
+        for( const auto& tri : triPoly->Triangles() )
+            triangulatedArea += std::abs( tri.Area() );
+    }
+
+    // The expected total area is 49 mm² (14 mm² + 35 mm² for the two triangular lobes)
+    // Triangle 1: (165,87) - (169,87) - (167,94) = base 4mm, height 7mm = 14 mm²
+    // Triangle 2: (169,87) - (179,87) - (174,94) = base 10mm, height 7mm = 35 mm²
+    double expectedAreaMmSq = 49.0 * SCALE * SCALE;
+
+    // The triangulated area should match the expected area
+    BOOST_TEST( std::abs( triangulatedArea - expectedAreaMmSq ) < expectedAreaMmSq * 0.01,
+                "Triangulated area should match expected area of 49 mm²" );
+}
+
 BOOST_AUTO_TEST_CASE( NearlyCollinearVertices )
 {
     TRIANGULATION_TEST_FIXTURE fixture;

@@ -93,7 +93,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_staticText891->Wrap( -1 );
 	m_padstackControls->Add( m_staticText891, 0, wxALIGN_CENTER_VERTICAL|wxLEFT|wxRIGHT, 5 );
 
-	wxString m_cbPadstackModeChoices[] = { _("Normal"), _("Front/Inner/Bottom"), _("Custom") };
+	wxString m_cbPadstackModeChoices[] = { _("Normal"), _("Front/Inner/Back"), _("Custom") };
 	int m_cbPadstackModeNChoices = sizeof( m_cbPadstackModeChoices ) / sizeof( wxString );
 	m_cbPadstackMode = new wxChoice( m_panelGeneral, wxID_ANY, wxDefaultPosition, wxDefaultSize, m_cbPadstackModeNChoices, m_cbPadstackModeChoices, 0 );
 	m_cbPadstackMode->SetSelection( 2 );
@@ -613,7 +613,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 
 	m_middleBoxSizer->Add( 0, 2, 0, wxEXPAND, 5 );
 
-	wxString m_choiceFabPropertyChoices[] = { _("None"), _("BGA pad"), _("Fiducial, local to footprint"), _("Fiducial, global to board"), _("Test point pad"), _("Heatsink pad"), _("Mechanical"), _("Castellated pad (through hole only)"), _("Press-fit (round through hole only)") };
+	wxString m_choiceFabPropertyChoices[] = { _("None"), _("BGA pad"), _("Fiducial, local to footprint"), _("Fiducial, global to board"), _("Test point pad"), _("Heatsink pad"), _("Mechanical"), _("Castellated pad (TH only)"), _("Press-fit (round TH only)") };
 	int m_choiceFabPropertyNChoices = sizeof( m_choiceFabPropertyChoices ) / sizeof( wxString );
 	m_choiceFabProperty = new wxChoice( m_panelGeneral, wxID_ANY, wxDefaultPosition, wxDefaultSize, m_choiceFabPropertyNChoices, m_choiceFabPropertyChoices, 0 );
 	m_choiceFabProperty->SetSelection( 0 );
@@ -640,7 +640,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_legacyTeardropsWarning = new wxBoxSizer( wxHORIZONTAL );
 
 	m_legacyTeardropsIcon = new wxStaticBitmap( bSizerTeardrops->GetStaticBox(), wxID_ANY, wxNullBitmap, wxDefaultPosition, wxDefaultSize, 0 );
-	m_legacyTeardropsWarning->Add( m_legacyTeardropsIcon, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
+	m_legacyTeardropsWarning->Add( m_legacyTeardropsIcon, 0, wxALIGN_CENTER_VERTICAL|wxLEFT|wxRIGHT, 5 );
 
 	wxBoxSizer* bSizer42;
 	bSizer42 = new wxBoxSizer( wxVERTICAL );
@@ -1020,31 +1020,20 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_maskMarginUnits->Wrap( -1 );
 	fgClearancesGridSizer->Add( m_maskMarginUnits, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxLEFT, 5 );
 
-	m_pasteMarginLabel = new wxStaticText( sbClearancesSizer->GetStaticBox(), wxID_ANY, _("Solder paste absolute clearance:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_pasteMarginLabel = new wxStaticText( sbClearancesSizer->GetStaticBox(), wxID_ANY, _("Solder paste clearance:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_pasteMarginLabel->Wrap( -1 );
-	m_pasteMarginLabel->SetToolTip( _("This is the local clearance between this pad and the solder paste.\nIf 0, the footprint value or the global value is used.\nThe final clearance value is the sum of this value and the clearance value ratio.\nA negative value means a smaller mask size than pad size.") );
+	m_pasteMarginLabel->SetToolTip( _("Solder paste clearance relative to pad size.\nEnter an absolute value (e.g., -0.1mm), a percentage (e.g., -5%), or both (e.g., -0.1mm - 5%).\nThis value can be superseded by local values for a footprint or a pad.") );
 
 	fgClearancesGridSizer->Add( m_pasteMarginLabel, 0, wxALIGN_CENTER_VERTICAL|wxLEFT|wxRIGHT, 5 );
 
 	m_pasteMarginCtrl = new wxTextCtrl( sbClearancesSizer->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	m_pasteMarginCtrl->SetToolTip( _("Local solder paste clearance for this pad.\nEnter an absolute value (e.g., -0.1mm), a percentage (e.g., -5%), or both (e.g., -0.1mm - 5%).\nIf blank, the footprint or global value is used.") );
+
 	fgClearancesGridSizer->Add( m_pasteMarginCtrl, 0, wxEXPAND|wxALIGN_CENTER_VERTICAL, 5 );
 
 	m_pasteMarginUnits = new wxStaticText( sbClearancesSizer->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_pasteMarginUnits->Wrap( -1 );
 	fgClearancesGridSizer->Add( m_pasteMarginUnits, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxLEFT, 5 );
-
-	m_pasteMarginRatioLabel = new wxStaticText( sbClearancesSizer->GetStaticBox(), wxID_ANY, _("Solder paste relative clearance:"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_pasteMarginRatioLabel->Wrap( -1 );
-	m_pasteMarginRatioLabel->SetToolTip( _("This is the local clearance ratio in percent between this pad and the solder paste.\nA value of 10 means the clearance value is 10 percent of the pad size.\nIf 0, the footprint value or the global value is used.\nThe final clearance value is the sum of this value and the clearance value.\nA negative value means a smaller mask size than pad size.") );
-
-	fgClearancesGridSizer->Add( m_pasteMarginRatioLabel, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
-
-	m_pasteMarginRatioCtrl = new wxTextCtrl( sbClearancesSizer->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgClearancesGridSizer->Add( m_pasteMarginRatioCtrl, 0, wxEXPAND|wxALIGN_CENTER_VERTICAL, 5 );
-
-	m_pasteMarginRatioUnits = new wxStaticText( sbClearancesSizer->GetStaticBox(), wxID_ANY, _("%"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_pasteMarginRatioUnits->Wrap( -1 );
-	fgClearancesGridSizer->Add( m_pasteMarginRatioUnits, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxLEFT, 5 );
 
 
 	sbClearancesSizer->Add( fgClearancesGridSizer, 0, wxTOP|wxBOTTOM, 10 );
@@ -1059,7 +1048,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_nonCopperNote->Wrap( -1 );
 	bNoteSizer->Add( m_nonCopperNote, 0, wxLEFT|wxRIGHT|wxTOP, 5 );
 
-	m_staticTextInfoPaste = new wxStaticText( notePanel, wxID_ANY, _("Note: solder paste clearances (absolute and relative) are added to determine the final clearance."), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextInfoPaste = new wxStaticText( notePanel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticTextInfoPaste->Wrap( -1 );
 	bNoteSizer->Add( m_staticTextInfoPaste, 0, wxBOTTOM|wxLEFT|wxRIGHT, 5 );
 
@@ -1109,200 +1098,181 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	wxBoxSizer* bSizer46;
 	bSizer46 = new wxBoxSizer( wxVERTICAL );
 
-	wxStaticBoxSizer* sbSizer6;
-	sbSizer6 = new wxStaticBoxSizer( new wxStaticBox( m_backDrillPanel, wxID_ANY, _("Hole post machining") ), wxVERTICAL );
+	wxStaticBoxSizer* sbPostMachining;
+	sbPostMachining = new wxStaticBoxSizer( new wxStaticBox( m_backDrillPanel, wxID_ANY, _("Hole Post Machining") ), wxVERTICAL );
 
-	wxBoxSizer* bSizer47;
-	bSizer47 = new wxBoxSizer( wxHORIZONTAL );
+	wxBoxSizer* bPostMachiningColumns;
+	bPostMachiningColumns = new wxBoxSizer( wxHORIZONTAL );
 
-	wxFlexGridSizer* fgSizer11;
-	fgSizer11 = new wxFlexGridSizer( 0, 3, 0, 0 );
-	fgSizer11->AddGrowableCol( 1 );
-	fgSizer11->SetFlexibleDirection( wxBOTH );
-	fgSizer11->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
+	wxGridBagSizer* gbPostMachiningLeftCol;
+	gbPostMachiningLeftCol = new wxGridBagSizer( 5, 5 );
+	gbPostMachiningLeftCol->SetFlexibleDirection( wxBOTH );
+	gbPostMachiningLeftCol->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
 
-	m_topPostMachiningLabel = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("Top:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_topPostMachiningLabel = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("Top:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_topPostMachiningLabel->Wrap( -1 );
-	fgSizer11->Add( m_topPostMachiningLabel, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningLeftCol->Add( m_topPostMachiningLabel, wxGBPosition( 0, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
 	wxString m_topPostMachiningChoices[] = { _("None"), _("Countersink"), _("Counterbore") };
 	int m_topPostMachiningNChoices = sizeof( m_topPostMachiningChoices ) / sizeof( wxString );
-	m_topPostMachining = new wxChoice( sbSizer6->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_topPostMachiningNChoices, m_topPostMachiningChoices, 0 );
+	m_topPostMachining = new wxChoice( sbPostMachining->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_topPostMachiningNChoices, m_topPostMachiningChoices, 0 );
 	m_topPostMachining->SetSelection( 0 );
-	fgSizer11->Add( m_topPostMachining, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	gbPostMachiningLeftCol->Add( m_topPostMachining, wxGBPosition( 0, 1 ), wxGBSpan( 1, 2 ), wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 
-
-	fgSizer11->Add( 0, 0, 1, wxEXPAND, 5 );
-
-	m_topPostMachineSize1Label = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_topPostMachineSize1Label = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_topPostMachineSize1Label->Wrap( -1 );
-	fgSizer11->Add( m_topPostMachineSize1Label, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningLeftCol->Add( m_topPostMachineSize1Label, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_topPostmachineSize1 = new wxTextCtrl( sbSizer6->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgSizer11->Add( m_topPostmachineSize1, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	m_topPostmachineSize1 = new wxTextCtrl( sbPostMachining->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	gbPostMachiningLeftCol->Add( m_topPostmachineSize1, wxGBPosition( 1, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_topPostMachineSize1Units = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_topPostMachineSize1Units = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_topPostMachineSize1Units->Wrap( -1 );
-	fgSizer11->Add( m_topPostMachineSize1Units, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningLeftCol->Add( m_topPostMachineSize1Units, wxGBPosition( 1, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_topPostMachineSize2Label = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("Angle:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_topPostMachineSize2Label = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("Angle:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_topPostMachineSize2Label->Wrap( -1 );
-	fgSizer11->Add( m_topPostMachineSize2Label, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningLeftCol->Add( m_topPostMachineSize2Label, wxGBPosition( 2, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_topPostMachineSize2 = new wxTextCtrl( sbSizer6->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgSizer11->Add( m_topPostMachineSize2, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	m_topPostMachineSize2 = new wxTextCtrl( sbPostMachining->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	gbPostMachiningLeftCol->Add( m_topPostMachineSize2, wxGBPosition( 2, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_topPostMachineSize2Units = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("deg"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_topPostMachineSize2Units = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("deg"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_topPostMachineSize2Units->Wrap( -1 );
-	fgSizer11->Add( m_topPostMachineSize2Units, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningLeftCol->Add( m_topPostMachineSize2Units, wxGBPosition( 2, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
 
-	bSizer47->Add( fgSizer11, 1, wxEXPAND, 5 );
+	bPostMachiningColumns->Add( gbPostMachiningLeftCol, 1, wxEXPAND, 5 );
 
 
-	bSizer47->Add( 0, 0, 0, wxEXPAND|wxLEFT|wxRIGHT, 25 );
+	bPostMachiningColumns->Add( 15, 0, 0, wxEXPAND, 5 );
 
-	wxFlexGridSizer* fgSizer12;
-	fgSizer12 = new wxFlexGridSizer( 0, 3, 0, 0 );
-	fgSizer12->AddGrowableCol( 1 );
-	fgSizer12->SetFlexibleDirection( wxBOTH );
-	fgSizer12->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
+	wxGridBagSizer* gbPostMachiningRightCol;
+	gbPostMachiningRightCol = new wxGridBagSizer( 5, 5 );
+	gbPostMachiningRightCol->SetFlexibleDirection( wxBOTH );
+	gbPostMachiningRightCol->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
 
-	m_bottomPostMachiningLabel = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("Bottom:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_bottomPostMachiningLabel = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("Bottom:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_bottomPostMachiningLabel->Wrap( -1 );
-	fgSizer12->Add( m_bottomPostMachiningLabel, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachiningLabel, wxGBPosition( 0, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
 	wxString m_bottomPostMachiningChoices[] = { _("None"), _("Countersink"), _("Counterbore") };
 	int m_bottomPostMachiningNChoices = sizeof( m_bottomPostMachiningChoices ) / sizeof( wxString );
-	m_bottomPostMachining = new wxChoice( sbSizer6->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_bottomPostMachiningNChoices, m_bottomPostMachiningChoices, 0 );
+	m_bottomPostMachining = new wxChoice( sbPostMachining->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_bottomPostMachiningNChoices, m_bottomPostMachiningChoices, 0 );
 	m_bottomPostMachining->SetSelection( 0 );
-	fgSizer12->Add( m_bottomPostMachining, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachining, wxGBPosition( 0, 1 ), wxGBSpan( 1, 2 ), wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 
-
-	fgSizer12->Add( 0, 0, 1, wxALL|wxEXPAND, 5 );
-
-	m_bottomPostMachineSize1Label = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_bottomPostMachineSize1Label = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_bottomPostMachineSize1Label->Wrap( -1 );
-	fgSizer12->Add( m_bottomPostMachineSize1Label, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachineSize1Label, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_bottomPostMachineSize1 = new wxTextCtrl( sbSizer6->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgSizer12->Add( m_bottomPostMachineSize1, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	m_bottomPostMachineSize1 = new wxTextCtrl( sbPostMachining->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachineSize1, wxGBPosition( 1, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_bottomPostMachineSize1Units = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_bottomPostMachineSize1Units = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_bottomPostMachineSize1Units->Wrap( -1 );
-	fgSizer12->Add( m_bottomPostMachineSize1Units, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachineSize1Units, wxGBPosition( 1, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_bottomPostMachineSize2Label = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("Angle:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_bottomPostMachineSize2Label = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("Angle:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_bottomPostMachineSize2Label->Wrap( -1 );
-	fgSizer12->Add( m_bottomPostMachineSize2Label, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachineSize2Label, wxGBPosition( 2, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_bottomPostMachineSize2 = new wxTextCtrl( sbSizer6->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgSizer12->Add( m_bottomPostMachineSize2, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	m_bottomPostMachineSize2 = new wxTextCtrl( sbPostMachining->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachineSize2, wxGBPosition( 2, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_bottomPostMachineSize2Units = new wxStaticText( sbSizer6->GetStaticBox(), wxID_ANY, _("deg"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_bottomPostMachineSize2Units = new wxStaticText( sbPostMachining->GetStaticBox(), wxID_ANY, _("deg"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_bottomPostMachineSize2Units->Wrap( -1 );
-	fgSizer12->Add( m_bottomPostMachineSize2Units, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbPostMachiningRightCol->Add( m_bottomPostMachineSize2Units, wxGBPosition( 2, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
 
-	bSizer47->Add( fgSizer12, 1, wxEXPAND, 5 );
+	bPostMachiningColumns->Add( gbPostMachiningRightCol, 1, wxEXPAND, 5 );
 
 
-	sbSizer6->Add( bSizer47, 1, wxEXPAND, 5 );
+	sbPostMachining->Add( bPostMachiningColumns, 1, wxEXPAND, 5 );
 
 
-	bSizer46->Add( sbSizer6, 0, wxEXPAND, 5 );
+	bSizer46->Add( sbPostMachining, 0, wxEXPAND|wxBOTTOM, 5 );
 
-	wxStaticBoxSizer* sbSizer7;
-	sbSizer7 = new wxStaticBoxSizer( new wxStaticBox( m_backDrillPanel, wxID_ANY, _("Backdrill") ), wxVERTICAL );
+	wxStaticBoxSizer* sbBackdrill;
+	sbBackdrill = new wxStaticBoxSizer( new wxStaticBox( m_backDrillPanel, wxID_ANY, _("Backdrill") ), wxVERTICAL );
 
-	wxBoxSizer* bSizer48;
-	bSizer48 = new wxBoxSizer( wxHORIZONTAL );
-
-	wxFlexGridSizer* fgSizer13;
-	fgSizer13 = new wxFlexGridSizer( 0, 2, 0, 0 );
-	fgSizer13->SetFlexibleDirection( wxBOTH );
-	fgSizer13->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
-
-	wxString m_backDrillChoiceChoices[] = { _("None"), _("Bottom"), _("Top"), _("Both") };
+	wxString m_backDrillChoiceChoices[] = { _("None"), _("Top"), _("Bottom"), _("Top & bottom") };
 	int m_backDrillChoiceNChoices = sizeof( m_backDrillChoiceChoices ) / sizeof( wxString );
-	m_backDrillChoice = new wxChoice( sbSizer7->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_backDrillChoiceNChoices, m_backDrillChoiceChoices, 0 );
+	m_backDrillChoice = new wxChoice( sbBackdrill->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_backDrillChoiceNChoices, m_backDrillChoiceChoices, 0 );
 	m_backDrillChoice->SetSelection( 0 );
-	fgSizer13->Add( m_backDrillChoice, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	sbBackdrill->Add( m_backDrillChoice, 0, wxBOTTOM|wxRIGHT, 5 );
 
+	wxBoxSizer* bBackdrillColumns;
+	bBackdrillColumns = new wxBoxSizer( wxHORIZONTAL );
 
-	bSizer48->Add( fgSizer13, 1, wxEXPAND, 5 );
+	wxGridBagSizer* gbBackdrillLeftCol;
+	gbBackdrillLeftCol = new wxGridBagSizer( 3, 5 );
+	gbBackdrillLeftCol->SetFlexibleDirection( wxBOTH );
+	gbBackdrillLeftCol->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
 
-	wxFlexGridSizer* fgSizer14;
-	fgSizer14 = new wxFlexGridSizer( 0, 3, 0, 0 );
-	fgSizer14->SetFlexibleDirection( wxBOTH );
-	fgSizer14->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
-
-	m_backDrillTopLayerLabel = new wxStaticText( sbSizer7->GetStaticBox(), wxID_ANY, _("Top backdrill must-cut:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_backDrillTopLayerLabel = new wxStaticText( sbBackdrill->GetStaticBox(), wxID_ANY, _("Top backdrill must-cut:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_backDrillTopLayerLabel->Wrap( -1 );
 	m_backDrillTopLayerLabel->SetToolTip( _("The backdrill must pass through this layer") );
 
-	fgSizer14->Add( m_backDrillTopLayerLabel, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbBackdrillLeftCol->Add( m_backDrillTopLayerLabel, wxGBPosition( 0, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillTopLayer = new wxBitmapComboBox( sbSizer7->GetStaticBox(), wxID_ANY, _("dummy"), wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
+	m_backDrillTopLayer = new wxBitmapComboBox( sbBackdrill->GetStaticBox(), wxID_ANY, _("dummy"), wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
 	m_backDrillTopLayer->SetToolTip( _("The backdrill must pass through this layer") );
 
-	fgSizer14->Add( m_backDrillTopLayer, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	gbBackdrillLeftCol->Add( m_backDrillTopLayer, wxGBPosition( 0, 1 ), wxGBSpan( 1, 2 ), wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 
-
-	fgSizer14->Add( 0, 0, 1, wxEXPAND, 5 );
-
-	m_backDrillTopSizeLabel = new wxStaticText( sbSizer7->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_backDrillTopSizeLabel = new wxStaticText( sbBackdrill->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_backDrillTopSizeLabel->Wrap( -1 );
-	fgSizer14->Add( m_backDrillTopSizeLabel, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbBackdrillLeftCol->Add( m_backDrillTopSizeLabel, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillTopSize = new wxTextCtrl( sbSizer7->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgSizer14->Add( m_backDrillTopSize, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	m_backDrillTopSize = new wxTextCtrl( sbBackdrill->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	gbBackdrillLeftCol->Add( m_backDrillTopSize, wxGBPosition( 1, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillTopSizeUnits = new wxStaticText( sbSizer7->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_backDrillTopSizeUnits = new wxStaticText( sbBackdrill->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_backDrillTopSizeUnits->Wrap( -1 );
-	fgSizer14->Add( m_backDrillTopSizeUnits, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbBackdrillLeftCol->Add( m_backDrillTopSizeUnits, wxGBPosition( 1, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
 
-	bSizer48->Add( fgSizer14, 2, wxEXPAND, 5 );
+	bBackdrillColumns->Add( gbBackdrillLeftCol, 1, wxEXPAND|wxLEFT, 15 );
 
-	wxFlexGridSizer* fgSizer15;
-	fgSizer15 = new wxFlexGridSizer( 0, 3, 0, 0 );
-	fgSizer15->SetFlexibleDirection( wxBOTH );
-	fgSizer15->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
 
-	m_backDrillBottomLayerLabel = new wxStaticText( sbSizer7->GetStaticBox(), wxID_ANY, _("Bottom backdrill must-cut:"), wxDefaultPosition, wxDefaultSize, 0 );
+	bBackdrillColumns->Add( 15, 0, 0, wxEXPAND, 5 );
+
+	wxGridBagSizer* gbBackdrillRightCol;
+	gbBackdrillRightCol = new wxGridBagSizer( 3, 5 );
+	gbBackdrillRightCol->SetFlexibleDirection( wxBOTH );
+	gbBackdrillRightCol->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );
+
+	m_backDrillBottomLayerLabel = new wxStaticText( sbBackdrill->GetStaticBox(), wxID_ANY, _("Bottom backdrill must-cut:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_backDrillBottomLayerLabel->Wrap( -1 );
 	m_backDrillBottomLayerLabel->SetToolTip( _("The backdrill must pass through this layer") );
 
-	fgSizer15->Add( m_backDrillBottomLayerLabel, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbBackdrillRightCol->Add( m_backDrillBottomLayerLabel, wxGBPosition( 0, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillBottomLayer = new wxBitmapComboBox( sbSizer7->GetStaticBox(), wxID_ANY, _("dummy"), wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
+	m_backDrillBottomLayer = new wxBitmapComboBox( sbBackdrill->GetStaticBox(), wxID_ANY, _("dummy"), wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
 	m_backDrillBottomLayer->SetToolTip( _("The backdrill must pass through this layer") );
 
-	fgSizer15->Add( m_backDrillBottomLayer, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	gbBackdrillRightCol->Add( m_backDrillBottomLayer, wxGBPosition( 0, 1 ), wxGBSpan( 1, 2 ), wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
 
-
-	fgSizer15->Add( 0, 0, 1, wxEXPAND, 5 );
-
-	m_backDrillBottomSizeLabel = new wxStaticText( sbSizer7->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_backDrillBottomSizeLabel = new wxStaticText( sbBackdrill->GetStaticBox(), wxID_ANY, _("Size:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_backDrillBottomSizeLabel->Wrap( -1 );
-	fgSizer15->Add( m_backDrillBottomSizeLabel, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbBackdrillRightCol->Add( m_backDrillBottomSizeLabel, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillBottomSize = new wxTextCtrl( sbSizer7->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	fgSizer15->Add( m_backDrillBottomSize, 0, wxALIGN_CENTER_VERTICAL|wxALL|wxEXPAND, 5 );
+	m_backDrillBottomSize = new wxTextCtrl( sbBackdrill->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	gbBackdrillRightCol->Add( m_backDrillBottomSize, wxGBPosition( 1, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillBottomSizeUnits = new wxStaticText( sbSizer7->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_backDrillBottomSizeUnits = new wxStaticText( sbBackdrill->GetStaticBox(), wxID_ANY, _("mm"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_backDrillBottomSizeUnits->Wrap( -1 );
-	fgSizer15->Add( m_backDrillBottomSizeUnits, 0, wxALIGN_CENTER_VERTICAL|wxALL, 5 );
+	gbBackdrillRightCol->Add( m_backDrillBottomSizeUnits, wxGBPosition( 1, 2 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
 
-	bSizer48->Add( fgSizer15, 2, wxEXPAND, 5 );
+	bBackdrillColumns->Add( gbBackdrillRightCol, 1, wxEXPAND, 5 );
 
 
-	sbSizer7->Add( bSizer48, 1, wxEXPAND, 5 );
+	sbBackdrill->Add( bBackdrillColumns, 1, wxEXPAND|wxTOP, 3 );
 
 
-	bSizer46->Add( sbSizer7, 0, wxEXPAND, 5 );
+	bSizer46->Add( sbBackdrill, 0, wxEXPAND|wxTOP, 5 );
 
 
 	bSizer45->Add( bSizer46, 1, wxALL|wxEXPAND, 5 );
@@ -1449,7 +1419,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	bottomSizer->Add( 20, 0, 1, wxEXPAND, 5 );
 
 	m_cbShowPadOutline = new wxCheckBox( this, wxID_ANY, _("Preview pad in sketch mode"), wxDefaultPosition, wxDefaultSize, 0 );
-	bottomSizer->Add( m_cbShowPadOutline, 0, wxALIGN_CENTER_VERTICAL|wxBOTTOM|wxRIGHT|wxLEFT, 5 );
+	bottomSizer->Add( m_cbShowPadOutline, 0, wxALIGN_CENTER_VERTICAL|wxLEFT|wxRIGHT, 5 );
 
 
 	bottomSizer->Add( 40, 0, 0, wxEXPAND, 5 );
@@ -1553,12 +1523,11 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_clearanceCtrl->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_maskMarginCtrl->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_pasteMarginCtrl->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
-	m_pasteMarginRatioCtrl->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_nonCopperWarningBook->Connect( wxEVT_UPDATE_UI, wxUpdateUIEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnUpdateUINonCopperWarning ), NULL, this );
 	m_topPostMachining->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onTopPostMachining ), NULL, this );
 	m_bottomPostMachining->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBottomPostMachining ), NULL, this );
 	m_backDrillChoice->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBackDrillChoice ), NULL, this );
-	m_cbShowPadOutline->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onChangePadMode ), NULL, this );
+	m_cbShowPadOutline->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onChangePadDrawMode ), NULL, this );
 	m_sdbSizerCancel->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnCancel ), NULL, this );
 }
 
@@ -1644,12 +1613,11 @@ DIALOG_PAD_PROPERTIES_BASE::~DIALOG_PAD_PROPERTIES_BASE()
 	m_clearanceCtrl->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_maskMarginCtrl->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_pasteMarginCtrl->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
-	m_pasteMarginRatioCtrl->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_nonCopperWarningBook->Disconnect( wxEVT_UPDATE_UI, wxUpdateUIEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnUpdateUINonCopperWarning ), NULL, this );
 	m_topPostMachining->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onTopPostMachining ), NULL, this );
 	m_bottomPostMachining->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBottomPostMachining ), NULL, this );
 	m_backDrillChoice->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBackDrillChoice ), NULL, this );
-	m_cbShowPadOutline->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onChangePadMode ), NULL, this );
+	m_cbShowPadOutline->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onChangePadDrawMode ), NULL, this );
 	m_sdbSizerCancel->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnCancel ), NULL, this );
 
 }

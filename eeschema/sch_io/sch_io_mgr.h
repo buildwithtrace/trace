@@ -65,8 +65,10 @@ public:
         SCH_EAGLE,            ///< Autodesk Eagle file format
         SCH_EASYEDA,          ///< EasyEDA Std schematic file
         SCH_EASYEDAPRO,       ///< EasyEDA Pro archive
+        SCH_GEDA,             ///< gEDA/gschem schematic format
         SCH_LTSPICE,          ///< LtSpice Schematic format
         SCH_HTTP,             ///< KiCad HTTP library
+        SCH_PADS,             ///< PADS Logic schematic format
 
         // Add your schematic type here.
         SCH_FILE_UNKNOWN,

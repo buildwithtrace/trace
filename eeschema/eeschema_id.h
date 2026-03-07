@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -60,6 +61,12 @@
 enum id_eeschema_frm
 {
     ID_IMPORT_NON_KICAD_SCH = ID_END_LIST,
+
+    /* Account menu IDs */
+    ID_ACCOUNT_SIGN_IN,
+    ID_ACCOUNT_SIGN_OUT,
+    ID_ACCOUNT_SIGN_IN_SYM,
+    ID_ACCOUNT_SIGN_OUT_SYM,
 
     /* Library editor horizontal toolbar IDs. */
     ID_LIBEDIT_SELECT_UNIT_NUMBER,

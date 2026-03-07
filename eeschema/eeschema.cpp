@@ -50,11 +50,14 @@
 #include <symbol_editor_settings.h>
 #include <sexpr/sexpr.h>
 #include <sexpr/sexpr_parser.h>
+#include <string_utils.h>
 #include <trace_helpers.h>
 #include <thread_pool.h>
 #include <kiface_ids.h>
+#include <widgets/kistatusbar.h>
 #include <netlist_exporters/netlist_exporter_kicad.h>
 #include <wx/ffile.h>
+#include <wx/tokenzr.h>
 #include <wildcards_and_files_ext.h>
 
 #include <schematic.h>
@@ -98,23 +101,12 @@ static std::unique_ptr<SCHEMATIC> readSchematicFromFile( const std::string& aFil
     manager.LoadProject( "" );
     schematic->Reset();
     schematic->SetProject( &manager.Prj() );
-    schematic->SetRoot( pi->LoadSchematicFile( aFilename, schematic.get() ) );
+    SCH_SHEET* rootSheet = pi->LoadSchematicFile( aFilename, schematic.get() );
 
-    // Set current sheet to the first top-level sheet, not the virtual root
-    std::vector<SCH_SHEET*> topLevelSheets = schematic->GetTopLevelSheets();
+    if( !rootSheet )
+        return nullptr;
 
-    if( !topLevelSheets.empty() )
-    {
-        schematic->CurrentSheet().push_back( topLevelSheets[0] );
-        wxLogTrace( traceSchCurrentSheet,
-                   "Set current sheet to first top-level sheet: %s, path: %s",
-                   topLevelSheets[0]->GetName(),
-                   schematic->CurrentSheet().Path().AsString() );
-    }
-    else
-    {
-        wxLogWarning( "No top-level sheets found after loading schematic!" );
-    }
+    schematic->SetTopLevelSheets( { rootSheet } );
 
     SCH_SCREENS screens( schematic->Root() );
 
@@ -294,7 +286,7 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
             for( TOOL_ACTION* action : ACTION_MANAGER::GetActionList() )
                 actions.push_back( action );
 
-            for( ACTION_TOOLBAR_CONTROL* control : ACTION_TOOLBAR::GetCustomControlList() )
+            for( ACTION_TOOLBAR_CONTROL* control : ACTION_TOOLBAR::GetCustomControlList( FRAME_SCH_SYMBOL_EDITOR ) )
                 controls.push_back( control );
 
             return new PANEL_TOOLBAR_CUSTOMIZATION( aParent, cfg, tb, actions, controls );
@@ -350,7 +342,7 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
             for( TOOL_ACTION* action : ACTION_MANAGER::GetActionList() )
                 actions.push_back( action );
 
-            for( ACTION_TOOLBAR_CONTROL* control : ACTION_TOOLBAR::GetCustomControlList() )
+            for( ACTION_TOOLBAR_CONTROL* control : ACTION_TOOLBAR::GetCustomControlList( FRAME_SCH ) )
                 controls.push_back( control );
 
             return new PANEL_TOOLBAR_CUSTOMIZATION( aParent, cfg, tb, actions, controls );
@@ -419,6 +411,7 @@ static struct IFACE : public KIFACE_BASE, public UNITS_PROVIDER
     bool HandleJobConfig( JOB* aJob, wxWindow* aParent ) override;
 
     void PreloadLibraries( KIWAY* aKiway ) override;
+    void CancelPreload( bool aBlock = true ) override;
     void ProjectChanged() override;
 
 private:
@@ -489,8 +482,15 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
 
     wxCHECK( aKiway, /* void */ );
 
-    if( m_libraryPreloadInProgress.load() )
+    // Use compare_exchange to atomically check and set the flag to prevent race conditions
+    // when PreloadLibraries is called multiple times concurrently (e.g., from project manager
+    // and schematic editor both scheduling via CallAfter)
+    bool expected = false;
+
+    if( !m_libraryPreloadInProgress.compare_exchange_strong( expected, true ) )
         return;
+
+    Pgm().ClearLibraryLoadMessages();
 
     m_libraryPreloadBackgroundJob =
             Pgm().GetBackgroundJobMonitor().Create( _( "Loading Symbol Libraries" ) );
@@ -540,6 +540,26 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
 
             adapter->BlockUntilLoaded();
 
+            // Collect library load errors for async reporting
+            wxString errors = adapter->GetLibraryLoadErrors();
+
+            wxLogTrace( traceLibraries, "eeschema PreloadLibraries: errors.IsEmpty()=%d, length=%zu",
+                        errors.IsEmpty(), errors.length() );
+
+            std::vector<LOAD_MESSAGE> messages =
+                    ExtractLibraryLoadErrors( errors, RPT_SEVERITY_ERROR );
+
+            if( !messages.empty() )
+            {
+                wxLogTrace( traceLibraries, "  -> collected %zu messages, calling AddLibraryLoadMessages",
+                            messages.size() );
+                Pgm().AddLibraryLoadMessages( messages );
+            }
+            else
+            {
+                wxLogTrace( traceLibraries, "  -> no errors from symbol libraries" );
+            }
+
             Pgm().GetBackgroundJobMonitor().Remove( m_libraryPreloadBackgroundJob );
             m_libraryPreloadBackgroundJob.reset();
             m_libraryPreloadInProgress.store( false );
@@ -551,8 +571,19 @@ void IFACE::PreloadLibraries( KIWAY* aKiway )
         };
 
     thread_pool& tp = GetKiCadThreadPool();
-    m_libraryPreloadInProgress.store( true );
     m_libraryPreloadReturn = tp.submit_task( preload );
+}
+
+
+void IFACE::CancelPreload( bool aBlock )
+{
+    if( m_libraryPreloadInProgress.load() )
+    {
+        m_libraryPreloadAbort.store( true );
+
+        if( aBlock )
+            m_libraryPreloadReturn.wait();
+    }
 }
 
 
@@ -566,19 +597,6 @@ void IFACE::ProjectChanged()
 void IFACE::OnKifaceEnd()
 {
     end_common();
-}
-
-
-static void traverseSEXPR( SEXPR::SEXPR* aNode,
-                           const std::function<void( SEXPR::SEXPR* )>& aVisitor )
-{
-    aVisitor( aNode );
-
-    if( aNode->IsList() )
-    {
-        for( unsigned i = 0; i < aNode->GetNumberOfChildren(); i++ )
-            traverseSEXPR( aNode->GetChild( i ), aVisitor );
-    }
 }
 
 
@@ -618,16 +636,18 @@ void IFACE::SaveFileAs( const wxString& aProjectBasePath, const wxString& aProje
             return;
         }
 
-        // Sheet paths when auto-generated are relative to the root, so those will stay
-        // pointing to whatever they were pointing at.
-        // The author can create their own absolute and relative sheet paths.  Absolute
-        // sheet paths aren't an issue, and relative ones will continue to work as long
-        // as the author didn't include any '..'s.  If they did, it's still not clear
-        // whether they should be adjusted or not (as the author may be duplicating an
-        // entire tree with several projects within it), so we leave this as an exercise
-        // to the author.
+        CopySexprFile( aSrcFilePath, destFile.GetFullPath(),
+                [&]( const std::string& token, wxString& value ) -> bool
+                {
+                    if( token == "project" && value == aProjectName )
+                    {
+                        value = aNewProjectName;
+                        return true;
+                    }
 
-        KiCopyFile( aSrcFilePath, destFile.GetFullPath(), aErrors );
+                    return false;
+                },
+                aErrors );
     }
     else if( ext == FILEEXT::SchematicSymbolFileExtension )
     {
@@ -648,79 +668,48 @@ void IFACE::SaveFileAs( const wxString& aProjectBasePath, const wxString& aProje
     }
     else if( ext == FILEEXT::NetlistFileExtension )
     {
-        bool success = false;
-
         if( destFile.GetName() == aProjectName )
-            destFile.SetName( aNewProjectName  );
+            destFile.SetName( aNewProjectName );
 
-        try
-        {
-            SEXPR::PARSER parser;
-            std::unique_ptr<SEXPR::SEXPR> sexpr( parser.ParseFromFile( TO_UTF8( aSrcFilePath ) ) );
-
-            traverseSEXPR( sexpr.get(), [&]( SEXPR::SEXPR* node )
+        CopySexprFile( aSrcFilePath, destFile.GetFullPath(),
+                [&]( const std::string& token, wxString& value ) -> bool
                 {
-                    if( node->IsList() && node->GetNumberOfChildren() > 1
-                            && node->GetChild( 0 )->IsSymbol()
-                            && node->GetChild( 0 )->GetSymbol() == "source" )
+                    if( token == "source" )
                     {
-                        auto pathNode = dynamic_cast<SEXPR::SEXPR_STRING*>( node->GetChild( 1 ) );
-                        auto symNode = dynamic_cast<SEXPR::SEXPR_SYMBOL*>( node->GetChild( 1 ) );
-                        wxString path;
-
-                        if( pathNode )
-                            path = pathNode->m_value;
-                        else if( symNode )
-                            path = symNode->m_value;
-
-                        if( path == aProjectName + wxS( ".sch" ) )
-                            path = aNewProjectName + wxS( ".sch" );
-                        else if( path == aProjectBasePath + "/" + aProjectName + wxS( ".sch" ) )
-                            path = aNewProjectBasePath + "/" + aNewProjectName + wxS( ".sch" );
-                        else if( path.StartsWith( aProjectBasePath ) )
-                            path.Replace( aProjectBasePath, aNewProjectBasePath, false );
-
-                        if( pathNode )
-                            pathNode->m_value = path;
-                        else if( symNode )
-                            symNode->m_value = path;
+                        for( const wxString& extension : { wxString( wxT( ".sch" ) ), wxString( wxT( ".kicad_sch" ) ) } )
+                        {
+                            if( value == aProjectName + extension )
+                            {
+                                value = aNewProjectName + extension;
+                                return true;
+                            }
+                            else if( value == aProjectBasePath + "/" + aProjectName + extension )
+                            {
+                                value = aNewProjectBasePath + "/" + aNewProjectName + extension;
+                                return true;
+                            }
+                            else if( value.StartsWith( aProjectBasePath ) )
+                            {
+                                value.Replace( aProjectBasePath, aNewProjectBasePath, false );
+                                return true;
+                            }
+                        }
                     }
-                } );
 
-            wxFFile destNetList( destFile.GetFullPath(), "wb" );
-
-            if( destNetList.IsOpened() )
-                success = destNetList.Write( sexpr->AsString( 0 ) );
-
-            // wxFFile dtor will close the file
-        }
-        catch( ... )
-        {
-            success = false;
-        }
-
-        if( !success )
-        {
-            wxString msg;
-
-            if( !aErrors.empty() )
-                aErrors += wxS( "\n" );
-
-            msg.Printf( _( "Cannot copy file '%s'." ), destFile.GetFullPath() );
-            aErrors += msg;
-        }
+                    return false;
+                },
+                aErrors );
     }
-    // TODO(JE) library tables - does this feature even need to exist?
-#if 0
     else if( destFile.GetName() == FILEEXT::SymbolLibraryTableFileName )
     {
-        SYMBOL_LIB_TABLE symbolLibTable;
-        symbolLibTable.Load( aSrcFilePath );
+        wxFileName    libTableFn( aSrcFilePath );
+        LIBRARY_TABLE libTable( libTableFn, LIBRARY_TABLE_SCOPE::PROJECT );
+        libTable.SetPath( destFile.GetFullPath() );
+        libTable.SetType( LIBRARY_TABLE_TYPE::SYMBOL );
 
-        for( unsigned i = 0; i < symbolLibTable.GetCount(); i++ )
+        for( LIBRARY_TABLE_ROW& row : libTable.Rows() )
         {
-            LIB_TABLE_ROW& row = symbolLibTable.At( i );
-            wxString       uri = row.GetFullURI();
+            wxString uri = row.URI();
 
             uri.Replace( wxS( "/" ) + aProjectName + wxS( "-cache.lib" ),
                          wxS( "/" ) + aNewProjectName + wxS( "-cache.lib" ) );
@@ -729,25 +718,21 @@ void IFACE::SaveFileAs( const wxString& aProjectBasePath, const wxString& aProje
             uri.Replace( wxS( "/" ) + aProjectName + wxS( ".lib" ),
                          wxS( "/" ) + aNewProjectName + wxS( ".lib" ) );
 
-            row.SetFullURI( uri );
+            row.SetURI( uri );
         }
 
-        try
-        {
-            symbolLibTable.Save( destFile.GetFullPath() );
-        }
-        catch( ... )
-        {
-            wxString msg;
+        libTable.Save().map_error(
+                [&]( const LIBRARY_ERROR& aError )
+                {
+                        wxString msg;
 
-            if( !aErrors.empty() )
-                aErrors += "\n";
+                        if( !aErrors.empty() )
+                            aErrors += wxT( "\n" );
 
-            msg.Printf( _( "Cannot copy file '%s'." ), destFile.GetFullPath() );
-            aErrors += msg;
-        }
+                        msg.Printf( _( "Cannot copy file '%s'." ), destFile.GetFullPath() );
+                        aErrors += msg;
+                } );
     }
-#endif
     else
     {
         wxFAIL_MSG( wxS( "Unexpected filetype for Eeschema::SaveFileAs()" ) );

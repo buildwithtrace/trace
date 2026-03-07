@@ -114,7 +114,7 @@ DIALOG_BOARD_REANNOTATE::DIALOG_BOARD_REANNOTATE( PCB_EDIT_FRAME* aParentFrame )
                             { wxID_CANCEL, _( "Close" )          } } );
 
     wxArrayString gridslist;
-    GRID_MENU::BuildChoiceList( &gridslist, m_frame->config(), aParentFrame );
+    GRID_MENU::BuildChoiceList( &gridslist, m_frame->GetWindowSettings( m_frame->config() ), aParentFrame );
 
     m_GridChoice->Set( gridslist );
 
@@ -190,7 +190,7 @@ REFDES_PREFIX_INFO* DIALOG_BOARD_REANNOTATE::GetOrBuildRefDesInfo( const wxStrin
     // Wasn't in the info array so add it
     REFDES_PREFIX_INFO newtype;
     newtype.RefDesPrefix = aRefDesPrefix;
-    newtype.LastUsedRefDes = aStartRefDes - 1;
+    newtype.LastUsedRefDes = std::max( aStartRefDes - 1, 0 );
     m_refDesPrefixInfos.push_back( newtype );
 
     return &m_refDesPrefixInfos.back();

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2022 Mark Roszko <mark.roszko@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -63,7 +64,7 @@ int CLI::VERSION_COMMAND::doPerform( KIWAY& aKiway )
     }
     else if( format == wxS( "about" ) )
     {
-        wxString msg_version = GetVersionInfoData( wxS( "kicad-cli" ) );
+        wxString msg_version = GetVersionInfoData( wxS( "trace-cli" ) );
         wxPrintf( "%s\n", msg_version );
     }
     else

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -39,7 +40,8 @@
 
 
 ///! The following environment variables will never be migrated from a previous version
-const wxRegEx versionedEnvVarRegex( wxS( "KICAD[0-9]+_[A-Z0-9_]+(_DIR)?" ) );
+///! Matches both TRACEn_* and KICADn_* versioned environment variables
+const wxRegEx versionedEnvVarRegex( wxS( "(TRACE|KICAD)[0-9]+_[A-Z0-9_]+(_DIR)?" ) );
 
 ///! Update the schema version whenever a migration is required
 const int commonSchemaVersion = 4;
@@ -763,31 +765,41 @@ void COMMON_SETTINGS::InitializeEnvironment()
             }
         };
 
+    // Helper to add both TRACE and KICAD versions of a variable with the same value
+    auto addVersionedVar =
+        [&]( const wxString& aBaseName, const wxString& aDefault )
+        {
+            // Add TRACE version (primary)
+            addVar( ENV_VAR::GetTraceVersionedEnvVarName( aBaseName ), aDefault );
+            // Add KICAD version (for backwards compatibility)
+            addVar( ENV_VAR::GetKicadVersionedEnvVarName( aBaseName ), aDefault );
+        };
+
     wxFileName basePath( PATHS::GetStockEDALibraryPath(), wxEmptyString );
 
     wxFileName path( basePath );
     path.AppendDir( wxT( "footprints" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ), path.GetFullPath() );
+    addVersionedVar( wxS( "FOOTPRINT_DIR" ), path.GetFullPath() );
 
     path = basePath;
     path.AppendDir( wxT( "3dmodels" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ), path.GetFullPath() );
+    addVersionedVar( wxS( "3DMODEL_DIR" ), path.GetFullPath() );
 
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ),
-            PATHS::GetStockTemplatesPath() );
+    addVersionedVar( wxS( "TEMPLATE_DIR" ), PATHS::GetStockTemplatesPath() );
 
+    // Add both TRACE and KICAD versions of user template dir for compatibility
+    addVar( wxT( "TRACE_USER_TEMPLATE_DIR" ), PATHS::GetUserTemplatesPath() );
     addVar( wxT( "KICAD_USER_TEMPLATE_DIR" ), PATHS::GetUserTemplatesPath() );
 
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "3RD_PARTY" ) ),
-            PATHS::GetDefault3rdPartyPath() );
+    addVersionedVar( wxS( "3RD_PARTY" ), PATHS::GetDefault3rdPartyPath() );
 
     path = basePath;
     path.AppendDir( wxT( "symbols" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ), path.GetFullPath() );
+    addVersionedVar( wxS( "SYMBOL_DIR" ), path.GetFullPath() );
 
     path = basePath;
     path.AppendDir( wxT( "blocks" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) ), path.GetFullPath() );
+    addVersionedVar( wxS( "DESIGN_BLOCK_DIR" ), path.GetFullPath() );
 }
 
 

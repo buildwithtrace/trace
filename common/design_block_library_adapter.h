@@ -24,6 +24,7 @@
 
 #include <kicommon.h>
 #include <lib_id.h>
+#include <core/leak_at_exit.h>
 #include <libraries/library_manager.h>
 
 class DESIGN_BLOCK;
@@ -40,12 +41,9 @@ public:
 
     static wxString GlobalPathEnvVariableName();
 
-    void AsyncLoad() override;
-
     std::optional<LIB_STATUS> LoadOne( LIB_DATA* aLib ) override;
 
-    // Currently unused for design blocks
-    std::optional<LIB_STATUS> GetLibraryStatus( const wxString& aNickname ) const override { return std::nullopt; }
+    std::optional<LIB_STATUS> LoadOne( const wxString& nickname );
 
     /// @return all the design blocks in the given library, if it exists and is loaded (or an empty list)
     std::vector<DESIGN_BLOCK*> GetDesignBlocks( const wxString& aNickname );
@@ -148,9 +146,12 @@ public:
 
 protected:
 
-    std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries; }
-    std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries; }
-    std::mutex& globalLibsMutex() override { return GlobalLibraryMutex; }
+    std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries.Get(); }
+    std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries.Get(); }
+    std::shared_mutex& globalLibsMutex() override { return GlobalLibraryMutex; }
+    std::shared_mutex& globalLibsMutex() const override { return GlobalLibraryMutex; }
+
+    void enumerateLibrary( LIB_DATA* aLib ) override;
 
     LIBRARY_RESULT<IO_BASE*> createPlugin( const LIBRARY_TABLE_ROW* row ) override;
 
@@ -162,10 +163,11 @@ private:
     static DESIGN_BLOCK_IO* dbplugin( const LIB_DATA* aRow );
 
     // The global libraries, potentially shared between multiple different open
-    // projects, each of which has their own instance of this adapter class
-    static std::map<wxString, LIB_DATA> GlobalLibraries;
+    // projects, each of which has their own instance of this adapter class.
+    // Wrapped in LEAK_AT_EXIT to skip destruction at program exit for faster shutdown.
+    static LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> GlobalLibraries;
 
-    static std::mutex GlobalLibraryMutex;
+    static std::shared_mutex GlobalLibraryMutex;
 };
 
 

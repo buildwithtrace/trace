@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013-2019 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -459,12 +460,13 @@ void ACTION_MENU::OnMenuEvent( wxMenuEvent& aEvent )
             {
                 wxKeyEvent keyEvent( wxEVT_CHAR_HOOK );
                 keyEvent.m_keyCode = acceleratorKey->GetKeyCode();
+                keyEvent.m_uniChar = keyEvent.m_keyCode; // Solve wxTE_MULTILINE issue
                 keyEvent.m_controlDown = ( acceleratorKey->GetFlags() & wxMOD_CONTROL ) > 0;
                 keyEvent.m_shiftDown = ( acceleratorKey->GetFlags() & wxMOD_SHIFT ) > 0;
                 keyEvent.m_altDown = ( acceleratorKey->GetFlags() & wxMOD_ALT ) > 0;
 
                 if( wxTextEntry* ctrl = dynamic_cast<wxTextEntry*>( focus ) )
-                    TEXTENTRY_TRICKS::OnCharHook( ctrl, keyEvent );
+                    TEXTENTRY_TRICKS::OnCharHook( ctrl, keyEvent, focus );
                 else
                     focus->HandleWindowEvent( keyEvent );
 

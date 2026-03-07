@@ -26,13 +26,15 @@
 #ifndef ZONE_FILLER_H
 #define ZONE_FILLER_H
 
+#include <map>
+#include <mutex>
 #include <vector>
 #include <zone.h>
+#include <geometry/shape_poly_set.h>
 
 class PROGRESS_REPORTER;
 class BOARD;
 class COMMIT;
-class SHAPE_POLY_SET;
 class SHAPE_LINE_CHAIN;
 
 
@@ -74,7 +76,15 @@ private:
 
     void buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                     const std::vector<PAD*>& aNoConnectionPads,
-                                    SHAPE_POLY_SET& aHoles );
+                                    SHAPE_POLY_SET& aHoles,
+                                    bool aIncludeZoneClearances = true );
+
+    /**
+     * Build clearance knockout holes for higher-priority zones on different nets.
+     * Separated from buildCopperItemClearances to allow caching before zone knockouts.
+     */
+    void buildDifferentNetZoneClearances( const ZONE* aZone, PCB_LAYER_ID aLayer,
+                                          SHAPE_POLY_SET& aHoles );
 
     void subtractHigherPriorityZones( const ZONE* aZone, PCB_LAYER_ID aLayer,
                                       SHAPE_POLY_SET& aRawFill );
@@ -105,6 +115,20 @@ private:
                              std::deque<SHAPE_LINE_CHAIN>& aSpokes );
 
     /**
+     * Build thermal rings for pads in hatch zones.
+     * For circular pads, creates an arc ring; for other shapes, creates an inflated ring.
+     * Rings are clipped to the zone boundary.
+     *
+     * @param aThermalRings Output parameter to collect the thermal ring geometry. Used later
+     *                      to drop hatch holes that would isolate the thermal relief.
+     */
+    void buildHatchZoneThermalRings( const ZONE* aZone, PCB_LAYER_ID aLayer,
+                                     const SHAPE_POLY_SET& aSmoothedOutline,
+                                     const std::vector<BOARD_ITEM*>& aThermalConnectionPads,
+                                     SHAPE_POLY_SET& aFillPolys,
+                                     SHAPE_POLY_SET& aThermalRings );
+
+    /**
      * Create strands of zero-width between elements of SHAPE_POLY_SET that are within
      * aDistance of each other.  When we inflate these strands, they will create minimum
      * width bands
@@ -131,9 +155,19 @@ private:
      * @param aZone is the zone to modify
      * @param aFillPolys: A reference to a SHAPE_POLY_SET buffer containing the initial
      * filled areas, and after adding the grid pattern, the modified filled areas with holes
+     * @param aThermalRings: Thermal ring geometry used to drop hatch holes that would isolate
+     *                       thermal reliefs from the zone fill.
      */
     bool addHatchFillTypeOnZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LAYER_ID aDebugLayer,
-                                 SHAPE_POLY_SET& aFillPolys );
+                                 SHAPE_POLY_SET& aFillPolys,
+                                 const SHAPE_POLY_SET& aThermalRings );
+
+    /**
+     * Refill a zone from cached pre-knockout fill.
+     * Used during iterative refill to avoid recomputing thermal reliefs and copper clearances.
+     * Only re-applies the higher-priority zone knockout with updated fills.
+     */
+    bool refillZoneFromCache( ZONE* aZone, PCB_LAYER_ID aLayer, SHAPE_POLY_SET& aFillPolys );
 
     BOARD*                m_board;
     SHAPE_POLY_SET        m_boardOutline;       // the board outlines, if exists
@@ -145,6 +179,11 @@ private:
     int                   m_worstClearance;
 
     bool                  m_debugZoneFiller;
+
+    // Cache of pre-knockout fills for iterative refill optimization (issue 21746)
+    // Key: (zone pointer, layer), Value: fill polygon before higher-priority zone knockout
+    std::map<std::pair<const ZONE*, PCB_LAYER_ID>, SHAPE_POLY_SET> m_preKnockoutFillCache;
+    mutable std::mutex                                             m_cacheMutex;
 };
 
 #endif

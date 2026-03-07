@@ -36,6 +36,7 @@
 #include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
 #include <pcb_io/kicad_legacy/pcb_io_kicad_legacy.h>
 #include <pcb_io/pcad/pcb_io_pcad.h>
+#include <pcb_io/allegro/pcb_io_allegro.h>
 #include <pcb_io/altium/pcb_io_altium_circuit_maker.h>
 #include <pcb_io/altium/pcb_io_altium_circuit_studio.h>
 #include <pcb_io/altium/pcb_io_altium_designer.h>
@@ -46,6 +47,7 @@
 #include <pcb_io/easyedapro/pcb_io_easyedapro.h>
 #include <pcb_io/ipc2581/pcb_io_ipc2581.h>
 #include <pcb_io/odbpp/pcb_io_odbpp.h>
+#include <pcb_io/pads/pcb_io_pads.h>
 #include <reporter.h>
 #include <libraries/library_table_parser.h>
 
@@ -280,6 +282,11 @@ static PCB_IO_MGR::REGISTER_PLUGIN registerLegacyPlugin(
 
 // Keep non-KiCad plugins in alphabetical order
 
+static PCB_IO_MGR::REGISTER_PLUGIN registerAllegroPlugin(
+    PCB_IO_MGR::ALLEGRO,
+    wxT( "Allegro" ),
+    []() -> PCB_IO* { return new PCB_IO_ALLEGRO; } );
+
 static PCB_IO_MGR::REGISTER_PLUGIN registerAltiumCircuitMakerPlugin(
         PCB_IO_MGR::ALTIUM_CIRCUIT_MAKER,
         wxT( "Altium Circuit Maker" ),
@@ -322,7 +329,7 @@ static PCB_IO_MGR::REGISTER_PLUGIN registerFabmasterPlugin(
 
 static PCB_IO_MGR::REGISTER_PLUGIN registerGPCBPlugin(
         PCB_IO_MGR::GEDA_PCB,
-        wxT( "GEDA/Pcb" ),
+        wxT( "gEDA / Lepton EDA" ),
         []() -> PCB_IO* { return new PCB_IO_GEDA; } );
 
 static PCB_IO_MGR::REGISTER_PLUGIN registerPcadPlugin(
@@ -344,4 +351,9 @@ static PCB_IO_MGR::REGISTER_PLUGIN registerODBPPPlugin(
         PCB_IO_MGR::ODBPP,
         wxT( "ODB++" ),
         []() -> PCB_IO* { return new PCB_IO_ODBPP; } );
+
+static PCB_IO_MGR::REGISTER_PLUGIN registerPadsPlugin(
+        PCB_IO_MGR::PADS,
+        wxT( "PADS" ),
+        []() -> PCB_IO* { return new PCB_IO_PADS(); } );
 // clang-format on

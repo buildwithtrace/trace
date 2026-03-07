@@ -34,7 +34,7 @@
 
 IMPLEMENT_ENUM_TO_WXANY( PAD_DRILL_POST_MACHINING_MODE );
 IMPLEMENT_ENUM_TO_WXANY( BACKDRILL_MODE );
-IMPLEMENT_ENUM_TO_WXANY( PADSTACK::UNCONNECTED_LAYER_MODE );
+IMPLEMENT_ENUM_TO_WXANY( UNCONNECTED_LAYER_MODE );
 
 
 PADSTACK::PADSTACK( BOARD_ITEM* aParent ) :
@@ -99,9 +99,10 @@ PADSTACK& PADSTACK::operator=( const PADSTACK &aOther )
     m_frontPostMachining    = aOther.m_frontPostMachining;
     m_backPostMachining     = aOther.m_backPostMachining;
 
-    // Data consistency enforcement logic that used to live in the pad properties dialog
-    // TODO(JE) Should these move to individual property setters, so that they are always
-    // enforced even through the properties panel and API?
+    // Data consistency enforcement logic that used to live in the pad properties dialog.
+    // While it might be tempting to put these in the individual property setters, there's no
+    // well-defined order in which they're called, and many of the consistency checks are
+    // between multiple properties.
 
     ForEachUniqueLayer(
         [&]( PCB_LAYER_ID aLayer )
@@ -686,9 +687,9 @@ void PADSTACK::Serialize( google::protobuf::Any& aContainer ) const
             switch( aProps.mode.value() )
             {
             case PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED: aProto->set_mode( VDPM_NOT_POST_MACHINED ); break;
-            case PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE: aProto->set_mode( VDPM_COUNTERBORE ); break;
-            case PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK: aProto->set_mode( VDPM_COUNTERSINK ); break;
-            default: break;
+            case PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE:       aProto->set_mode( VDPM_COUNTERBORE );       break;
+            case PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK:       aProto->set_mode( VDPM_COUNTERSINK );       break;
+            default:                                                                                           break;
             }
         }
 
@@ -764,8 +765,8 @@ void PADSTACK::Serialize( google::protobuf::Any& aContainer ) const
                 CopperLayer( ALL_LAYERS ).thermal_spoke_angle.value().AsDegrees() );
     }
 
-    padstack.set_unconnected_layer_removal(
-            ToProtoEnum<PADSTACK::UNCONNECTED_LAYER_MODE, kiapi::board::types::UnconnectedLayerRemoval>( m_unconnectedLayerMode ) );
+    padstack.set_unconnected_layer_removal( ToProtoEnum<UNCONNECTED_LAYER_MODE,
+                                            kiapi::board::types::UnconnectedLayerRemoval>( m_unconnectedLayerMode ) );
 
     if( FrontOuterLayers().has_solder_mask.has_value() )
     {
@@ -1202,21 +1203,20 @@ PADSTACK::COPPER_LAYER_PROPS& PADSTACK::CopperLayer( PCB_LAYER_ID aLayer )
 
 const PADSTACK::COPPER_LAYER_PROPS& PADSTACK::CopperLayer( PCB_LAYER_ID aLayer ) const
 {
-    if( m_mode == MODE::NORMAL )
-        return m_copperProps.at( ALL_LAYERS );
-
     if( m_mode == MODE::FRONT_INNER_BACK )
     {
-        if( IsFrontLayer( aLayer ) )
+        if( IsFrontLayer( aLayer ) && m_copperProps.contains( F_Cu ) )
             return m_copperProps.at( F_Cu );
-        else if( IsBackLayer( aLayer ) )
+        else if( IsBackLayer( aLayer ) && m_copperProps.contains( B_Cu ) )
             return m_copperProps.at( B_Cu );
-        else
+        else if( m_copperProps.contains( INNER_LAYERS ) )
             return m_copperProps.at( INNER_LAYERS );
     }
-
-    if( m_copperProps.count( aLayer ) )
-        return m_copperProps.at( aLayer );
+    else if( m_mode == MODE::CUSTOM )
+    {
+        if( m_copperProps.count( aLayer ) )
+            return m_copperProps.at( aLayer );
+    }
 
     return m_copperProps.at( ALL_LAYERS );
 }
@@ -1246,7 +1246,11 @@ std::vector<PCB_LAYER_ID> PADSTACK::UniqueLayers() const
 {
     std::vector<PCB_LAYER_ID> layers;
 
-    ForEachUniqueLayer( [&]( PCB_LAYER_ID layer ) { layers.push_back( layer ); } );
+    ForEachUniqueLayer(
+            [&]( PCB_LAYER_ID layer )
+            {
+                layers.push_back( layer );
+            } );
 
     return layers;
 }
@@ -1284,8 +1288,16 @@ LSET PADSTACK::RelevantShapeLayers( const PADSTACK& aOther ) const
     }
     else
     {
-        ForEachUniqueLayer( [&]( PCB_LAYER_ID layer ) { layers.set( layer ); } );
-        aOther.ForEachUniqueLayer( [&]( PCB_LAYER_ID layer ) { layers.set( layer ); } );
+        ForEachUniqueLayer(
+                [&]( PCB_LAYER_ID layer )
+                {
+                    layers.set( layer );
+                } );
+        aOther.ForEachUniqueLayer(
+                [&]( PCB_LAYER_ID layer )
+                {
+                    layers.set( layer );
+                } );
     }
 
     return layers;
@@ -1295,11 +1307,9 @@ LSET PADSTACK::RelevantShapeLayers( const PADSTACK& aOther ) const
 std::optional<bool> PADSTACK::IsTented( PCB_LAYER_ID aSide ) const
 {
     if( IsFrontLayer( aSide ) )
-        return FrontOuterLayers().has_solder_mask.has_value() ?
-               std::optional<bool>( !FrontOuterLayers().has_solder_mask.value() ) : std::nullopt;
+        return FrontOuterLayers().has_solder_mask;
     else if( IsBackLayer( aSide ) )
-        return BackOuterLayers().has_solder_mask.has_value() ?
-               std::optional<bool>( !BackOuterLayers().has_solder_mask.value() ) : std::nullopt;
+        return BackOuterLayers().has_solder_mask;
     else
         return std::nullopt;
 }
@@ -1339,26 +1349,154 @@ std::optional<bool> PADSTACK::IsFilled() const
 }
 
 
+#define TEST( a, b ) { if( a != b ) return a - b; }
+
+
 int PADSTACK::Compare( const PADSTACK* aLeft, const PADSTACK* aRight )
 {
-    // TODO: Implement full comparison
-    if( aLeft == aRight )
-        return 0;
+    int diff;
 
-    return 1;
+    TEST( (int) aLeft->m_mode, (int) aRight->m_mode );
+
+    if( aLeft->m_layerSet != aRight->m_layerSet )
+        return aLeft->m_layerSet.Seq() < aRight->m_layerSet.Seq();
+
+    if( ( diff = aLeft->m_customName.Cmp( aRight->m_customName ) ) != 0 )
+        return diff;
+
+    TEST( aLeft->m_orientation.AsTenthsOfADegree(), aRight->m_orientation.AsTenthsOfADegree() );
+
+    if( ( diff = aLeft->m_frontMaskProps.Compare( aRight->m_frontMaskProps ) ) != 0 )
+        return diff;
+
+    if( ( diff = aLeft->m_backMaskProps.Compare( aRight->m_backMaskProps ) ) != 0 )
+        return diff;
+
+    TEST( (int) aLeft->m_unconnectedLayerMode, (int) aRight->m_unconnectedLayerMode );
+    TEST( (int) aLeft->m_customShapeInZoneMode, (int) aRight->m_customShapeInZoneMode );
+
+    if( ( diff = aLeft->m_drill.Compare( aRight->m_drill ) ) != 0 )
+        return diff;
+
+    if( ( diff = aLeft->m_secondaryDrill.Compare( aRight->m_secondaryDrill ) ) != 0 )
+        return diff;
+
+    if( ( diff = aLeft->m_tertiaryDrill.Compare( aRight->m_tertiaryDrill ) ) != 0 )
+        return diff;
+
+    if( ( diff = aLeft->m_frontPostMachining.Compare( aRight->m_frontPostMachining ) ) != 0 )
+        return diff;
+
+    if( ( diff = aLeft->m_backPostMachining.Compare( aRight->m_backPostMachining ) ) != 0 )
+        return diff;
+
+    aLeft->ForEachUniqueLayer(
+            [&]( PCB_LAYER_ID aLayer )
+            {
+                if( diff != 0 )     // we want to return the first non-matching layer
+                    return;
+
+                diff = aLeft->CopperLayer( aLayer ).Compare( aRight->CopperLayer( aLayer ) );
+            } );
+
+    if( diff != 0 )
+        return diff;
+
+    return 0;
+}
+
+
+bool PADSTACK::HasExplicitDefinitionForLayer( PCB_LAYER_ID aLayer ) const
+{
+    return m_copperProps.count( aLayer ) > 0;
 }
 
 
 double PADSTACK::Similarity( const PADSTACK& aOther ) const
 {
-    // TODO: Implement similarity
-    return 0.0;
+    double similarity = 1.0;
+
+    if( m_mode != aOther.m_mode )
+        similarity *= 0.9;
+
+    if( m_layerSet != aOther.m_layerSet )
+        similarity *= 0.9;
+
+    if( m_customName != aOther.m_customName )
+        similarity *= 0.9;
+
+    if( m_orientation != aOther.m_orientation )
+        similarity *= 0.9;
+
+    if( m_frontMaskProps != aOther.m_frontMaskProps )
+        similarity *= 0.9;
+
+    if( m_backMaskProps != aOther.m_backMaskProps )
+        similarity *= 0.9;
+
+    if( m_unconnectedLayerMode != aOther.m_unconnectedLayerMode )
+        similarity *= 0.9;
+
+    if( m_customShapeInZoneMode != aOther.m_customShapeInZoneMode )
+        similarity *= 0.9;
+
+    if( m_drill != aOther.m_drill )
+        similarity *= 0.9;
+
+    if( m_secondaryDrill != aOther.m_secondaryDrill )
+        similarity *= 0.9;
+
+    if( m_tertiaryDrill != aOther.m_tertiaryDrill )
+        similarity *= 0.9;
+
+    if( m_frontPostMachining != aOther.m_frontPostMachining )
+        similarity *= 0.9;
+
+    if( m_backPostMachining != aOther.m_backPostMachining )
+        similarity *= 0.9;
+
+    ForEachUniqueLayer(
+            [&]( PCB_LAYER_ID aLayer )
+            {
+                similarity *= CopperLayer( aLayer ).Similarity( aOther.CopperLayer( aLayer ) );
+            } );
+
+    return similarity;
 }
 
 
-void PADSTACK::FlipLayers( int aLayerCount )
+void PADSTACK::FlipLayers( BOARD* aBoard )
 {
-    // TODO: Implement FlipLayers
+    if( m_mode == MODE::FRONT_INNER_BACK )
+    {
+        std::unordered_map<PCB_LAYER_ID, COPPER_LAYER_PROPS> oldCopperProps = m_copperProps;
+        m_copperProps.clear();
+
+        m_copperProps[aBoard->FlipLayer( F_Cu )] = oldCopperProps[F_Cu];
+        m_copperProps[INNER_LAYERS] = oldCopperProps[INNER_LAYERS];
+        m_copperProps[aBoard->FlipLayer( B_Cu )] = oldCopperProps[B_Cu];
+    }
+    else if( m_mode == MODE::CUSTOM )
+    {
+        std::unordered_map<PCB_LAYER_ID, COPPER_LAYER_PROPS> oldCopperProps = m_copperProps;
+        m_copperProps.clear();
+
+        for( const auto& [layer, props] : oldCopperProps )
+            m_copperProps[aBoard->FlipLayer( layer )] = props;
+    }
+
+    std::swap( m_frontMaskProps, m_backMaskProps );
+
+    m_drill.start = aBoard->FlipLayer( m_drill.start );
+    m_drill.end = aBoard->FlipLayer( m_drill.end );
+
+    m_secondaryDrill.start = aBoard->FlipLayer( m_secondaryDrill.start );
+    m_secondaryDrill.end = aBoard->FlipLayer( m_secondaryDrill.end );
+
+    m_tertiaryDrill.start = aBoard->FlipLayer( m_tertiaryDrill.start );
+    m_tertiaryDrill.end = aBoard->FlipLayer( m_tertiaryDrill.end );
+
+    std::swap( m_frontPostMachining, m_backPostMachining );
 }
 
 
@@ -1381,14 +1519,14 @@ wxString PADSTACK::Name() const
 
 
 PADSTACK::SHAPE_PROPS::SHAPE_PROPS() :
-    shape( PAD_SHAPE::CIRCLE ),
-    anchor_shape( PAD_SHAPE::RECTANGLE ),
-    size( 0, 0 ),
-    offset( 0, 0 ),
-    round_rect_radius_ratio( 0.0 ),
-    chamfered_rect_ratio( 0.0 ),
-    chamfered_rect_positions( 0 ),
-    trapezoid_delta_size( 0, 0 )
+        shape( PAD_SHAPE::CIRCLE ),
+        anchor_shape( PAD_SHAPE::RECTANGLE ),
+        size( 0, 0 ),
+        offset( 0, 0 ),
+        round_rect_radius_ratio( 0.0 ),
+        chamfered_rect_ratio( 0.0 ),
+        chamfered_rect_positions( 0 ),
+        trapezoid_delta_size( 0, 0 )
 {
 }
 
@@ -1403,6 +1541,30 @@ bool PADSTACK::SHAPE_PROPS::operator==( const SHAPE_PROPS& aOther ) const
            chamfered_rect_ratio == aOther.chamfered_rect_ratio &&
            chamfered_rect_positions == aOther.chamfered_rect_positions &&
            trapezoid_delta_size == aOther.trapezoid_delta_size;
+}
+
+
+int PADSTACK::SHAPE_PROPS::Compare( const PADSTACK::SHAPE_PROPS& aOther ) const
+{
+    TEST( (int) shape, (int) aOther.shape );
+    TEST( (int) anchor_shape, (int) aOther.anchor_shape );
+    TEST( size.x, aOther.size.x );
+
+    if( shape != PAD_SHAPE::CIRCLE && ( shape != PAD_SHAPE::CUSTOM || anchor_shape != PAD_SHAPE::CIRCLE ) )
+        TEST( size.y, aOther.size.y );
+
+    TEST( offset.x, aOther.offset.x );
+    TEST( offset.y, aOther.offset.y );
+
+    if( abs( round_rect_radius_ratio - aOther.round_rect_radius_ratio ) > 0.0001 )
+        return round_rect_radius_ratio > aOther.round_rect_radius_ratio ? 1 : -1;
+
+    if( abs( chamfered_rect_ratio - aOther.chamfered_rect_ratio ) > 0.0001 )
+        return chamfered_rect_ratio > aOther.chamfered_rect_ratio ? 1 : -1;
+
+    TEST( chamfered_rect_positions, aOther.chamfered_rect_positions );
+
+    return 0;
 }
 
 
@@ -1423,6 +1585,78 @@ bool PADSTACK::COPPER_LAYER_PROPS::operator==( const COPPER_LAYER_PROPS& aOther 
 }
 
 
+double PADSTACK::COPPER_LAYER_PROPS::Similarity( const PADSTACK::COPPER_LAYER_PROPS& aOther ) const
+{
+    double similarity = 1.0;
+
+    if( shape != aOther.shape )
+        similarity *= 0.5;
+
+    if( zone_connection != aOther.zone_connection )
+        similarity *= 0.9;
+
+    if( thermal_spoke_width != aOther.thermal_spoke_width )
+        similarity *= 0.9;
+
+    if( thermal_spoke_angle != aOther.thermal_spoke_angle )
+        similarity *= 0.9;
+
+    if( thermal_gap != aOther.thermal_gap )
+        similarity *= 0.9;
+
+    if( clearance != aOther.clearance )
+        similarity *= 0.9;
+
+    if( custom_shapes != aOther.custom_shapes )
+        similarity *= 0.5;
+
+    return similarity;
+}
+
+
+#define TEST_OPT( a, b, v )                                           \
+        {                                                             \
+            if( a.has_value() != b.has_value() )                      \
+                return a.has_value() - b.has_value();                 \
+            if( (int) a.value_or( v ) - (int) b.value_or( v ) != 0 )  \
+                return (int) a.value_or( v ) - (int) b.value_or( v ); \
+        }
+
+#define TEST_OPT_ANGLE( a, b, v )                                                          \
+        {                                                                                  \
+            if( a.has_value() != b.has_value() )                                           \
+                return a.has_value() - b.has_value();                                      \
+            if( abs( a.value_or( v ).AsDegrees() - b.value_or( v ).AsDegrees() ) > 0.001 ) \
+                return a.value_or( v ).AsDegrees() > b.value_or( v ).AsDegrees() ? 1 : -1; \
+        }
+
+
+int PADSTACK::COPPER_LAYER_PROPS::Compare( const PADSTACK::COPPER_LAYER_PROPS& aOther ) const
+{
+    int diff;
+
+    if( ( diff = shape.Compare( aOther.shape ) ) != 0 )
+        return diff;
+
+    TEST_OPT( zone_connection, aOther.zone_connection, ZONE_CONNECTION::NONE );
+    TEST_OPT( thermal_spoke_width, aOther.thermal_spoke_width, 0 );
+    TEST_OPT_ANGLE( thermal_spoke_angle, aOther.thermal_spoke_angle, ANGLE_0 );
+    TEST_OPT( thermal_gap, aOther.thermal_gap, 0 );
+    TEST_OPT( clearance, aOther.clearance, 0 );
+
+    if( ( diff = (int) custom_shapes.size() - (int) aOther.custom_shapes.size() ) != 0 )
+        return diff;
+
+    for( int ii = 0; ii < (int) custom_shapes.size(); ++ii )
+    {
+        if( ( diff = custom_shapes[ii]->Compare( aOther.custom_shapes[ii].get() ) ) != 0 )
+            return diff;
+    }
+
+    return 0;
+}
+
+
 bool PADSTACK::MASK_LAYER_PROPS::operator==( const MASK_LAYER_PROPS& aOther ) const
 {
     return solder_mask_margin == aOther.solder_mask_margin &&
@@ -1432,6 +1666,25 @@ bool PADSTACK::MASK_LAYER_PROPS::operator==( const MASK_LAYER_PROPS& aOther ) co
            has_solder_paste == aOther.has_solder_paste &&
            has_covering == aOther.has_covering &&
            has_plugging == aOther.has_plugging;
+}
+
+
+int PADSTACK::MASK_LAYER_PROPS::Compare( const MASK_LAYER_PROPS& aOther ) const
+{
+    TEST_OPT( solder_mask_margin, aOther.solder_mask_margin, 0 );
+    TEST_OPT( solder_paste_margin, aOther.solder_paste_margin, 0 );
+
+    if( solder_paste_margin_ratio.has_value() != aOther.solder_paste_margin_ratio.has_value() )
+        return solder_paste_margin_ratio.has_value() - aOther.solder_paste_margin_ratio.has_value();
+    if( abs( solder_paste_margin_ratio.value_or( 0.0 ) - aOther.solder_paste_margin_ratio.value_or( 0.0 ) ) > 0.0001 )
+        return solder_paste_margin_ratio.value_or( 0.0 ) > aOther.solder_paste_margin_ratio.value_or( 0.0 ) ? 1 : -1;
+
+    TEST_OPT( has_solder_mask, aOther.has_solder_mask, false );
+    TEST_OPT( has_solder_paste, aOther.has_solder_paste, false );
+    TEST_OPT( has_covering, aOther.has_covering, false );
+    TEST_OPT( has_plugging, aOther.has_plugging, false );
+
+    return 0;
 }
 
 
@@ -1446,12 +1699,42 @@ bool PADSTACK::DRILL_PROPS::operator==( const DRILL_PROPS& aOther ) const
 }
 
 
+int PADSTACK::DRILL_PROPS::Compare( const DRILL_PROPS& aOther ) const
+{
+    TEST( (int) shape, (int) aOther.shape );
+
+    TEST( size.x, aOther.size.x );
+
+    if( shape != PAD_DRILL_SHAPE::CIRCLE )
+        TEST( size.y, aOther.size.y );
+
+    TEST( (int) start, (int) aOther.start );
+    TEST( (int) end, (int) aOther.end );
+
+    TEST_OPT( is_filled, aOther.is_filled, false );
+    TEST_OPT( is_capped, aOther.is_capped, false );
+
+    return 0;
+}
+
+
 bool PADSTACK::POST_MACHINING_PROPS::operator==( const POST_MACHINING_PROPS& aOther ) const
 {
     return mode == aOther.mode &&
            size == aOther.size &&
            depth == aOther.depth &&
            angle == aOther.angle;
+}
+
+
+int PADSTACK::POST_MACHINING_PROPS::Compare( const PADSTACK::POST_MACHINING_PROPS& aOther ) const
+{
+    TEST_OPT( mode, aOther.mode, PAD_DRILL_POST_MACHINING_MODE::UNKNOWN );
+    TEST( size, aOther.size );
+    TEST( depth, aOther.depth );
+    TEST( angle, aOther.angle );
+
+    return 0;
 }
 
 

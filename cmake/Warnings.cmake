@@ -157,8 +157,12 @@ if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
     CHECK_CXX_COMPILER_FLAG( "-Wmismatched-tags" COMPILER_SUPPORTS_WMISMATCHED_TAGS )
 
     if( COMPILER_SUPPORTS_WMISMATCHED_TAGS )
-        set( WARN_FLAGS_CXX "${WARN_FLAGS_CXX} -Wmismatched-tags" )
-        message( STATUS "Enabling warning -Wmismatched-tags" )
+        # This warning flag is not supported when using PCH and g++ according to
+        # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99642
+        if( NOT ( KICAD_USE_PCH AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" ) )
+            set( WARN_FLAGS_CXX "${WARN_FLAGS_CXX} -Wmismatched-tags" )
+            message( STATUS "Enabling warning -Wmismatched-tags" )
+        endif()
     endif()
 
     # Warn about improper move statements
@@ -182,6 +186,13 @@ if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
     if( COMPILER_SUPPORTS_WIMPLICIT_FLOAT_CONVERSION )
         # This one is different, it is used to guard warning removal for this inside the code
         set( HAVE_WIMPLICIT_FLOAT_CONVERSION true )
+    endif()
+
+    CHECK_CXX_COMPILER_FLAG( "-Wambiguous-conditional" COMPILER_SUPPORTS_WAMBIGUOUS_CONDITIONAL )
+
+    # Add this to match MSVC's warning about ambiguous conditionals
+    if( COMPILER_SUPPORTS_WAMBIGUOUS_CONDITIONAL )
+        set( WARN_FLAGS_CXX "${WARN_FLAGS_CXX} -Wambiguous-conditional" )
     endif()
 
     # See if the compiler will throw warnings on these conversions

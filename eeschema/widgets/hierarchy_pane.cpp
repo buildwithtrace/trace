@@ -74,24 +74,10 @@ HIERARCHY_PANE::HIERARCHY_PANE( SCH_EDIT_FRAME* aParent ) :
     SetSizer( sizer );
     m_tree = new HIERARCHY_TREE( this );
 
-#ifdef __WXMAC__
-    // HiDPI-aware API; will be generally available in wxWidgets 3.4
     wxVector<wxBitmapBundle> images;
     images.push_back( KiBitmapBundle( BITMAPS::tree_nosel ) );
     images.push_back( KiBitmapBundle( BITMAPS::tree_sel ) );
     m_tree->SetImages( images );
-#else
-    // Make an image list containing small icons
-    // All icons are expected having the same size.
-    wxBitmap tree_nosel_bm( KiBitmap( BITMAPS::tree_nosel ) );
-    wxImageList* imageList = new wxImageList( tree_nosel_bm.GetWidth(), tree_nosel_bm.GetHeight(),
-                                              true, 2 );
-
-    imageList->Add( tree_nosel_bm );
-    imageList->Add( KiBitmap( BITMAPS::tree_sel ) );
-
-    m_tree->AssignImageList( imageList );
-#endif
 
     sizer->Add( m_tree, 1, wxEXPAND, wxBORDER_NONE );
 
@@ -246,6 +232,11 @@ void HIERARCHY_PANE::UpdateHierarchySelection()
 void HIERARCHY_PANE::UpdateHierarchyTree( bool aClear )
 {
     wxWindowUpdateLocker updateLock( this );
+
+    // If hierarchy hasn't been built yet (e.g., during frame construction before schematic
+    // is loaded), just return. The tree will be updated later when the schematic is loaded.
+    if( !m_frame->Schematic().HasHierarchy() )
+        return;
 
     bool eventsWereBound = m_events_bound;
 
@@ -567,12 +558,21 @@ void HIERARCHY_PANE::onRightClick( wxTreeItemId aItem )
 
                 newScreen->SetFileName( filename );
 
-                // Calculate the next page number
-                int nextPage = m_frame->Schematic().GetTopLevelSheets().size() + 1;
-                newScreen->SetPageNumber( wxString::Format( "%d", nextPage ) );
+                // Find the lowest unused page number
+                SCH_SHEET_LIST hierarchy = m_frame->Schematic().Hierarchy();
+                int            nextPage = 1;
+                wxString       pageStr;
 
-                // Add to schematic
+                do
+                {
+                    pageStr = wxString::Format( "%d", nextPage++ );
+                } while( hierarchy.PageNumberExists( pageStr ) );
+
                 m_frame->Schematic().AddTopLevelSheet( newSheet );
+
+                SCH_SHEET_PATH newSheetPath;
+                newSheetPath.push_back( newSheet );
+                newSheetPath.SetPageNumber( pageStr );
 
                 commit.Push( _( "Add new top-level sheet" ) );
 
@@ -635,10 +635,20 @@ void HIERARCHY_PANE::onRightClick( wxTreeItemId aItem )
         if( dlg.ShowModal() == wxID_OK && dlg.GetValue() != itemData->m_SheetPath.GetPageNumber() )
         {
             SCH_COMMIT commit( m_frame );
-            SCH_SHEET_PATH parentPath = itemData->m_SheetPath;
-            parentPath.pop_back();
+            SCH_SCREEN* modifyScreen = nullptr;
 
-            commit.Modify( itemData->m_SheetPath.Last(), parentPath.LastScreen() );
+            if( itemData->m_SheetPath.size() == 1 )
+            {
+                modifyScreen = m_frame->Schematic().Root().GetScreen();
+            }
+            else
+            {
+                SCH_SHEET_PATH parentPath = itemData->m_SheetPath;
+                parentPath.pop_back();
+                modifyScreen = parentPath.LastScreen();
+            }
+
+            commit.Modify( itemData->m_SheetPath.Last(), modifyScreen );
 
             itemData->m_SheetPath.SetPageNumber( dlg.GetValue() );
 

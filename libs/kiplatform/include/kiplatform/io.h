@@ -21,6 +21,7 @@
 #define KIPLATFORM_IO_H_
 
 #include <stdio.h>
+#include <cstddef>
 
 class wxString;
 class wxFileName;
@@ -29,6 +30,15 @@ namespace KIPLATFORM
 {
 namespace IO
 {
+    /**
+     * Buffer size for file I/O operations on cloud-synced folders.
+     *
+     * Cloud sync services like Google Drive, OneDrive, and Dropbox can report stale file sizes
+     * during seek operations immediately after writing. Using a 512KB buffer reduces the number
+     * of I/O operations and allows the cloud sync driver to flush data more reliably before
+     * subsequent reads. This value was determined empirically to eliminate sync issues.
+     */
+    static constexpr size_t CLOUD_SYNC_BUFFER_SIZE = 512 * 1024;
     /**
      * Opens the file like fopen but sets flags (if available) for sequential read hinting.
      * Only use this variant of fopen if the file is truely going to be read sequentially only
@@ -65,6 +75,16 @@ namespace IO
      * This is a no-op on non-Windows platforms.
      */
     void LongPathAdjustment( wxFileName& aFilename );
+
+    /**
+     * Computes a hash of modification times and sizes for files matching a pattern.
+     * Used for cache invalidation by detecting changes to library directories.
+     *
+     * @param aDirPath  Directory to search
+     * @param aFilespec Wildcard pattern to match (e.g. "*.kicad_mod")
+     * @return Hash value that changes when any matching file is modified
+     */
+    long long TimestampDir( const wxString& aDirPath, const wxString& aFilespec );
 } // namespace IO
 } // namespace KIPLATFORM
 

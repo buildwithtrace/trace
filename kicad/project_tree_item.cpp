@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,14 +29,20 @@
 
 
 #include <wx/regex.h>
+#include <wx/textfile.h>
+#include <wx/filename.h>
+
+#include <set>
 
 #include <confirm.h>
+#include <mail_type.h>
 #include <gestfich.h>
 #include <kiplatform/environment.h>
 #include <kiplatform/io.h>
 #include <kiway.h>
 #include <tool/tool_manager.h>
 #include <tools/kicad_manager_actions.h>
+#include <wildcards_and_files_ext.h>
 #include <wx/msgdlg.h>
 
 #include "kicad_manager_frame.h"
@@ -80,8 +87,10 @@ bool PROJECT_TREE_ITEM::CanDelete() const
         || m_type == TREE_FILE_TYPE::JSON_PROJECT
         || m_type == TREE_FILE_TYPE::LEGACY_SCHEMATIC
         || m_type == TREE_FILE_TYPE::SEXPR_SCHEMATIC
+        || m_type == TREE_FILE_TYPE::TRACE_SCHEMATIC
         || m_type == TREE_FILE_TYPE::LEGACY_PCB
         || m_type == TREE_FILE_TYPE::SEXPR_PCB
+        || m_type == TREE_FILE_TYPE::TRACE_PCB
         || m_type == TREE_FILE_TYPE::DRAWING_SHEET
         || m_type == TREE_FILE_TYPE::FOOTPRINT_FILE
         || m_type == TREE_FILE_TYPE::SCHEMATIC_LIBFILE
@@ -129,9 +138,9 @@ bool PROJECT_TREE_ITEM::Rename( const wxString& name, bool check )
 
     if( check && !ext.IsEmpty() && !newFile.Lower().EndsWith( full_ext ) )
     {
-        wxMessageDialog dialog( m_parent, _( "Changing file extension will change file type.\n"
-                                             "Do you want to continue ?" ),
-                                _( "Rename File" ), wxYES_NO | wxICON_QUESTION );
+        KICAD_MESSAGE_DIALOG dialog( m_parent, _( "Changing file extension will change file type.\n"
+                                                  "Do you want to continue ?" ),
+                                     _( "Rename File" ), wxYES_NO | wxICON_QUESTION );
 
         if( wxID_YES != dialog.ShowModal() )
             return false;
@@ -139,8 +148,8 @@ bool PROJECT_TREE_ITEM::Rename( const wxString& name, bool check )
 
     if( !wxRenameFile( GetFileName(), newFile, false ) )
     {
-        wxMessageDialog( m_parent, _( "Unable to rename file ... " ), _( "Permission denied" ),
-                         wxICON_ERROR | wxOK );
+        KICAD_MESSAGE_DIALOG( m_parent, _( "Unable to rename file ... " ), _( "Permission denied" ),
+                              wxICON_ERROR | wxOK );
         return false;
     }
 
@@ -170,6 +179,56 @@ void PROJECT_TREE_ITEM::Delete()
     }
 
     m_parent->Delete( GetId() );
+}
+
+
+/**
+ * Scan a schematic file hierarchy to collect all sheet file paths.
+ *
+ * This performs a lightweight text scan of schematic files to find sheet references
+ * without fully loading the schematic. Used to determine if a file is part of the
+ * project hierarchy before deciding how to open it.
+ *
+ * @param aRootSchematic Full path to the root schematic file
+ * @param aSheetFiles Set to populate with all schematic file paths in the hierarchy
+ */
+static void ScanSchematicHierarchy( const wxString& aRootSchematic,
+                                    std::set<wxString>& aSheetFiles )
+{
+    if( aSheetFiles.count( aRootSchematic ) )
+        return;
+
+    aSheetFiles.insert( aRootSchematic );
+
+    wxTextFile file;
+
+    if( !file.Open( aRootSchematic ) )
+        return;
+
+    wxFileName rootFn( aRootSchematic );
+    wxString   rootDir = rootFn.GetPath();
+
+    // Look for: (property "Sheetfile" "filename.kicad_sch"
+    wxRegEx sheetfileRe( "\\(property\\s+\"Sheetfile\"\\s+\"([^\"]+)\"" );
+
+    for( wxString line = file.GetFirstLine(); !file.Eof(); line = file.GetNextLine() )
+    {
+        if( sheetfileRe.Matches( line ) )
+        {
+            wxString sheetFile = sheetfileRe.GetMatch( line, 1 );
+
+            // Resolve relative path
+            wxFileName sheetFn( sheetFile );
+
+            if( !sheetFn.IsAbsolute() )
+                sheetFn.MakeAbsolute( rootDir );
+
+            wxString fullPath = sheetFn.GetFullPath();
+
+            if( wxFileExists( fullPath ) )
+                ScanSchematicHierarchy( fullPath, aSheetFiles );
+        }
+    }
 }
 
 
@@ -204,12 +263,79 @@ void PROJECT_TREE_ITEM::Activate( PROJECT_TREE_PANE* aTreePrjFrame )
 
     case TREE_FILE_TYPE::LEGACY_SCHEMATIC:
     case TREE_FILE_TYPE::SEXPR_SCHEMATIC:
-        // Schematics not part of the project are opened in a separate process.
-        if( fullFileName == frame->SchFileName() || fullFileName == frame->SchLegacyFileName() )
-            toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editSchematic );
-        else
-            toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherSch, &fullFileName );
+    {
+        wxString rootSchematic = frame->SchFileName();
 
+        if( rootSchematic.IsEmpty() )
+            rootSchematic = frame->SchLegacyFileName();
+
+        if( fullFileName == rootSchematic )
+        {
+            toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editSchematic );
+        }
+        else
+        {
+            // Check if this file is part of the project hierarchy by scanning the schematic files
+            std::set<wxString> hierarchyFiles;
+
+            if( !rootSchematic.IsEmpty() && wxFileExists( rootSchematic ) )
+                ScanSchematicHierarchy( rootSchematic, hierarchyFiles );
+
+            bool isInHierarchy = hierarchyFiles.count( fullFileName ) > 0;
+
+            if( isInHierarchy )
+            {
+                // Open root schematic and navigate to the target sheet
+                KIWAY_PLAYER* schFrame = kiway.Player( FRAME_SCH, false );
+
+                if( !schFrame )
+                {
+                    // Launch eeschema with the root schematic
+                    toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editSchematic );
+                    schFrame = kiway.Player( FRAME_SCH, false );
+                }
+
+                if( schFrame )
+                {
+                    packet = fullFileName.ToStdString();
+                    kiway.ExpressMail( FRAME_SCH, MAIL_SCH_NAVIGATE_TO_SHEET, packet );
+                }
+            }
+            else
+            {
+                // Not in hierarchy, open as standalone schematic
+                toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherSch, &fullFileName );
+            }
+        }
+
+        break;
+    }
+
+    case TREE_FILE_TYPE::TRACE_SCHEMATIC:
+        // Convert trace_sch path to kicad_sch and open it
+        {
+            wxFileName kicadSchFile( fullFileName );
+            kicadSchFile.SetExt( FILEEXT::KiCadSchematicFileExtension );
+            wxString kicadSchPath = kicadSchFile.GetFullPath();
+            
+            // If kicad_sch doesn't exist, convert from trace_sch
+            if( !wxFileName::FileExists( kicadSchPath ) && wxFileName::FileExists( fullFileName ) )
+            {
+                if( !ConvertTraceSchToKicadSch( fullFileName ) )
+                {
+                    wxMessageBox( wxString::Format( _( "Failed to convert %s to %s" ),
+                                                    fullFileName, kicadSchPath ),
+                                 _( "Conversion Error" ), wxOK | wxICON_ERROR, frame );
+                    break;
+                }
+            }
+            
+            // Open the corresponding kicad_sch file
+            if( kicadSchPath == frame->SchFileName() || kicadSchPath == frame->SchLegacyFileName() )
+                toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editSchematic );
+            else
+                toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherSch, &kicadSchPath );
+        }
         break;
 
     case TREE_FILE_TYPE::LEGACY_PCB:
@@ -220,6 +346,21 @@ void PROJECT_TREE_ITEM::Activate( PROJECT_TREE_PANE* aTreePrjFrame )
         else
             toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherPCB, &fullFileName );
 
+        break;
+
+    case TREE_FILE_TYPE::TRACE_PCB:
+        // Convert trace_pcb path to kicad_pcb and open it
+        {
+            wxFileName kicadPcbFile( fullFileName );
+            kicadPcbFile.SetExt( FILEEXT::KiCadPcbFileExtension );
+            wxString kicadPcbPath = kicadPcbFile.GetFullPath();
+            
+            // Open the corresponding kicad_pcb file
+            if( kicadPcbPath == frame->PcbFileName() || kicadPcbPath == frame->PcbLegacyFileName() )
+                toolMgr->RunAction( KICAD_MANAGER_ACTIONS::editPCB );
+            else
+                toolMgr->RunAction<wxString*>( KICAD_MANAGER_ACTIONS::editOtherPCB, &kicadPcbPath );
+        }
         break;
 
     case TREE_FILE_TYPE::GERBER:

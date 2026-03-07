@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2014 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -45,6 +46,7 @@
 #include <kiway.h>
 #include <build_version.h>
 #include <pgm_base.h>
+#include <app_monitor.h>
 #include <kiway_player.h>
 #include <macros.h>
 #include <confirm.h>
@@ -56,6 +58,8 @@
 
 #include <kiplatform/app.h>
 #include <kiplatform/environment.h>
+#include <auth/auth_manager.h>
+#include <amplitude_client.h>
 
 #include <git2.h>
 #include <thread_pool.h>
@@ -87,6 +91,9 @@ static struct PGM_SINGLE_TOP : public PGM_BASE
 
     void OnPgmExit()
     {
+        AMPLITUDE_CLIENT::Instance().Track( "editor_closed" );
+        AMPLITUDE_CLIENT::Destroy();
+
         // Abort and wait on any background jobs
         GetKiCadThreadPool().purge();
         GetKiCadThreadPool().wait();
@@ -211,9 +218,38 @@ struct APP_SINGLE_TOP : public wxApp
         // Otherwise the Html text is displayed as plain text.
         HtmlModule html_init;
 
+#if defined( __WXMSW__ )
+        // On Windows, check if we were launched with a trace:// URL (auth callback)
+        for( int i = 1; i < this->argc; ++i )
+        {
+            wxString arg = this->argv[i];
+            if( arg.StartsWith( wxT( "trace://" ) ) )
+            {
+                wxSetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), arg );
+                break;
+            }
+        }
+#endif
+
         try
         {
-            return program.OnPgmInit();
+            if( !program.OnPgmInit() )
+            {
+                program.OnPgmExit();
+                return false;
+            }
+
+#if defined( __WXMSW__ )
+            // Handle any pending auth callback
+            wxString authCallbackUrl;
+            if( wxGetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), &authCallbackUrl ) )
+            {
+                wxUnsetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ) );
+                AUTH_MANAGER::Instance().HandleURLCallback( authCallbackUrl );
+            }
+#endif
+
+            return true;
         }
         catch( ... )
         {
@@ -278,6 +314,11 @@ struct APP_SINGLE_TOP : public wxApp
         return Event_Skip;
     }
 
+    void OnUnhandledException() override
+    {
+        Pgm().HandleException( std::current_exception(), true );
+    }
+
 #if defined( DEBUG )
     /**
      * Override main loop exception handling on debug builds.
@@ -313,6 +354,41 @@ struct APP_SINGLE_TOP : public wxApp
     void MacOpenFile( const wxString& aFileName ) override
     {
         Pgm().MacOpenFile( aFileName );
+    }
+    
+    /**
+     * Handle custom URL scheme callbacks (trace://auth).
+     * Used for OAuth authentication flow on macOS.
+     */
+    void MacOpenURL( const wxString& aURL ) override
+    {
+        if( aURL.StartsWith( wxT( "trace://auth" ) ) )
+        {
+            bool result = AUTH_MANAGER::Instance().HandleURLCallback( aURL );
+
+            if( result )
+            {
+                CallAfter( [this]()
+                {
+                    wxWindow* top = GetTopWindow();
+                    if( top )
+                    {
+                        top->Raise();
+                        if( auto* tlw = dynamic_cast<wxTopLevelWindow*>( top ) )
+                            tlw->RequestUserAttention();
+                    }
+                } );
+            }
+        }
+        else
+        {
+            CallAfter( [this]()
+            {
+                wxWindow* top = GetTopWindow();
+                if( top )
+                    top->Raise();
+            } );
+        }
     }
 
 #endif
@@ -392,6 +468,31 @@ bool PGM_SINGLE_TOP::OnPgmInit()
     // Create the API server thread once the app event loop exists
     m_api_server = std::make_unique<KICAD_API_SERVER>();
 #endif
+
+    // Restore authentication session from keychain before creating any frames
+    // This ensures the Account menu shows the correct state
+    AUTH_MANAGER::Instance().TryRestoreSession();
+
+    // Initialize Amplitude analytics for standalone editors
+    AMPLITUDE_CLIENT::Instance().Init( AMPLITUDE_API_KEY );
+    if( AUTH_MANAGER::Instance().IsAuthenticated() )
+    {
+        AUTH_USER user = AUTH_MANAGER::Instance().GetCurrentUser();
+        AMPLITUDE_CLIENT::Instance().SetUserId( user.id.ToStdString() );
+        AMPLITUDE_CLIENT::Instance().SetUserProperties( {
+            { "email", user.email.ToStdString() }
+        } );
+    }
+    AMPLITUDE_CLIENT::Instance().Track( "editor_opened", {
+        { "authenticated", AUTH_MANAGER::Instance().IsAuthenticated() },
+#ifdef __WXMAC__
+        { "platform", "macos" },
+#elif defined( _WIN32 )
+        { "platform", "windows" },
+#else
+        { "platform", "linux" },
+#endif
+    } );
 
     // Use KIWAY to create a top window, which registers its existence also.
     // "TOP_FRAME" is a macro that is passed on compiler command line from CMake,

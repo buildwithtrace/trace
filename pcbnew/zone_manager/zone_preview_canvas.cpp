@@ -123,6 +123,13 @@ ZONE_PREVIEW_CANVAS::ZONE_PREVIEW_CANVAS( BOARD* aPcb, ZONE* aZone, PCB_LAYER_ID
 
     ShowScrollbars( wxSHOW_SB_NEVER, wxSHOW_SB_NEVER );
 
+    Bind( wxEVT_SIZE,
+          [this]( wxSizeEvent& aEvent )
+          {
+              ZoomFitScreen();
+              aEvent.Skip();
+          } );
+
     StartDrawing();
     RequestRefresh();
 }
@@ -161,7 +168,7 @@ const wxSize ZONE_PREVIEW_CANVAS::GetPageSizeIU() const
 
 void ZONE_PREVIEW_CANVAS::ZoomFitScreen()
 {
-    BOX2I bBox = GetDocumentExtents();
+    BOX2I bBox = GetDocumentExtents( false );
     BOX2I defaultBox = GetDefaultViewBBox();
 
     m_view->SetScale( 1.0 );

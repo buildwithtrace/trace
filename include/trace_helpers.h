@@ -122,7 +122,7 @@ extern KICOMMON_API const wxChar* const traceSchPlugin;
 extern KICOMMON_API const wxChar* const traceSchLegacyPlugin;
 
 /**
- * Flag to enable GEDA PCB plugin debug output.
+ * Flag to enable KiCad PCB plugin debug output.
  *
  * Use "KICAD_PCB_PLUGIN" to enable.
  */
@@ -337,6 +337,13 @@ extern KICOMMON_API const wxChar* const traceLibraries;
  * Use "KICAD_SCH_MOVE" to enable.
  */
 extern KICOMMON_API const wxChar* const traceSchMove;
+
+/**
+ * Flag to enable tracing of circular symbol inheritance detection.
+ *
+ * Use "KICAD_SYMBOL_INHERITANCE" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceSymbolInheritance;
 
 ///@}
 

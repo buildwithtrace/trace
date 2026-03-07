@@ -52,10 +52,13 @@ std::string SPICE_GENERATOR_SOURCE::TunerCommand( const SPICE_ITEM& aItem, doubl
     {
     case SIM_MODEL::TYPE::V: // VDC/IDC: it is clear which parameter should be used
     case SIM_MODEL::TYPE::I:
-        result = fmt::format( "alter @{}={:g}", aItem.model->SpiceGenerator().ItemName( aItem ),
+        result = fmt::format( "alter @{}={:g}",
+                              aItem.model->SpiceGenerator().ItemName( aItem ),
                               aValue );
         break;
-    default: break; // other sources: unclear which parameter the user wants
+
+    default:
+        break; // other sources: unclear which parameter the user wants
     }
     return result;
 }
@@ -104,8 +107,7 @@ std::string SPICE_GENERATOR_SOURCE::ItemLine( const SPICE_ITEM& aItem ) const
             try
             {
                 root = tao::pegtl::parse_tree::parse<SIM_MODEL_SOURCE_PARSER::pwlValuesGrammar,
-                                                     SIM_MODEL_SOURCE_PARSER::pwlValuesSelector>
-                    ( in );
+                                                     SIM_MODEL_SOURCE_PARSER::pwlValuesSelector>( in );
             }
             catch( const tao::pegtl::parse_error& )
             {
@@ -833,60 +835,6 @@ std::vector<SIM_MODEL::PARAM::INFO> SIM_MODEL_SOURCE::makePwlParamInfos( const s
     paramInfo.description = aUnit == "V" ? "Time-voltage points" : "Time-current points";
     paramInfos.push_back( paramInfo );
 
-    // TODO: Ngspice doesn't support "td" and "r" for current sources, so let's disable that for
-    // now.
-
-    /*paramInfo.name = "td";
-    paramInfo.type = SIM_VALUE::TYPE_FLOAT;
-    paramInfo.unit = "s";
-    paramInfo.category = SIM_MODEL::PARAM::CATEGORY::PRINCIPAL;
-    paramInfo.defaultValue = "0";
-    paramInfo.description = aUnit == "V" ? "Time-voltage points" : "Time-current points";
-    paramInfo.isSpiceInstanceParam = true;
-    paramInfos.push_back( paramInfo );
-
-    paramInfo.name = "repeat";
-    paramInfo.type = SIM_VALUE::TYPE_BOOL;
-    paramInfo.unit = "";
-    paramInfo.category = SIM_MODEL::PARAM::CATEGORY::PRINCIPAL;
-    paramInfo.defaultValue = "0";
-    paramInfo.description = "Repeat forever";
-    paramInfo.isSpiceInstanceParam = true;
-    paramInfo.spiceInstanceName = "r";
-    paramInfos.push_back( paramInfo );*/
-
-    /*paramInfo.name = "t";
-    paramInfo.type = SIM_VALUE::TYPE_FLOAT_VECTOR;
-    paramInfo.unit = "s";
-    paramInfo.category = SIM_MODEL::PARAM::CATEGORY::PRINCIPAL;
-    paramInfo.defaultValue = "";
-    paramInfo.description = "Time vector";
-    paramInfos.push_back( paramInfo );
-
-    paramInfo.name = aPrefix;
-    paramInfo.type = SIM_VALUE::TYPE_FLOAT_VECTOR;
-    paramInfo.unit = aUnit;
-    paramInfo.category = SIM_MODEL::PARAM::CATEGORY::PRINCIPAL;
-    paramInfo.defaultValue = "";
-    paramInfo.description = aQuantity + " vector";
-    paramInfos.push_back( paramInfo );
-
-    paramInfo.name = "repeat";
-    paramInfo.type = SIM_VALUE::TYPE_BOOL;
-    paramInfo.unit = "";
-    paramInfo.category = SIM_MODEL::PARAM::CATEGORY::PRINCIPAL;
-    paramInfo.defaultValue = "";
-    paramInfo.description = "Repeat forever";
-    paramInfos.push_back( paramInfo );
-
-    paramInfo.name = "td";
-    paramInfo.type = SIM_VALUE::TYPE_FLOAT;
-    paramInfo.unit = "s";
-    paramInfo.category = SIM_MODEL::PARAM::CATEGORY::PRINCIPAL;
-    paramInfo.defaultValue = "0";
-    paramInfo.description = "Delay";
-    paramInfos.push_back( paramInfo );*/
-
     appendAcParamInfos( paramInfos, aUnit );
     appendSpParamInfos( paramInfos, aUnit );
     return paramInfos;
@@ -1228,8 +1176,11 @@ const SIM_MODEL::PARAM* SIM_MODEL_SOURCE::GetTunerParam() const
     switch( GetType() )
     {
     case SIM_MODEL::TYPE::V: // VDC/IDC: it is clear which parameter should be used
-    case SIM_MODEL::TYPE::I: return &GetParam( 0 ); break;
-    default: break; // other sources: unclear which parameter the user wants
+    case SIM_MODEL::TYPE::I:
+        return &GetParam( 0 );
+
+    default:
+        break; // other sources: unclear which parameter the user wants
     }
     return nullptr;
 }

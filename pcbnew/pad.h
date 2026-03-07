@@ -219,7 +219,7 @@ public:
     /**
      * @return the option for the custom pad shape to use as clearance area in copper zones.
      */
-    PADSTACK::CUSTOM_SHAPE_ZONE_MODE GetCustomShapeInZoneOpt() const
+    CUSTOM_SHAPE_ZONE_MODE GetCustomShapeInZoneOpt() const
     {
         return m_padStack.CustomShapeInZoneMode();
     }
@@ -229,7 +229,7 @@ public:
      *
      * @param aOption is the clearance area shape CUST_PAD_SHAPE_IN_ZONE option
      */
-    void SetCustomShapeInZoneOpt( PADSTACK::CUSTOM_SHAPE_ZONE_MODE aOption )
+    void SetCustomShapeInZoneOpt( CUSTOM_SHAPE_ZONE_MODE aOption )
     {
         m_padStack.SetCustomShapeInZoneMode( aOption );
     }
@@ -242,9 +242,8 @@ public:
      */
     void SetAnchorPadShape( PCB_LAYER_ID aLayer, PAD_SHAPE aShape )
     {
-        m_padStack.SetAnchorShape( aShape == PAD_SHAPE::RECTANGLE
-                                   ? PAD_SHAPE::RECTANGLE
-                                   : PAD_SHAPE::CIRCLE,
+        m_padStack.SetAnchorShape( aShape == PAD_SHAPE::RECTANGLE ? PAD_SHAPE::RECTANGLE
+                                                                  : PAD_SHAPE::CIRCLE,
                                    aLayer );
         SetDirty();
     }
@@ -263,6 +262,11 @@ public:
         SetDirty();
     }
     const VECTOR2I& GetSize( PCB_LAYER_ID aLayer ) const { return m_padStack.Size( aLayer ); }
+
+    bool HasExplicitDefinitionForLayer( PCB_LAYER_ID aLayer ) const
+    {
+        return m_padStack.HasExplicitDefinitionForLayer( aLayer );
+    }
 
     // These accessors are for the properties panel, which does not have the ability to deal with
     // custom padstacks where the properties can vary by layer.  The properties should be disabled
@@ -552,7 +556,7 @@ public:
         m_polyDirty[ERROR_OUTSIDE] = true;
     }
 
-    void SetLayerSet( const LSET& aLayers ) override   { m_padStack.SetLayerSet( aLayers ); SetDirty(); }
+    void SetLayerSet( const LSET& aLayers ) override;
     LSET GetLayerSet() const override           { return m_padStack.LayerSet(); }
 
     void SetAttribute( PAD_ATTRIB aAttribute );
@@ -567,6 +571,8 @@ public:
     {
         return ( m_padStack.LayerSet() & LSET::AllCuMask() ).none();
     }
+
+    bool IsNPTHWithNoCopper() const;
 
     void SetPadToDieLength( int aLength )       { m_lengthPadToDie = aLength; }
     int GetPadToDieLength() const               { return m_lengthPadToDie; }
@@ -845,13 +851,13 @@ public:
      */
     void SetRemoveUnconnected( bool aSet )
     {
-        m_padStack.SetUnconnectedLayerMode( aSet ? PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL
-                                                 : PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL );
+        m_padStack.SetUnconnectedLayerMode( aSet ? UNCONNECTED_LAYER_MODE::REMOVE_ALL
+                                                 : UNCONNECTED_LAYER_MODE::KEEP_ALL );
     }
 
     bool GetRemoveUnconnected() const
     {
-        return m_padStack.UnconnectedLayerMode() != PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL;
+        return m_padStack.UnconnectedLayerMode() != UNCONNECTED_LAYER_MODE::KEEP_ALL;
     }
 
     /**
@@ -860,21 +866,21 @@ public:
      */
     void SetKeepTopBottom( bool aSet )
     {
-        m_padStack.SetUnconnectedLayerMode( aSet ? PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END
-                                                 : PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL );
+        m_padStack.SetUnconnectedLayerMode( aSet ? UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END
+                                                 : UNCONNECTED_LAYER_MODE::REMOVE_ALL );
     }
 
     bool GetKeepTopBottom() const
     {
-        return m_padStack.UnconnectedLayerMode() == PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END;
+        return m_padStack.UnconnectedLayerMode() == UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END;
     }
 
-    void SetUnconnectedLayerMode( PADSTACK::UNCONNECTED_LAYER_MODE aMode )
+    void SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE aMode )
     {
         m_padStack.SetUnconnectedLayerMode( aMode );
     }
 
-    PADSTACK::UNCONNECTED_LAYER_MODE GetUnconnectedLayerMode() const
+    UNCONNECTED_LAYER_MODE GetUnconnectedLayerMode() const
     {
         return m_padStack.UnconnectedLayerMode();
     }
@@ -883,14 +889,14 @@ public:
     {
         switch( m_padStack.UnconnectedLayerMode() )
         {
-        case PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL:
+        case UNCONNECTED_LAYER_MODE::KEEP_ALL:
             return false;
 
-        case PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL:
+        case UNCONNECTED_LAYER_MODE::REMOVE_ALL:
             return true;
 
-        case PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END:
-        case PADSTACK::UNCONNECTED_LAYER_MODE::START_END_ONLY:
+        case UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END:
+        case UNCONNECTED_LAYER_MODE::START_END_ONLY:
             return aLayer != m_padStack.Drill().start && aLayer != m_padStack.Drill().end;
         }
 

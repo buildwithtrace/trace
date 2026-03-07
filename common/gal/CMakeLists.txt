@@ -88,12 +88,22 @@ include( ${KICAD_CMAKE_MODULE_PATH}/KiCadVersion.cmake )
 include( ${KICAD_CMAKE_MODULE_PATH}/CreateGitVersionHeader.cmake )
 create_git_version_header(${CMAKE_SOURCE_DIR})
 
+message(STATUS "KICAD_VERSION before regex: '${KICAD_VERSION}'")
+
 # Extract the major and minor build version as a string
 string( REGEX MATCH
         "([0-9]+)\\.([0-9]+)\\.([0-9]+)"
         KICAD_MAJOR_MINOR_PATCH_VERSION
         "${KICAD_VERSION}"
     )
+
+message(STATUS "KICAD_MAJOR_MINOR_PATCH_VERSION after regex: '${KICAD_MAJOR_MINOR_PATCH_VERSION}'")
+
+# Fallback if regex didn't match
+if(NOT KICAD_MAJOR_MINOR_PATCH_VERSION OR KICAD_MAJOR_MINOR_PATCH_VERSION STREQUAL "")
+    set(KICAD_MAJOR_MINOR_PATCH_VERSION "1.0.0")
+    message(WARNING "Could not extract version from KICAD_VERSION, using fallback: ${KICAD_MAJOR_MINOR_PATCH_VERSION}")
+endif()
 
 set_target_properties( gal PROPERTIES
     OUTPUT_NAME     kigal
@@ -144,3 +154,5 @@ add_shader( gal smaa_pass_2_frag.glsl glsl_smaa_pass_2_frag )
 add_shader( gal smaa_pass_2_vert.glsl glsl_smaa_pass_2_vert )
 add_shader( gal smaa_pass_3_frag.glsl glsl_smaa_pass_3_frag )
 add_shader( gal smaa_pass_3_vert.glsl glsl_smaa_pass_3_vert )
+add_shader( gal xor_diff_frag.glsl glsl_xor_diff_frag )
+add_shader( gal xor_diff_vert.glsl glsl_xor_diff_vert )

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013-2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -163,7 +164,6 @@ TOOL_ACTION PCB_ACTIONS::drawBezier( TOOL_ACTION_ARGS()
 TOOL_ACTION PCB_ACTIONS::placeBarcode( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.barcode" )
         .Scope( AS_GLOBAL )
-        .DefaultHotkey( MD_SHIFT + MD_CTRL + 'B' )
         .LegacyHotkeyName( "Add Barcode" )
         .FriendlyName( _( "Add Barcode" ) )
         .Tooltip( _( "Add a barcode" ) )
@@ -465,6 +465,15 @@ TOOL_ACTION PCB_ACTIONS::runDRC( TOOL_ACTION_ARGS()
         .Tooltip( _( "Show the design rules checker window" ) )
         .Icon( BITMAPS::erc ) );
 
+// Cloud Autoroute
+//
+TOOL_ACTION PCB_ACTIONS::cloudAutoroute( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.cloudAutoroute" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Cloud Autoroute" ) )
+        .Tooltip( _( "Run cloud-based autorouting on the board" ) )
+        .Icon( BITMAPS::icon_ai_pcbnew ) );
+
 // PCB_DESIGN_BLOCK_CONTROL
 TOOL_ACTION PCB_ACTIONS::placeDesignBlock( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveDrawing.placeDesignBlock" )
@@ -511,7 +520,7 @@ TOOL_ACTION PCB_ACTIONS::showDesignBlockPanel( TOOL_ACTION_ARGS()
 TOOL_ACTION PCB_ACTIONS::saveBoardAsDesignBlock( TOOL_ACTION_ARGS()
         .Name( "pcbnew.PcbDesignBlockControl.saveBoardAsDesignBlock" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Save Current Board as Design Block..." ) )
+        .FriendlyName( _( "Save Board as Design Block..." ) )
         .Tooltip( _( "Create a new design block from the current board" ) )
         .Icon( BITMAPS::new_component ) );
 
@@ -522,22 +531,22 @@ TOOL_ACTION PCB_ACTIONS::saveSelectionAsDesignBlock( TOOL_ACTION_ARGS()
         .Tooltip( _( "Create a new design block from the current selection" ) )
         .Icon( BITMAPS::new_component ) );
 
-TOOL_ACTION PCB_ACTIONS::saveBoardToDesignBlock( TOOL_ACTION_ARGS()
-        .Name( "pcbnew.PcbDesignBlockControl.saveBoardToDesignBlock" )
+TOOL_ACTION PCB_ACTIONS::updateDesignBlockFromBoard( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.PcbDesignBlockControl.updateDesignBlockFromBoard" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Save Current Board to Design Block..." ) )
-        .Tooltip( _( "Add current board to design block" ) )
+        .FriendlyName( _( "Update Design Block from Board" ) )
+        .Tooltip( _( "Set design block layout to current board" ) )
         .Icon( BITMAPS::save ) );
 
-TOOL_ACTION PCB_ACTIONS::saveSelectionToDesignBlock( TOOL_ACTION_ARGS()
-        .Name( "pcbnew.PcbDesignBlockControl.saveSelectionToDesignBlock" )
+TOOL_ACTION PCB_ACTIONS::updateDesignBlockFromSelection( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.PcbDesignBlockControl.updateDesignBlockFromSelection" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Save Selection to Design Block..." ) )
-        .Tooltip( _( "Add current selection to design block" ) )
+        .FriendlyName( _( "Update Design Block from Selection" ) )
+        .Tooltip( _( "Set design block layout to current selection" ) )
         .Icon( BITMAPS::save ) );
 
 TOOL_ACTION PCB_ACTIONS::deleteDesignBlock( TOOL_ACTION_ARGS()
-        .Name( "pcbnew.PcbDesignBlockControl.saveDeleteDesignBlock" )
+        .Name( "pcbnew.PcbDesignBlockControl.deleteDesignBlock" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Delete Design Block" ) )
         .Tooltip( _( "Remove the selected design block from its library" ) )
@@ -784,8 +793,8 @@ TOOL_ACTION PCB_ACTIONS::simplifyPolygons( TOOL_ACTION_ARGS()
 TOOL_ACTION PCB_ACTIONS::editVertices( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveEdit.editVertices" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Edit Vertices..." ) )
-        .Tooltip( _( "Edit polygon vertices using a table" ) )
+        .FriendlyName( _( "Edit Corners..." ) )
+        .Tooltip( _( "Edit polygon corners using a table" ) )
         .Icon( BITMAPS::edit ) );
 
 TOOL_ACTION PCB_ACTIONS::healShapes( TOOL_ACTION_ARGS()
@@ -1206,7 +1215,7 @@ TOOL_ACTION PCB_ACTIONS::rescueAutosave( TOOL_ACTION_ARGS()
 TOOL_ACTION PCB_ACTIONS::openNonKicadBoard( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.openNonKicadBoard" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Non-KiCad Board File..." ) )
+        .FriendlyName( _( "External Board File..." ) )
         .Tooltip( _( "Import board file from other applications" ) )
         .Icon( BITMAPS::import_brd_file ) );
 
@@ -1347,7 +1356,8 @@ TOOL_ACTION PCB_ACTIONS::collect3DModels( TOOL_ACTION_ARGS()
         .Name( "pcbnew.EditorControl.collect3DModels" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Collect And Embed 3D Models" ) )
-        .Tooltip( _( "Collect footprint 3D models and embed them into the board" ) ) );
+        .Tooltip( _( "Collect footprint 3D models and embed them into the board" ) )
+        .Icon( BITMAPS::import3d ) );
 
 
 // Track & via size control
@@ -1576,6 +1586,12 @@ TOOL_ACTION PCB_ACTIONS::showEeschema( TOOL_ACTION_ARGS()
         .Tooltip( _( "Open schematic in schematic editor" ) )
         .Icon( BITMAPS::icon_eeschema_24 ) );
 
+// DESIGN RULE EDITOR
+TOOL_ACTION PCB_ACTIONS::drcRuleEditor( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.DRETool.drcRuleEditor" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "DRC Rule Editor" ) )
+        .Tooltip( _( "Open DRC rule editor window" ) ) );
 
 // PCB_CONTROL
 //
@@ -1621,6 +1637,14 @@ TOOL_ACTION PCB_ACTIONS::showNetInspector( TOOL_ACTION_ARGS()
         .Tooltip( _( "Show/hide the net inspector" ) )
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::tools ) );
+
+TOOL_ACTION PCB_ACTIONS::showAIChat( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.EditorControl.showAIChat" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "AI Agent" ) )
+        .Tooltip( _( "Show/hide the AI agent chat panel" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::icon_ai_pcbnew ) );
 
 TOOL_ACTION PCB_ACTIONS::zonesManager( TOOL_ACTION_ARGS()
         .Name( "pcbnew.Control.zonesManager" )
@@ -2247,7 +2271,7 @@ TOOL_ACTION PCB_ACTIONS::distributeHorizontallyCenters( TOOL_ACTION_ARGS()
         .Name( "pcbnew.AlignAndDistribute.distributeHorizontallyCenters" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Distribute Horizontally by Centers" ) )
-        .Tooltip( _( "Distributes selected items between the left-most item and the right-most item"
+        .Tooltip( _( "Distributes selected items between the left-most item and the right-most item "
                      "so that the item centers are equally distributed" ) )
         .Icon( BITMAPS::distribute_horizontal_centers ) );
 
@@ -2663,6 +2687,12 @@ TOOL_ACTION PCB_ACTIONS::routerAutorouteSelected( TOOL_ACTION_ARGS()
         .Tooltip( _( "Sequentially attempt to automatically route all selected pads." ) )
         .Flags( AF_ACTIVATE )
         .Parameter( PNS::PNS_MODE_ROUTE_SINGLE ) );
+
+TOOL_ACTION PCB_ACTIONS::cancelCurrentItem( TOOL_ACTION_ARGS()
+        .Name( "pcbnew.InteractiveRouter.CancelCurrentItem" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Cancel Current Item" ) )
+        .Tooltip( _( "Skip current item and route next selected item." ) ) );
 
 TOOL_ACTION PCB_ACTIONS::breakTrack( TOOL_ACTION_ARGS()
         .Name( "pcbnew.InteractiveRouter.BreakTrack" )

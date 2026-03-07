@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013-2016 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -270,6 +271,7 @@ public:
     static TOOL_ACTION routerRouteSelected;
     static TOOL_ACTION routerRouteSelectedFromEnd;
     static TOOL_ACTION routerAutorouteSelected;
+    static TOOL_ACTION cancelCurrentItem;
 
     /// Activation of the Push and Shove settings dialogs
     static TOOL_ACTION routerSettingsDialog;
@@ -459,6 +461,8 @@ public:
     static TOOL_ACTION removeUnusedPads;
 
     static TOOL_ACTION runDRC;
+    static TOOL_ACTION cloudAutoroute;
+    static TOOL_ACTION drcRuleEditor;
 
     static TOOL_ACTION editFpInFpEditor;
     static TOOL_ACTION editLibFpInFpEditor;
@@ -466,6 +470,7 @@ public:
     static TOOL_ACTION showLayersManager;
     static TOOL_ACTION showNetInspector;
     static TOOL_ACTION showPythonConsole;
+    static TOOL_ACTION showAIChat;
     static TOOL_ACTION zonesManager;
 
     // Design Block management
@@ -476,8 +481,8 @@ public:
     static TOOL_ACTION showDesignBlockPanel;
     static TOOL_ACTION saveBoardAsDesignBlock;
     static TOOL_ACTION saveSelectionAsDesignBlock;
-    static TOOL_ACTION saveBoardToDesignBlock;
-    static TOOL_ACTION saveSelectionToDesignBlock;
+    static TOOL_ACTION updateDesignBlockFromBoard;
+    static TOOL_ACTION updateDesignBlockFromSelection;
     static TOOL_ACTION deleteDesignBlock;
     static TOOL_ACTION editDesignBlockProperties;
 

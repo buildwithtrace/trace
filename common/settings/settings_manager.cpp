@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -686,14 +687,43 @@ bool SETTINGS_MANAGER::GetPreviousVersionPaths( std::vector<wxString>* aPaths )
     // for it.
     {
         wxFileName wxGtkPath;
+        // Check for trace paths first (current application)
+        wxGtkPath.AssignDir( wxS( "~/.config/trace" ) );
+        wxGtkPath.MakeAbsolute();
+        base_paths.emplace_back( wxGtkPath );
+
+        // Also check for legacy kicad paths (for migration from KiCad)
         wxGtkPath.AssignDir( wxS( "~/.config/kicad" ) );
         wxGtkPath.MakeAbsolute();
         base_paths.emplace_back( wxGtkPath );
 
         // We also want to pick up regular flatpak if we are nightly
+        wxGtkPath.AssignDir( wxS( "~/.var/app/org.trace.Trace/config/trace" ) );
+        wxGtkPath.MakeAbsolute();
+        base_paths.emplace_back( wxGtkPath );
+
         wxGtkPath.AssignDir( wxS( "~/.var/app/org.kicad.KiCad/config/kicad" ) );
         wxGtkPath.MakeAbsolute();
         base_paths.emplace_back( wxGtkPath );
+    }
+#endif
+
+#ifdef _WIN32
+    // On Windows, also check for paths in AppData\Roaming that might have been created
+    // by previous installations. Check for both trace and legacy kicad paths.
+    {
+        wxString roamingPath = KIPLATFORM::ENV::GetUserConfigPath();
+        wxFileName winPath;
+
+        // Check for trace path (current application)
+        winPath.AssignDir( roamingPath );
+        winPath.AppendDir( wxS( "trace" ) );
+        base_paths.emplace_back( winPath );
+
+        // Also check for legacy kicad path (for migration from old KiCad)
+        winPath.AssignDir( roamingPath );
+        winPath.AppendDir( wxS( "kicad" ) );
+        base_paths.emplace_back( winPath );
     }
 #endif
 
@@ -787,6 +817,16 @@ bool SETTINGS_MANAGER::GetPreviousVersionPaths( std::vector<wxString>* aPaths )
 
                    if( bDirs.empty() )
                        return true;
+
+                   // Prefer trace paths over kicad paths
+                   bool aIsTrace = aPath.GetPath().Lower().Contains( wxS( "trace" ) );
+                   bool bIsTrace = bPath.GetPath().Lower().Contains( wxS( "trace" ) );
+
+                   if( aIsTrace && !bIsTrace )
+                       return true;
+
+                   if( !aIsTrace && bIsTrace )
+                       return false;
 
                    std::string verA = aDirs.back().ToStdString();
                    std::string verB = bDirs.back().ToStdString();
@@ -962,6 +1002,20 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     // No MDI yet
     if( aSetActive && !m_projects.empty() )
     {
+        // Cancel any in-progress library preloads and wait for them to finish before
+        // modifying m_projects_list. Background preload threads access Prj() which becomes
+        // invalid when the project list is modified.
+        if( m_kiway )
+        {
+            if( KIFACE* pcbFace = m_kiway->KiFACE( KIWAY::FACE_PCB, false ) )
+                pcbFace->CancelPreload( true );
+        }
+
+        // Abort any async library loads before modifying m_projects_list to prevent race
+        // conditions where background threads try to access Prj() while the list is empty.
+        if( PgmOrNull() )
+            Pgm().GetLibraryManager().AbortAsyncLoads();
+
         PROJECT* oldProject = m_projects.begin()->second;
         unloadProjectFile( oldProject, false );
         m_projects.erase( m_projects.begin() );
@@ -1034,14 +1088,28 @@ bool SETTINGS_MANAGER::UnloadProject( PROJECT* aProject, bool aSave )
     if( !aProject || !m_projects.count( aProject->GetProjectFullName() ) )
         return false;
 
-    if( !unloadProjectFile( aProject, aSave ) )
-        return false;
-
     wxString projectPath = aProject->GetProjectFullName();
     wxLogTrace( traceSettings, wxT( "Unload project %s" ), projectPath );
 
     PROJECT* toRemove = m_projects.at( projectPath );
     bool wasActiveProject = m_projects_list.begin()->get() == toRemove;
+
+    // Cancel any in-progress library preloads and wait for them to finish before
+    // modifying m_projects_list. Background preload threads access Prj() which becomes
+    // invalid when the project list is modified.
+    if( wasActiveProject && m_kiway )
+    {
+        if( KIFACE* pcbFace = m_kiway->KiFACE( KIWAY::FACE_PCB, false ) )
+            pcbFace->CancelPreload( true );
+    }
+
+    // Abort any async library loads before modifying m_projects_list to prevent race
+    // conditions where background threads try to access Prj() while the list is empty.
+    if( wasActiveProject && PgmOrNull() )
+        Pgm().GetLibraryManager().AbortAsyncLoads();
+
+    if( !unloadProjectFile( aProject, aSave ) )
+        return false;
 
     auto it = std::find_if( m_projects_list.begin(), m_projects_list.end(),
                             [&]( const std::unique_ptr<PROJECT>& ptr )
@@ -1063,6 +1131,14 @@ bool SETTINGS_MANAGER::UnloadProject( PROJECT* aProject, bool aSave )
 
         // Remove the reference in the environment to the previous project
         wxSetEnv( PROJECT_VAR_NAME, wxS( "" ) );
+
+#ifdef _WIN32
+        // On Windows, processes hold a handle to their current working directory, preventing
+        // it from being deleted. Reset to the user settings path to release the project
+        // directory. This mirrors the wxSetWorkingDirectory call in LoadProject.
+        if( wxTheApp && wxTheApp->IsGUI() )
+            wxSetWorkingDirectory( PATHS::GetUserSettingsPath() );
+#endif
 
         if( m_kiway )
             m_kiway->ProjectChanged();

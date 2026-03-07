@@ -69,6 +69,9 @@ using namespace KIGFX::BUILTIN_FONT;
 
 static void InitTesselatorCallbacks( GLUtesselator* aTesselator );
 
+// Trace mask for XOR/difference mode debugging
+static const wxChar* const traceGalXorMode = wxT( "KICAD_GAL_XOR_MODE" );
+
 static wxGLAttributes getGLAttribs()
 {
     wxGLAttributes attribs;
@@ -420,48 +423,52 @@ OPENGL_GAL::OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIO
 
 OPENGL_GAL::~OPENGL_GAL()
 {
-
     GL_CONTEXT_MANAGER* gl_mgr = Pgm().GetGLContextManager();
-    gl_mgr->LockCtx( m_glPrivContext, this );
+    wxASSERT( gl_mgr );
 
-    --m_instanceCounter;
-    glFlush();
-    gluDeleteTess( m_tesselator );
-    ClearCache();
-
-    delete m_compositor;
-
-    if( m_isInitialized )
+    if( gl_mgr )
     {
-        delete m_cachedManager;
-        delete m_nonCachedManager;
-        delete m_overlayManager;
-        delete m_tempManager;
-    }
+        gl_mgr->LockCtx( m_glPrivContext, this );
 
-    gl_mgr->UnlockCtx( m_glPrivContext );
+        --m_instanceCounter;
+        glFlush();
+        gluDeleteTess( m_tesselator );
+        ClearCache();
 
-    // If it was the main context, then it will be deleted
-    // when the last OpenGL GAL instance is destroyed (a few lines below)
-    if( m_glPrivContext != m_glMainContext )
-        gl_mgr->DestroyCtx( m_glPrivContext );
+        delete m_compositor;
 
-    delete m_shader;
-
-    // Are we destroying the last GAL instance?
-    if( m_instanceCounter == 0 )
-    {
-        gl_mgr->LockCtx( m_glMainContext, this );
-
-        if( m_isBitmapFontLoaded )
+        if( m_isInitialized )
         {
-            glDeleteTextures( 1, &g_fontTexture );
-            m_isBitmapFontLoaded = false;
+            delete m_cachedManager;
+            delete m_nonCachedManager;
+            delete m_overlayManager;
+            delete m_tempManager;
         }
 
-        gl_mgr->UnlockCtx( m_glMainContext );
-        gl_mgr->DestroyCtx( m_glMainContext );
-        m_glMainContext = nullptr;
+        gl_mgr->UnlockCtx( m_glPrivContext );
+
+        // If it was the main context, then it will be deleted
+        // when the last OpenGL GAL instance is destroyed (a few lines below)
+        if( m_glPrivContext != m_glMainContext )
+            gl_mgr->DestroyCtx( m_glPrivContext );
+
+        delete m_shader;
+
+        // Are we destroying the last GAL instance?
+        if( m_instanceCounter == 0 )
+        {
+            gl_mgr->LockCtx( m_glMainContext, this );
+
+            if( m_isBitmapFontLoaded )
+            {
+                glDeleteTextures( 1, &g_fontTexture );
+                m_isBitmapFontLoaded = false;
+            }
+
+            gl_mgr->UnlockCtx( m_glMainContext );
+            gl_mgr->DestroyCtx( m_glMainContext );
+            m_glMainContext = nullptr;
+        }
     }
 }
 
@@ -1549,6 +1556,12 @@ void OPENGL_GAL::DrawBitmap( const BITMAP_BASE& aBitmap, double alphaBlend )
     if( !glIsTexture( texture_id ) ) // ensure the bitmap texture is still valid
         return;
 
+    GLboolean depthMask = GL_TRUE;
+    glGetBooleanv( GL_DEPTH_WRITEMASK, &depthMask );
+
+    if( alpha < 1.0f )
+        glDepthMask( GL_FALSE );
+
     glDepthFunc( GL_ALWAYS );
 
     glAlphaFunc( GL_GREATER, 0.01f );
@@ -1601,6 +1614,8 @@ void OPENGL_GAL::DrawBitmap( const BITMAP_BASE& aBitmap, double alphaBlend )
     glMatrixMode( GL_MODELVIEW );
 
     glDisable( GL_ALPHA_TEST );
+
+    glDepthMask( depthMask );
 
     glDepthFunc( GL_LESS );
 }
@@ -1917,6 +1932,7 @@ void OPENGL_GAL::DrawGrid()
             glDisable( GL_STENCIL_TEST );
     }
 
+    m_nonCachedManager->EnableDepthTest( true );
     glEnable( GL_DEPTH_TEST );
     glEnable( GL_TEXTURE_2D );
 }
@@ -2146,33 +2162,64 @@ bool OPENGL_GAL::HasTarget( RENDER_TARGET aTarget )
 
 void OPENGL_GAL::StartDiffLayer()
 {
+    wxLogTrace( traceGalXorMode, wxT( "OPENGL_GAL::StartDiffLayer() called" ) );
+    wxLogTrace( traceGalXorMode, wxT( "StartDiffLayer(): m_tempBuffer=%u" ), m_tempBuffer );
+
     m_currentManager->EndDrawing();
 
     if( m_tempBuffer )
     {
+        wxLogTrace( traceGalXorMode, wxT( "StartDiffLayer(): setting target to TARGET_TEMP" ) );
         SetTarget( TARGET_TEMP );
         ClearTarget( TARGET_TEMP );
+
+        // ClearTarget restores the previous compositor buffer, so we need to explicitly
+        // set the compositor to render to m_tempBuffer for the layer drawing
+        m_compositor->SetBuffer( m_tempBuffer );
+        wxLogTrace( traceGalXorMode, wxT( "StartDiffLayer(): TARGET_TEMP set and cleared, compositor buffer=%u" ),
+                    m_tempBuffer );
+    }
+    else
+    {
+        wxLogTrace( traceGalXorMode, wxT( "StartDiffLayer(): WARNING - no temp buffer!" ) );
     }
 }
 
 
 void OPENGL_GAL::EndDiffLayer()
 {
+    wxLogTrace( traceGalXorMode, wxT( "OPENGL_GAL::EndDiffLayer() called" ) );
+    wxLogTrace( traceGalXorMode, wxT( "EndDiffLayer(): m_tempBuffer=%u, m_mainBuffer=%u" ),
+                m_tempBuffer, m_mainBuffer );
+
     if( m_tempBuffer )
     {
-        glBlendEquation( GL_MAX );
-        m_currentManager->EndDrawing();
-        glBlendEquation( GL_FUNC_ADD );
+        wxLogTrace( traceGalXorMode, wxT( "EndDiffLayer(): using temp buffer path" ) );
 
-        m_compositor->DrawBuffer( m_tempBuffer, m_mainBuffer );
+        // End drawing to the temp buffer
+        m_currentManager->EndDrawing();
+
+        wxLogTrace( traceGalXorMode, wxT( "EndDiffLayer(): calling DrawBufferDifference" ) );
+
+        // Use difference compositing for true XOR/difference mode:
+        // - Where only one layer has content: shows that layer's color
+        // - Where both layers overlap with identical content: cancels out (black)
+        // - Where layers overlap with different content: shows the absolute difference
+        m_compositor->DrawBufferDifference( m_tempBuffer, m_mainBuffer );
+
+        wxLogTrace( traceGalXorMode, wxT( "EndDiffLayer(): DrawBufferDifference returned" ) );
     }
     else
     {
+        wxLogTrace( traceGalXorMode, wxT( "EndDiffLayer(): NO temp buffer, using fallback path" ) );
+
         // Fall back to imperfect alpha blending on single buffer
         glBlendFunc( GL_SRC_ALPHA, GL_ONE );
         m_currentManager->EndDrawing();
         glBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
     }
+
+    wxLogTrace( traceGalXorMode, wxT( "OPENGL_GAL::EndDiffLayer() complete" ) );
 }
 
 

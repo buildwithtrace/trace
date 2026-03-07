@@ -27,6 +27,10 @@
 
 #include <kicommon.h>
 #include <optional>
+#include <mutex>
+#include <vector>
+#include <widgets/report_severity.h>
+#include <wx/statusbr.h>
 
 class wxGauge;
 class wxButton;
@@ -42,6 +46,16 @@ class BITMAP_BUTTON;
  * Background notifications button (FIELD_OFFSET_NOTIFICATION_BUTTON  offset id)
  */
 
+/**
+ * Structure to store a load message with its severity.
+ */
+struct LOAD_MESSAGE
+{
+    wxString  message;
+    SEVERITY  severity;
+};
+
+
 class KICOMMON_API KISTATUSBAR : public wxStatusBar
 {
 public:
@@ -50,6 +64,7 @@ public:
         NONE_STYLE        = 0x00,
         NOTIFICATION_ICON = 0x01,
         CANCEL_BUTTON     = 0x02,
+        WARNING_ICON      = 0x04,
     };
 
     static constexpr auto DEFAULT_STYLE =
@@ -100,16 +115,33 @@ public:
      */
     void SetNotificationCount( int aCount );
 
+    void SetLoadWarningMessages( const wxString& aMessages );
+    void ClearLoadWarningMessages();
+
+    /**
+     * Add warning/error messages thread-safely.
+     * Can be called from any thread. UI update is deferred to main thread.
+     */
+    void AddLoadWarningMessages( const std::vector<LOAD_MESSAGE>& aMessages );
+
+    /**
+     * Get current message count (thread-safe).
+     */
+    size_t GetLoadWarningCount() const;
+
 private:
     void onSize( wxSizeEvent& aEvent );
     void onBackgroundProgressClick( wxMouseEvent& aEvent );
     void onNotificationsIconClick( wxCommandEvent& aEvent );
+    void onLoadWarningsIconClick( wxCommandEvent& aEvent );
+    void updateWarningUI();  ///< Update warning button visibility and badge (main thread only)
 
     enum class FIELD
     {
         BGJOB_LABEL,
         BGJOB_GAUGE,
         BGJOB_CANCEL,
+        WARNING,
         NOTIFICATION
     };
 
@@ -120,8 +152,12 @@ private:
     wxButton*      m_backgroundStopButton;
     wxStaticText*  m_backgroundTxt;
     BITMAP_BUTTON* m_notificationsButton;
+    BITMAP_BUTTON* m_warningButton;
+    mutable std::mutex m_loadWarningMutex;  ///< Protects m_loadWarningMessages
+    std::vector<LOAD_MESSAGE> m_loadWarningMessages;
     int            m_normalFieldsCount;
     STYLE_FLAGS    m_styleFlags;
+    wxString       m_savedStatusText;       ///< Saved text from adjacent field during background jobs
 };
 
 #endif

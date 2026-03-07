@@ -1,0 +1,24 @@
+PROPRIETARY LICENSE
+
+Copyright (C) 2025-2026 Trace Developers Team. All Rights Reserved.
+
+This software and associated documentation files (the "Software") contained
+in this directory and its subdirectories are proprietary and confidential.
+
+RESTRICTIONS:
+- You may NOT copy, modify, merge, publish, distribute, sublicense, or sell
+  copies of the Software.
+- You may NOT use the Software for any commercial or non-commercial purpose
+  without explicit written permission from the copyright holders.
+- You may NOT reverse engineer, decompile, or disassemble the Software.
+- You may NOT create derivative works based on the Software.
+
+This Software is provided for reference only as part of the Trace open-source
+repository. The inclusion of this code in the repository does not grant any
+license or rights to use, copy, or distribute it.
+
+For licensing inquiries, contact: hello@buildwithtrace.com
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY ARISING FROM THE USE OF THIS SOFTWARE.

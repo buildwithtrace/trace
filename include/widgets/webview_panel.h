@@ -39,6 +39,7 @@ public:
     ~WEBVIEW_PANEL() override;
 
     wxWebView* GetWebView() const { return m_browser; }
+    const wxString& GetBackend() const { return m_backend; }
 
     void LoadURL( const wxString& url );
     void SetPage( const wxString& htmlContent );
@@ -53,6 +54,13 @@ public:
     {
         m_browser->RunScriptAsync( aScript, aClientData );
     }
+
+    /**
+     * Execute JavaScript without expecting a result. On macOS this avoids WebKit IPC
+     * completion handlers that can cause stack overflows when the run loop is pumped
+     * during progress dialogs.
+     */
+    void RunScriptFireAndForget( const wxString& aScript ) const;
 
     bool HasLoadError() const { return m_loadError; }
 
@@ -73,6 +81,7 @@ private:
     bool                                m_loadError;
     bool                                m_loadedEventBound;
     wxWebView*                          m_browser;
+    wxString                            m_backend;
     std::map<wxString, MESSAGE_HANDLER> m_msgHandlers;
     TOOL_MANAGER*                       m_toolManager;
     TOOL_BASE*                          m_tool;

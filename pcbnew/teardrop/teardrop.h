@@ -153,12 +153,14 @@ private:
     /**
      * Compute the curve part points for teardrops connected to a rectangular/polygonal shape
      * The Bezier curve control points are not optimized for a special shape,
-     * so use computeCurvedForRoundShape() for round shapes for better result
+     * so use computeCurvedForRoundShape() for round shapes for better result.
+     * For rounded rectangles, special handling ensures curves are tangent to corner radii.
      */
     void computeCurvedForRectShape( const TEARDROP_PARAMETERS& aParams,
                                     std::vector<VECTOR2I>& aPoly, int aTdWidth,
                                     int aTrackHalfWidth, std::vector<VECTOR2I>& aPts,
-                                    const VECTOR2I& aIntersection ) const;
+                                    const VECTOR2I& aIntersection, BOARD_ITEM* aOther,
+                                    const VECTOR2I& aOtherPos, PCB_LAYER_ID aLayer ) const;
 
     /**
      * Compute all teardrop points of the polygon shape
@@ -203,12 +205,13 @@ private:
      * @param aPoints is the polygonal shape
      * @param aTrack is the track connected to the starting points of the teardrop
      * (mainly for net info)
+     * @param aCandidate is the pad/via/track that the teardrop connects to (used for UUID)
      */
-    ZONE* createTeardrop( TEARDROP_VARIANT aTeardropVariant,
-                          std::vector<VECTOR2I>& aPoints, PCB_TRACK* aTrack ) const;
+    ZONE* createTeardrop( TEARDROP_VARIANT aTeardropVariant, std::vector<VECTOR2I>& aPoints,
+                          PCB_TRACK* aTrack, BOARD_ITEM* aCandidate ) const;
 
-    ZONE* createTeardropMask( TEARDROP_VARIANT aTeardropVariant,
-                              std::vector<VECTOR2I>& aPoints, PCB_TRACK* aTrack ) const;
+    ZONE* createTeardropMask( TEARDROP_VARIANT aTeardropVariant, std::vector<VECTOR2I>& aPoints,
+                              PCB_TRACK* aTrack, BOARD_ITEM* aCandidate ) const;
 
     /**
      * Creates and adds a teardrop with optional mask to the board
@@ -216,9 +219,11 @@ private:
      * @param aTeardropVariant = variant of the teardrop( attached to a pad, or a track end )
      * @param aPoints is the polygonal shape
      * @param aTrack is the track connected to the starting points of the teardrop
+     * @param aCandidate is the pad/via/track that the teardrop connects to
      */
     void createAndAddTeardropWithMask( BOARD_COMMIT& aCommit, TEARDROP_VARIANT aTeardropVariant,
-                                       std::vector<VECTOR2I>& aPoints, PCB_TRACK* aTrack );
+                                       std::vector<VECTOR2I>& aPoints, PCB_TRACK* aTrack,
+                                       BOARD_ITEM* aCandidate );
 
     /**
      * Attempts to create a track-to-track teardrop

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2018 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * @author Jon Evans <jon@craftyjon.com>
  *
@@ -25,6 +26,7 @@
 #include <future>
 #include <vector>
 #include <unordered_map>
+#include <iostream>
 #include <app_monitor.h>
 #include <core/profile.h>
 #include <core/kicad_algo.h>
@@ -158,11 +160,15 @@ bool CONNECTION_SUBGRAPH::ResolveDrivers( bool aCheckMultipleDrivers )
             SCH_PIN* pin = static_cast<SCH_PIN*>( item );
 
             if( !static_cast<SCH_SYMBOL*>( pin->GetParentSymbol() )->IsInNetlist() )
+            {
                 continue;
+            }
         }
 
         if( item_priority >= PRIORITY::HIER_LABEL )
+        {
             strong_drivers.insert( item );
+        }
 
         if( item_priority > highest_priority )
         {
@@ -255,10 +261,71 @@ bool CONNECTION_SUBGRAPH::ResolveDrivers( bool aCheckMultipleDrivers )
         std::sort( candidates.begin(), candidates.end(), candidate_cmp );
 
         m_driver = candidates.front();
+        
+        // Check if the selected driver has an empty name, and if so, try to find a fallback
+        wxString driver_name = GetNameForDriver( m_driver );
+        if( driver_name.IsEmpty() )
+        {
+            // Try to find a driver with a non-empty name, starting with same priority candidates
+            SCH_ITEM* fallback_driver = nullptr;
+            PRIORITY fallback_priority = PRIORITY::INVALID;
+            
+            // First, check other candidates with the same priority
+            for( size_t i = 1; i < candidates.size(); i++ )
+            {
+                wxString candidate_name = GetNameForDriver( candidates[i] );
+                if( !candidate_name.IsEmpty() )
+                {
+                    fallback_driver = candidates[i];
+                    fallback_priority = highest_priority;
+                    break;
+                }
+            }
+            
+            // If no fallback found in same priority, check all drivers for any with a non-empty name
+            if( !fallback_driver )
+            {
+                for( SCH_ITEM* item : m_drivers )
+                {
+                    PRIORITY item_priority = GetDriverPriority( item );
+                    
+                    // Skip if this item is already the selected driver or has invalid priority
+                    if( item == m_driver || item_priority == PRIORITY::INVALID || item_priority == PRIORITY::NONE )
+                        continue;
+                    
+                    // Skip pins not in netlist
+                    if( item_priority == PRIORITY::PIN )
+                    {
+                        SCH_PIN* pin = static_cast<SCH_PIN*>( item );
+                        if( !static_cast<SCH_SYMBOL*>( pin->GetParentSymbol() )->IsInNetlist() )
+                            continue;
+                    }
+                    
+                    wxString candidate_name = GetNameForDriver( item );
+                    if( !candidate_name.IsEmpty() )
+                    {
+                        // Prefer higher priority, but accept any valid name
+                        if( !fallback_driver || item_priority > fallback_priority )
+                        {
+                            fallback_driver = item;
+                            fallback_priority = item_priority;
+                        }
+                    }
+                }
+            }
+            
+            if( fallback_driver )
+            {
+                m_driver = fallback_driver;
+                driver_name = GetNameForDriver( m_driver );
+            }
+        }
     }
 
     if( strong_drivers.size() > 1 )
+    {
         m_multiple_drivers = true;
+    }
 
     // Drop weak drivers
     if( m_strong_driver )
@@ -271,7 +338,9 @@ bool CONNECTION_SUBGRAPH::ResolveDrivers( bool aCheckMultipleDrivers )
     if( m_driver )
     {
         m_driver_connection = m_driver->Connection( &m_sheet );
-        m_driver_connection->ConfigureFromLabel( GetNameForDriver( m_driver ) );
+        // Get the driver name (may have been set during fallback logic above)
+        wxString final_driver_name = GetNameForDriver( m_driver );
+        m_driver_connection->ConfigureFromLabel( final_driver_name );
         m_driver_connection->SetDriver( m_driver );
         m_driver_connection->ClearDirty();
     }
@@ -339,6 +408,7 @@ std::vector<SCH_ITEM*> CONNECTION_SUBGRAPH::GetAllBusLabels() const
         {
         case SCH_LABEL_T:
         case SCH_GLOBAL_LABEL_T:
+        case SCH_HIER_LABEL_T:
         {
             CONNECTION_TYPE type = item->Connection( &m_sheet )->Type();
 
@@ -368,6 +438,7 @@ std::vector<SCH_ITEM*> CONNECTION_SUBGRAPH::GetVectorBusLabels() const
         {
         case SCH_LABEL_T:
         case SCH_GLOBAL_LABEL_T:
+        case SCH_HIER_LABEL_T:
         {
             SCH_CONNECTION* label_conn = item->Connection( &m_sheet );
 
@@ -498,6 +569,7 @@ void CONNECTION_SUBGRAPH::Absorb( CONNECTION_SUBGRAPH* aOther )
 {
     wxCHECK( m_sheet == aOther->m_sheet, /* void */ );
 
+
     for( SCH_ITEM* item : aOther->m_items )
     {
         item->Connection( &m_sheet )->SetSubgraphCode( m_code );
@@ -535,8 +607,13 @@ void CONNECTION_SUBGRAPH::AddItem( SCH_ITEM* aItem )
 {
     m_items.insert( aItem );
 
-    if( aItem->Connection( &m_sheet )->IsDriver() )
+    SCH_CONNECTION* conn = aItem->Connection( &m_sheet );
+    bool is_driver = conn ? conn->IsDriver() : false;
+    
+    if( is_driver )
+    {
         m_drivers.insert( aItem );
+    }
 
     if( aItem->Type() == SCH_SHEET_PIN_T )
         m_hier_pins.insert( static_cast<SCH_SHEET_PIN*>( aItem ) );
@@ -548,14 +625,18 @@ void CONNECTION_SUBGRAPH::AddItem( SCH_ITEM* aItem )
 void CONNECTION_SUBGRAPH::UpdateItemConnections()
 {
     if( !m_driver_connection )
+    {
         return;
+    }
 
     for( SCH_ITEM* item : m_items )
     {
         SCH_CONNECTION* item_conn = item->GetOrInitConnection( m_sheet, m_graph );
 
         if( !item_conn )
+        {
             continue;
+        }
 
         if( ( m_driver_connection->IsBus() && item_conn->IsNet() ) ||
             ( m_driver_connection->IsNet() && item_conn->IsBus() ) )
@@ -1478,6 +1559,7 @@ void CONNECTION_GRAPH::updateItemConnectivity( const SCH_SHEET_PATH& aSheet,
 
 void CONNECTION_GRAPH::buildItemSubGraphs()
 {
+    
     // Recache all bus aliases for later use
     wxCHECK_RET( m_schematic, wxS( "Connection graph cannot be built without schematic pointer" ) );
 
@@ -1601,7 +1683,9 @@ void CONNECTION_GRAPH::resolveAllDrivers()
                         auto pin = static_cast<SCH_PIN*>( item );
 
                         if( pin->GetType() == ELECTRICAL_PINTYPE::PT_NC )
+                        {
                             subgraph->m_no_connect = item;
+                        }
 
                         break;
                     }
@@ -1611,7 +1695,14 @@ void CONNECTION_GRAPH::resolveAllDrivers()
                     }
                 }
 
-                subgraph->ResolveDrivers( true );
+                bool resolved = subgraph->ResolveDrivers( true );
+
+                if( !resolved )
+                {
+                    wxLogTrace( ConnTrace, wxT( "Failed to resolve drivers for subgraph %p" ),
+                                subgraph );
+                }
+
                 subgraph->m_dirty = false;
 
                 return 1;
@@ -1733,6 +1824,10 @@ void CONNECTION_GRAPH::generateBusAliasMembers()
 
             for( const auto& conn : dummy.Members() )
             {
+                // Only create subgraphs for NET members, not nested buses
+                if( !conn->IsNet() )
+                    continue;
+
                 wxString name = conn->FullLocalName();
 
                 CONNECTION_SUBGRAPH* new_sg = new CONNECTION_SUBGRAPH( this );
@@ -1740,17 +1835,18 @@ void CONNECTION_GRAPH::generateBusAliasMembers()
                 // This connection cannot form a part of the item because the item is not, itself
                 // connected to this subgraph.  It exists as part of a virtual item that may be
                 // connected to other items but is not in the schematic.
-                SCH_CONNECTION* new_conn = new SCH_CONNECTION( item, subgraph->m_sheet );
+                auto new_conn = std::make_unique<SCH_CONNECTION>( item, subgraph->m_sheet );
                 new_conn->SetGraph( this );
                 new_conn->SetName( name );
                 new_conn->SetType( CONNECTION_TYPE::NET );
-                subgraph->StoreImplicitConnection( new_conn );
-                int code = assignNewNetCode( *new_conn );
+
+                SCH_CONNECTION* new_conn_ptr = subgraph->StoreImplicitConnection( std::move( new_conn ) );
+                int             code = assignNewNetCode( *new_conn_ptr );
 
                 wxLogTrace( ConnTrace, wxS( "SG(%ld), Adding full local name (%s) with sg (%d) on subsheet %s" ),
                             subgraph->m_code, name, code, subgraph->m_sheet.PathHumanReadable() );
 
-                new_sg->m_driver_connection = new_conn;
+                new_sg->m_driver_connection = new_conn_ptr;
                 new_sg->m_code = m_last_subgraph_code++;
                 new_sg->m_sheet = subgraph->GetSheet();
                 new_sg->m_is_bus_member = true;
@@ -1777,6 +1873,32 @@ void CONNECTION_GRAPH::generateGlobalPowerPinSubGraphs()
     // on the same sheet in the next loop.
     // These are NOT limited to power symbols, we support legacy invisible + power-in pins
     // on non-power symbols.
+
+    // Sort power pins for deterministic processing order. This ensures that when multiple
+    // power pins share the same net name, the same pin consistently creates the subgraph
+    // across different ERC runs.
+    std::sort( m_global_power_pins.begin(), m_global_power_pins.end(),
+               []( const std::pair<SCH_SHEET_PATH, SCH_PIN*>& a,
+                   const std::pair<SCH_SHEET_PATH, SCH_PIN*>& b )
+               {
+                   int pathCmp = a.first.Cmp( b.first );
+
+                   if( pathCmp != 0 )
+                       return pathCmp < 0;
+
+                   const SCH_SYMBOL* symA = static_cast<const SCH_SYMBOL*>( a.second->GetParentSymbol() );
+                   const SCH_SYMBOL* symB = static_cast<const SCH_SYMBOL*>( b.second->GetParentSymbol() );
+
+                   wxString refA = symA ? symA->GetRef( &a.first, false ) : wxString();
+                   wxString refB = symB ? symB->GetRef( &b.first, false ) : wxString();
+
+                   int refCmp = refA.Cmp( refB );
+
+                   if( refCmp != 0 )
+                       return refCmp < 0;
+
+                   return a.second->GetNumber().Cmp( b.second->GetNumber() ) < 0;
+               } );
 
     std::unordered_map<int, CONNECTION_SUBGRAPH*> global_power_pin_subgraphs;
 
@@ -2225,11 +2347,8 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
      */
 
     resolveAllDrivers();
-
     collectAllDriverValues();
-
     generateGlobalPowerPinSubGraphs();
-
     generateBusAliasMembers();
 
     PROF_TIMER proc_sub_graph( "ProcessSubGraphs" );
@@ -2239,10 +2358,15 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
         proc_sub_graph.Show();
 
     // Absorbed subgraphs should no longer be considered
+    size_t before_erase = m_driver_subgraphs.size();
     std::erase_if( m_driver_subgraphs, [&]( const CONNECTION_SUBGRAPH* candidate ) -> bool
                                         {
                                             return candidate->m_absorbed;
                                         } );
+    size_t after_erase = m_driver_subgraphs.size();
+
+    wxLogTrace( ConnTrace, wxT( "Erased %zu absorbed subgraphs (%zu -> %zu)" ),
+                before_erase - after_erase, before_erase, after_erase );
 
     // Store global subgraphs for later reference
     std::vector<CONNECTION_SUBGRAPH*> global_subgraphs;
@@ -2398,12 +2522,19 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
                     if( jj == m_net_name_to_subgraphs_map.end() )
                         continue;
 
-                    for( CONNECTION_SUBGRAPH* old_sg : jj->second )
+                    // Copy the vector to avoid iterator invalidation when recaching
+                    std::vector<CONNECTION_SUBGRAPH*> old_subgraphs = jj->second;
+
+                    for( CONNECTION_SUBGRAPH* old_sg : old_subgraphs )
                     {
                         while( old_sg->m_absorbed )
                             old_sg = old_sg->m_absorbed_by;
 
+                        wxString old_sg_name = old_sg->m_driver_connection->Name();
                         old_sg->m_driver_connection->Clone( *conn );
+
+                        if( old_sg_name != old_sg->m_driver_connection->Name() )
+                            recacheSubgraphName( old_sg, old_sg_name );
                     }
                 }
             }
@@ -2611,6 +2742,7 @@ void CONNECTION_GRAPH::buildConnectionGraph( std::function<void( SCH_ITEM* )>* a
             netSettings->SetNetclassLabelAssignment( netname, netclasses );
         }
     }
+    
 }
 
 
@@ -2763,9 +2895,30 @@ void CONNECTION_GRAPH::propagateToNeighbors( CONNECTION_SUBGRAPH* aSubgraph, boo
 
     auto propagate_bus_neighbors = [&]( CONNECTION_SUBGRAPH* aParentGraph )
     {
+        // Sort bus neighbors by name to ensure deterministic processing order.
+        // When multiple bus members (e.g., A0, A1, A2, A3) all connect to the same
+        // shorted net in a child sheet, the first one processed "wins" and sets
+        // the net name. Sorting ensures the alphabetically-first name is chosen.
+        std::vector<std::shared_ptr<SCH_CONNECTION>> sortedMembers;
+
         for( const auto& kv : aParentGraph->m_bus_neighbors )
+            sortedMembers.push_back( kv.first );
+
+        std::sort( sortedMembers.begin(), sortedMembers.end(),
+                   []( const std::shared_ptr<SCH_CONNECTION>& a,
+                       const std::shared_ptr<SCH_CONNECTION>& b )
+                   {
+                       return a->Name() < b->Name();
+                   } );
+
+        for( const std::shared_ptr<SCH_CONNECTION>& member_conn : sortedMembers )
         {
-            for( CONNECTION_SUBGRAPH* neighbor : kv.second )
+            const auto& kv_it = aParentGraph->m_bus_neighbors.find( member_conn );
+
+            if( kv_it == aParentGraph->m_bus_neighbors.end() )
+                continue;
+
+            for( CONNECTION_SUBGRAPH* neighbor : kv_it->second )
             {
                 // May have been absorbed but won't have been deleted
                 while( neighbor->m_absorbed )
@@ -2776,12 +2929,12 @@ void CONNECTION_GRAPH::propagateToNeighbors( CONNECTION_SUBGRAPH* aSubgraph, boo
                 // Now member may be out of date, since we just cloned the
                 // connection from higher up in the hierarchy.  We need to
                 // figure out what the actual new connection is.
-                SCH_CONNECTION* member = matchBusMember( parent, kv.first.get() );
+                SCH_CONNECTION* member = matchBusMember( parent, member_conn.get() );
 
                 if( !member )
                 {
                     // Try harder: we might match on a secondary driver
-                    for( CONNECTION_SUBGRAPH* sg : kv.second )
+                    for( CONNECTION_SUBGRAPH* sg : kv_it->second )
                     {
                         if( sg->m_multiple_drivers )
                         {
@@ -2806,7 +2959,7 @@ void CONNECTION_GRAPH::propagateToNeighbors( CONNECTION_SUBGRAPH* aSubgraph, boo
                 if( !member )
                 {
                     wxLogTrace( ConnTrace, wxS( "Could not match bus member %s in %s" ),
-                                kv.first->Name(), parent->Name() );
+                                member_conn->Name(), parent->Name() );
                     continue;
                 }
 
@@ -2820,9 +2973,27 @@ void CONNECTION_GRAPH::propagateToNeighbors( CONNECTION_SUBGRAPH* aSubgraph, boo
                 if( neighbor_name == member->Name() )
                     continue;
 
-                // Was this neighbor already updated from a different sheet?  Don't rename it again
+                // Was this neighbor already updated from a different sheet?  Don't rename it again,
+                // unless this same parent bus updated it and the bus member name has since changed
+                // (which can happen when a bus member is renamed via stale member update, issue #18299).
                 if( neighbor_conn->Sheet() != neighbor->m_sheet )
-                    continue;
+                {
+                    // If the neighbor's connection sheet doesn't match this parent bus's sheet,
+                    // it was updated by a different bus entirely. Don't override.
+                    if( neighbor_conn->Sheet() != parent->Sheet() )
+                        continue;
+
+                    // If the neighbor's connection sheet matches this parent bus's sheet but
+                    // the names differ, check if the neighbor's current name still matches
+                    // a member of this bus. If it does, the neighbor was updated by a different
+                    // member of this same bus and we should preserve that (determinism).
+                    // If it doesn't match any member, the bus member was renamed and we should update.
+                    SCH_CONNECTION temp( nullptr, neighbor->m_sheet );
+                    temp.ConfigureFromLabel( neighbor_name );
+
+                    if( matchBusMember( parent, &temp ) )
+                        continue;
+                }
 
                 // Safety check against infinite recursion
                 wxCHECK2_MSG( neighbor_conn->IsNet(), continue,
@@ -2847,6 +3018,17 @@ void CONNECTION_GRAPH::propagateToNeighbors( CONNECTION_SUBGRAPH* aSubgraph, boo
                     // Recurse onto this neighbor in case it needs to re-propagate
                     neighbor->m_dirty = true;
                     propagateToNeighbors( neighbor, aForce );
+
+                    // After hierarchy propagation, the neighbor's connection may have been
+                    // updated to a higher-priority driver (e.g., a power symbol discovered
+                    // through hierarchical sheet pins). If so, update the bus member to match.
+                    // This ensures that net names propagate correctly through bus connections
+                    // that span hierarchical boundaries (issue #18119).
+                    if( neighbor_conn->Name() != member->Name() )
+                    {
+                        member->Clone( *neighbor_conn );
+                        stale_bus_members.insert( member );
+                    }
                 }
             }
         }
@@ -3214,6 +3396,13 @@ CONNECTION_SUBGRAPH* CONNECTION_GRAPH::FindFirstSubgraphByName( const wxString& 
 
 CONNECTION_SUBGRAPH* CONNECTION_GRAPH::GetSubgraphForItem( SCH_ITEM* aItem ) const
 {
+    std::string item_desc = aItem->GetTypeDesc().ToStdString();
+    if( aItem->Type() == SCH_LABEL_T || aItem->Type() == SCH_GLOBAL_LABEL_T || aItem->Type() == SCH_HIER_LABEL_T )
+    {
+        SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( aItem );
+        item_desc += " '" + label->GetText().ToStdString() + "'";
+    }
+    
     auto                 it  = m_item_to_subgraph_map.find( aItem );
     CONNECTION_SUBGRAPH* ret = it != m_item_to_subgraph_map.end() ? it->second : nullptr;
 
@@ -4118,6 +4307,13 @@ bool CONNECTION_GRAPH::ercCheckLabels( const CONNECTION_SUBGRAPH* aSubgraph )
         for( SCH_TEXT* text : label_vec )
         {
             size_t allPins = pinCount;
+            size_t localPins = pinCount;
+
+            // For local labels that are bus members, track local pins separately.
+            // A local label connected to a bus that crosses hierarchy boundaries should
+            // still have a local connection to component pins. Without this check, a label
+            // that only connects to pins through the hierarchical bus would not be flagged.
+            bool isBusMemberLabel = ( type == SCH_LABEL_T ) && !aSubgraph->m_bus_parents.empty();
 
             auto it = m_net_name_to_subgraphs_map.find( netName );
 
@@ -4131,17 +4327,23 @@ bool CONNECTION_GRAPH::ercCheckLabels( const CONNECTION_SUBGRAPH* aSubgraph )
                     if( neighbor->m_no_connect )
                         has_nc = true;
 
-                    allPins += hasPins( neighbor );
+                    size_t neighborPins = hasPins( neighbor );
+                    allPins += neighborPins;
+
+                    if( neighbor->m_sheet == sheet )
+                        localPins += neighborPins;
                 }
             }
 
             if( allPins == 1 && !has_nc )
             {
-                reportError( text,  ERCE_LABEL_SINGLE_PIN );
+                reportError( text, ERCE_LABEL_SINGLE_PIN );
                 ok = false;
             }
 
-            if( allPins == 0 )
+            // For local bus member labels, check that there's at least one local pin connection.
+            // Labels that only connect to pins through a hierarchical bus should be flagged.
+            if( allPins == 0 || ( isBusMemberLabel && localPins == 0 && !has_nc ) )
             {
                 reportError( text, ERCE_LABEL_NOT_CONNECTED );
                 ok = false;

@@ -89,7 +89,20 @@ DIALOG_SIM_MODEL<T>::DIALOG_SIM_MODEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame
     }
 
     if( EMBEDDED_FILES* symbolEmbeddedFiles = aSymbol.GetEmbeddedFiles() )
+    {
         m_filesStack.push_back( symbolEmbeddedFiles );
+
+        if constexpr (std::is_same_v<T, SCH_SYMBOL>)
+        {
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( &aSymbol );
+            symbol->GetLibSymbolRef()->AppendParentEmbeddedFiles( m_filesStack );
+        }
+        else if constexpr (std::is_same_v<T, LIB_SYMBOL>)
+        {
+            LIB_SYMBOL* symbol = static_cast<LIB_SYMBOL*>( &aSymbol );
+            symbol->AppendParentEmbeddedFiles( m_filesStack );
+        }
+    }
 
     m_libraryModelsMgr.SetFilesStack( m_filesStack );
     m_builtinModelsMgr.SetFilesStack( m_filesStack );
@@ -230,8 +243,9 @@ bool DIALOG_SIM_MODEL<T>::TransferDataToWindow()
                 m_infoBar->ShowMessage( wxString::Format( _( "No model named '%s' in library." ),
                                                           modelName ) );
 
-                // Default to first item in library
-                m_modelListBox->SetSelection( 0 );
+                // Default to first item in library if any exist
+                if( m_modelListBox->GetCount() > 0 )
+                    m_modelListBox->SetSelection( 0 );
             }
             else
             {
@@ -375,7 +389,7 @@ bool DIALOG_SIM_MODEL<T>::TransferDataFromWindow()
     SetFieldValue( m_fields, SIM_LIBRARY::LIBRARY_FIELD, path, false );
     SetFieldValue( m_fields, SIM_LIBRARY::NAME_FIELD, name, false );
 
-    if( isIbisLoaded() )
+    if( isIbisLoaded() && !m_libraryModelsMgr.GetModels().empty() )
     {
         int      idx = 0;
         wxString sel = m_modelListBox->GetStringSelection();
@@ -830,14 +844,21 @@ bool DIALOG_SIM_MODEL<T>::loadLibrary( const wxString& aLibraryPath, REPORTER& a
 
     if( aReporter.HasMessageOfSeverity( RPT_SEVERITY_UNDEFINED | RPT_SEVERITY_ERROR ) )
     {
-        if( m_libraryModelsMgr.GetModels().empty() )
-        {
-            if( m_modelListBox->GetSelection() != wxNOT_FOUND )
-                m_modelListBox->SetSelection( wxNOT_FOUND );
+        m_libraryModelsMgr.Clear();
 
-            if( m_modelListBox->GetCount() )
-                m_modelListBox->Clear();
-        }
+        if( m_modelListBox->GetSelection() != wxNOT_FOUND )
+            m_modelListBox->SetSelection( wxNOT_FOUND );
+
+        if( m_modelListBox->GetCount() )
+            m_modelListBox->Clear();
+
+        wxArrayString emptyArray;
+        m_pinModelCombobox->Set( emptyArray );
+        m_pinCombobox->Set( emptyArray );
+        m_pinModelCombobox->SetSelection( -1 );
+        m_pinCombobox->SetSelection( -1 );
+        m_waveformChoice->Clear();
+        m_prevLibrary.Clear();
 
         return false;
     }
@@ -995,7 +1016,6 @@ wxPGProperty* DIALOG_SIM_MODEL<T>::newParamProperty( SIM_MODEL* aModel, int aPar
     switch( param.info.type )
     {
     case SIM_VALUE::TYPE_BOOL:
-        // TODO.
         prop = new SIM_BOOL_PROPERTY( paramDescription, param.info.name, *aModel, aParamIndex );
         prop->SetAttribute( wxPG_BOOL_USE_CHECKBOX, true );
         break;
@@ -1123,7 +1143,12 @@ SIM_MODEL& DIALOG_SIM_MODEL<T>::curModel() const
         wxString sel = m_modelListBox->GetStringSelection();
 
         if( m_modelListBoxEntryToLibraryIdx.contains( sel ) )
-            return m_libraryModelsMgr.GetModels().at( m_modelListBoxEntryToLibraryIdx.at( sel ) ).get();
+        {
+            int idx = m_modelListBoxEntryToLibraryIdx.at( sel );
+
+            if( idx >= 0 && idx < (int) m_libraryModelsMgr.GetModels().size() )
+                return m_libraryModelsMgr.GetModels().at( idx ).get();
+        }
     }
     else
     {
@@ -1261,6 +1286,8 @@ void DIALOG_SIM_MODEL<T>::onBrowseButtonClick( wxCommandEvent& aEvent )
 
     dlg.SetCustomizeHook( customize );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
@@ -1294,15 +1321,23 @@ void DIALOG_SIM_MODEL<T>::onBrowseButtonClick( wxCommandEvent& aEvent )
 template <typename T>
 void DIALOG_SIM_MODEL<T>::onFilterCharHook( wxKeyEvent& aKeyStroke )
 {
+    int count = m_modelListBox->GetCount();
+
+    if( count == 0 )
+    {
+        aKeyStroke.Skip();
+        return;
+    }
+
     int sel = m_modelListBox->GetSelection();
 
     switch( aKeyStroke.GetKeyCode() )
     {
     case WXK_UP:
         if( sel == wxNOT_FOUND )
-            sel = m_modelListBox->GetCount() - 1;
+            sel = count - 1;
         else
-            sel--;
+            sel = std::max( sel - 1, 0 );
 
         break;
 
@@ -1310,7 +1345,7 @@ void DIALOG_SIM_MODEL<T>::onFilterCharHook( wxKeyEvent& aKeyStroke )
         if( sel == wxNOT_FOUND )
             sel = 0;
         else
-            sel++;
+            sel = std::min( sel + 1, count - 1 );
 
         break;
 
@@ -1319,12 +1354,11 @@ void DIALOG_SIM_MODEL<T>::onFilterCharHook( wxKeyEvent& aKeyStroke )
         return;
 
     default:
-        aKeyStroke.Skip();      // Any other key: pass on to search box directly.
+        aKeyStroke.Skip();
         return;
     }
 
-    if( sel >= 0 && sel < (int) m_modelListBox->GetCount() )
-        m_modelListBox->SetSelection( sel );
+    m_modelListBox->SetSelection( sel );
 }
 
 
@@ -1351,7 +1385,7 @@ void DIALOG_SIM_MODEL<T>::onModelFilter( wxCommandEvent& aEvent )
     m_modelListBox->Clear();
     m_modelListBox->Append( modelNames );
 
-    if( !m_modelListBox->IsEmpty() )
+    if( m_modelListBox->GetCount() > 0 )
     {
         if( !m_modelListBox->SetStringSelection( current ) )
             m_modelListBox->SetSelection( 0 );

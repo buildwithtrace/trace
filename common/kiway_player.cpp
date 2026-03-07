@@ -24,7 +24,7 @@
 
 
 #include <kiway_player.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <kiway.h>
 #include <id.h>
 #include <macros.h>
@@ -33,11 +33,17 @@
 #include <wx/evtloop.h>
 #include <wx/socket.h>
 #include <core/raii.h>
+#include <wx/log.h>
 
+
+static const wxString HOSTNAME( wxT( "localhost" ) );
+
+// buffer for read and write data in socket connections
+#define IPC_BUF_SIZE 4096
+static char client_ipc_buffer[IPC_BUF_SIZE];
 
 BEGIN_EVENT_TABLE( KIWAY_PLAYER, EDA_BASE_FRAME )
     EVT_KIWAY_EXPRESS( KIWAY_PLAYER::kiway_express )
-    EVT_MENU_RANGE( ID_LANGUAGE_CHOICE, ID_LANGUAGE_CHOICE_END, KIWAY_PLAYER::language_change )
 END_EVENT_TABLE()
 
 
@@ -86,7 +92,7 @@ KIWAY_PLAYER::~KIWAY_PLAYER() throw()
 }
 
 
-void KIWAY_PLAYER::KiwayMailIn( KIWAY_EXPRESS& aEvent )
+void KIWAY_PLAYER::KiwayMailIn( KIWAY_MAIL_EVENT& aEvent )
 {
     // override this in derived classes.
 }
@@ -176,22 +182,83 @@ void KIWAY_PLAYER::DismissModal( bool aRetVal, const wxString& aResult )
 }
 
 
-void KIWAY_PLAYER::kiway_express( KIWAY_EXPRESS& aEvent )
+void KIWAY_PLAYER::kiway_express( KIWAY_MAIL_EVENT& aEvent )
 {
     // logging support
     KiwayMailIn( aEvent );     // call the virtual, override in derived.
 }
 
 
-void KIWAY_PLAYER::language_change( wxCommandEvent& event )
+void KIWAY_PLAYER::CreateServer( int service, bool local )
 {
-    int id = event.GetId();
+    wxIPV4address addr;
 
-    // tell all the KIWAY_PLAYERs about the language change.
-    Kiway().SetLanguage( id );
+    // Set the port number
+    addr.Service( service );
+
+    // Listen on localhost only if requested
+    if( local )
+        addr.Hostname( HOSTNAME );
+
+    if( m_socketServer )
+    {
+        // this helps prevent any events that could come in during deletion
+        m_socketServer->Notify( false );
+        delete m_socketServer;
+    }
+
+    m_socketServer = new wxSocketServer( addr );
+
+    m_socketServer->SetNotify( wxSOCKET_CONNECTION_FLAG );
+    m_socketServer->SetEventHandler( *this, ID_EDA_SOCKET_EVENT_SERV );
+    m_socketServer->Notify( true );
 }
 
 
+void KIWAY_PLAYER::OnSockRequest( wxSocketEvent& evt )
+{
+    size_t        len;
+    wxSocketBase* sock = evt.GetSocket();
 
-//  LocalWords:  ShowModal DismissModal vtable wxWindowDisabler aui
-//  LocalWords:  miniframe reenables KIWAY PLAYERs
+    switch( evt.GetSocketEvent() )
+    {
+    case wxSOCKET_INPUT:
+        sock->Read( client_ipc_buffer, 1 );
+
+        if( sock->LastCount() == 0 )
+            break;                    // No data, occurs on opening connection
+
+        sock->Read( client_ipc_buffer + 1, IPC_BUF_SIZE - 2 );
+        len = 1 + sock->LastCount();
+        client_ipc_buffer[len] = 0;
+        ExecuteRemoteCommand( client_ipc_buffer );
+        break;
+
+    case wxSOCKET_LOST:
+        return;
+        break;
+
+    default:
+        wxLogError( wxT( "EDA_DRAW_FRAME::OnSockRequest() error: Invalid event !" ) );
+        break;
+    }
+}
+
+
+void KIWAY_PLAYER::OnSockRequestServer( wxSocketEvent& evt )
+{
+    wxSocketBase*   socket;
+    wxSocketServer* server = (wxSocketServer*) evt.GetSocket();
+
+    socket = server->Accept();
+
+    if( socket == nullptr )
+        return;
+
+    m_sockets.push_back( socket );
+
+    socket->Notify( true );
+    socket->SetEventHandler( *this, ID_EDA_SOCKET_EVENT );
+    socket->SetNotify( wxSOCKET_INPUT_FLAG | wxSOCKET_LOST_FLAG );
+}
+

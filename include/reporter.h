@@ -229,20 +229,32 @@ public:
 
 
 /**
- * Reporter forwarding messages to stdout or stderr as appropriate
+ * Reporter forwarding messages to stdout or stderr as appropriate.
+ * By default, debug messages are suppressed unless verbose mode is enabled.
  */
 class KICOMMON_API CLI_REPORTER : public REPORTER
 {
 public:
-    CLI_REPORTER()
+    CLI_REPORTER() :
+            m_verbose( false )
     { }
 
     virtual ~CLI_REPORTER()
     { }
 
-    static REPORTER& GetInstance();
+    static CLI_REPORTER& GetInstance();
+
+    /**
+     * Enable or disable verbose mode. When enabled, debug messages are printed.
+     */
+    void SetVerbose( bool aVerbose ) { m_verbose = aVerbose; }
+
+    bool GetVerbose() const { return m_verbose; }
 
     REPORTER& Report( const wxString& aMsg, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+private:
+    bool m_verbose;
 };
 
 
@@ -276,6 +288,56 @@ public:
     static REPORTER& GetInstance();
 
     REPORTER& Report( const wxString& aMsg, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+};
+
+
+class KICOMMON_API LOAD_INFO_REPORTER : public REPORTER
+{
+public:
+    LOAD_INFO_REPORTER()
+    { }
+
+    virtual ~LOAD_INFO_REPORTER()
+    { }
+
+    static LOAD_INFO_REPORTER& GetInstance();
+
+    REPORTER& Report( const wxString& aMsg, SEVERITY aSeverity = RPT_SEVERITY_UNDEFINED ) override;
+
+    void SetRedirectTarget( REPORTER* aReporter );
+    REPORTER* GetRedirectTarget() const;
+
+private:
+    REPORTER* m_redirectTarget = nullptr;
+};
+
+
+class KICOMMON_API LOAD_INFO_REPORTER_SCOPE
+{
+public:
+    explicit LOAD_INFO_REPORTER_SCOPE( REPORTER* aReporter );
+    ~LOAD_INFO_REPORTER_SCOPE();
+
+private:
+    LOAD_INFO_REPORTER& m_reporter;
+    REPORTER*           m_previousReporter;
+};
+
+
+/**
+ * RAII class to set and restore the fontconfig reporter.
+ *
+ * Ensures the fontconfig reporter is properly reset even if an exception occurs
+ * during file loading operations.
+ */
+class KICOMMON_API FONTCONFIG_REPORTER_SCOPE
+{
+public:
+    explicit FONTCONFIG_REPORTER_SCOPE( REPORTER* aReporter );
+    ~FONTCONFIG_REPORTER_SCOPE();
+
+private:
+    REPORTER* m_previousReporter;
 };
 
 

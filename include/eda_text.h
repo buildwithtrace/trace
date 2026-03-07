@@ -275,6 +275,8 @@ public:
     void SetTextX( int aX );
     void SetTextY( int aY );
 
+    inline void SetActiveUrl( const wxString& aUrl ) const { m_activeUrl = aUrl; }
+
     void Offset( const VECTOR2I& aOffset );
 
     void Empty();
@@ -444,11 +446,15 @@ protected:
     void printOneLineOfText( const RENDER_SETTINGS* aSettings, const VECTOR2I& aOffset,
                              const COLOR4D& aColor, const wxString& aText, const VECTOR2I& aPos );
 
+    bool containsURL() const;
+
 protected:
     /**
      * A hyperlink URL.  If empty, this text object is not a hyperlink.
      */
     wxString m_hyperlink;
+
+    mutable wxString m_activeUrl;
 
 private:
     wxString         m_text;
@@ -461,6 +467,7 @@ private:
     mutable const KIFONT::FONT*                         m_render_cache_font;
     mutable EDA_ANGLE                                   m_render_cache_angle;
     mutable VECTOR2I                                    m_render_cache_offset;
+    mutable bool                                        m_render_cache_mirrored;
     mutable std::vector<std::unique_ptr<KIFONT::GLYPH>> m_render_cache;
 
     struct BBOX_CACHE_ENTRY

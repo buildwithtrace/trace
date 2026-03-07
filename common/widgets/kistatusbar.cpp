@@ -26,15 +26,20 @@
 #include <wx/statusbr.h>
 #include <wx/gauge.h>
 #include <wx/stattext.h>
+#include <wx/tokenzr.h>
 #include <fmt/format.h>
 #include <array>
 #include <widgets/kistatusbar.h>
+#include <widgets/wx_html_report_box.h>
 #include <widgets/bitmap_button.h>
 #include <widgets/ui_common.h>
 #include <pgm_base.h>
 #include <background_jobs_monitor.h>
 #include <notifications_manager.h>
 #include <bitmaps.h>
+#include <reporter.h>
+#include <dialog_HTML_reporter_base.h>
+#include <trace_helpers.h>
 #include <wx/dcclient.h>
 
 
@@ -42,6 +47,7 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
         wxStatusBar( parent, id ),
         m_backgroundStopButton( nullptr ),
         m_notificationsButton( nullptr ),
+        m_warningButton( nullptr ),
         m_normalFieldsCount( aNumberFields ),
         m_styleFlags( aFlags )
 {
@@ -56,8 +62,12 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
 
     bool showNotification = ( m_styleFlags & NOTIFICATION_ICON );
     bool showCancel = ( m_styleFlags & CANCEL_BUTTON );
+    bool showWarning = ( m_styleFlags & WARNING_ICON );
 
     if( showCancel )
+        extraFields++;
+
+    if( showWarning )
         extraFields++;
 
     if( showNotification )
@@ -78,6 +88,9 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
 
     if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_CANCEL ) )
         widths[aNumberFields + *idx] = 20;     // background stop button
+
+    if( std::optional<int> idx = fieldIndex( FIELD::WARNING ) )
+        widths[aNumberFields + *idx] = 20;  // warning button
 
     if( std::optional<int> idx = fieldIndex( FIELD::NOTIFICATION ) )
         widths[aNumberFields + *idx] = 20;  // notifications button
@@ -122,6 +135,20 @@ KISTATUSBAR::KISTATUSBAR( int aNumberFields, wxWindow* parent, wxWindowID id, ST
         m_notificationsButton->Bind( wxEVT_BUTTON, &KISTATUSBAR::onNotificationsIconClick, this );
     }
 
+    if( showWarning )
+    {
+        m_warningButton = new BITMAP_BUTTON( this, wxID_ANY, wxNullBitmap, wxDefaultPosition,
+                                             wxDefaultSize, wxBU_EXACTFIT );
+
+        m_warningButton->SetPadding( 0 );
+        m_warningButton->SetBitmap( KiBitmapBundle( BITMAPS::small_warning ) );
+        m_warningButton->SetBitmapCentered( true );
+        m_warningButton->SetToolTip( _( "View load messages" ) );
+        m_warningButton->Hide();
+
+        m_warningButton->Bind( wxEVT_BUTTON, &KISTATUSBAR::onLoadWarningsIconClick, this );
+    }
+
     Bind( wxEVT_SIZE, &KISTATUSBAR::onSize, this );
     m_backgroundProgressBar->Bind( wxEVT_LEFT_DOWN, &KISTATUSBAR::onBackgroundProgressClick, this );
 
@@ -135,6 +162,9 @@ KISTATUSBAR::~KISTATUSBAR()
     if( m_notificationsButton )
         m_notificationsButton->Unbind( wxEVT_BUTTON, &KISTATUSBAR::onNotificationsIconClick, this );
 
+    if( m_warningButton )
+        m_warningButton->Unbind( wxEVT_BUTTON, &KISTATUSBAR::onLoadWarningsIconClick, this );
+
     Unbind( wxEVT_SIZE, &KISTATUSBAR::onSize, this );
     m_backgroundProgressBar->Unbind( wxEVT_LEFT_DOWN, &KISTATUSBAR::onBackgroundProgressClick,
                                      this );
@@ -147,8 +177,11 @@ void KISTATUSBAR::onNotificationsIconClick( wxCommandEvent& aEvent )
     wxPoint pos = m_notificationsButton->GetScreenPosition();
 
     wxRect r;
-    GetFieldRect( m_normalFieldsCount + 3, r );
-    pos.x += r.GetWidth();
+    if( std::optional<int> idx = fieldIndex( FIELD::NOTIFICATION ) )
+    {
+        GetFieldRect( m_normalFieldsCount + *idx, r );
+        pos.x += r.GetWidth();
+    }
 
     Pgm().GetNotificationsManager().ShowList( this, pos );
 }
@@ -159,8 +192,11 @@ void KISTATUSBAR::onBackgroundProgressClick( wxMouseEvent& aEvent )
     wxPoint pos = m_backgroundProgressBar->GetScreenPosition();
 
     wxRect r;
-    GetFieldRect( m_normalFieldsCount + 1, r );
-    pos.x += r.GetWidth();
+    if( std::optional<int> idx = fieldIndex( FIELD::BGJOB_GAUGE ) )
+    {
+        GetFieldRect( m_normalFieldsCount + *idx, r );
+        pos.x += r.GetWidth();
+    }
 
     Pgm().GetBackgroundJobMonitor().ShowList( this, pos );
 }
@@ -209,6 +245,17 @@ void KISTATUSBAR::onSize( wxSizeEvent& aEvent )
         m_notificationsButton->SetPosition( { x, y } );
         m_notificationsButton->SetSize( buttonSize.GetWidth() + 6, h );
     }
+
+    if( m_warningButton )
+    {
+        GetFieldRect( m_normalFieldsCount + *fieldIndex( FIELD::WARNING ), r );
+        x = r.GetLeft();
+        y = r.GetTop();
+        h = r.GetHeight();
+        buttonSize = m_warningButton->GetEffectiveMinSize();
+        m_warningButton->SetPosition( { x, y } );
+        m_warningButton->SetSize( buttonSize.GetWidth() + 6, h );
+    }
 }
 
 
@@ -232,6 +279,11 @@ void KISTATUSBAR::HideBackgroundProgressBar()
 
 void KISTATUSBAR::SetBackgroundProgress( int aAmount )
 {
+    int range = m_backgroundProgressBar->GetRange();
+
+    if( aAmount > range )
+        aAmount = range;
+
     m_backgroundProgressBar->SetValue( aAmount );
 }
 
@@ -245,6 +297,26 @@ void KISTATUSBAR::SetBackgroundProgressMax( int aAmount )
 void KISTATUSBAR::SetBackgroundStatusText( const wxString& aTxt )
 {
     m_backgroundTxt->SetLabel( aTxt );
+
+    // When there are multiple normal fields, the last normal field (typically used for
+    // file watcher status on Windows) can visually overlap with the background job label
+    // since both have variable width. Save and clear that field when showing background
+    // text, and restore it when the background text is cleared.
+    if( m_normalFieldsCount > 1 )
+    {
+        int adjacentField = m_normalFieldsCount - 1;
+
+        if( !aTxt.empty() )
+        {
+            m_savedStatusText = GetStatusText( adjacentField );
+            SetStatusText( wxEmptyString, adjacentField );
+        }
+        else if( !m_savedStatusText.empty() )
+        {
+            SetStatusText( m_savedStatusText, adjacentField );
+            m_savedStatusText.clear();
+        }
+    }
 }
 
 
@@ -262,7 +334,136 @@ void KISTATUSBAR::SetNotificationCount( int aCount )
     Refresh();
 }
 
-#include <widgets/ui_common.h>
+
+void KISTATUSBAR::SetLoadWarningMessages( const wxString& aMessages )
+{
+    {
+        std::lock_guard<std::mutex> lock( m_loadWarningMutex );
+        m_loadWarningMessages.clear();
+
+        wxStringTokenizer tokenizer( aMessages, wxS( "\n" ), wxTOKEN_STRTOK );
+
+        while( tokenizer.HasMoreTokens() )
+        {
+            LOAD_MESSAGE msg;
+            msg.message = tokenizer.GetNextToken();
+            msg.severity = RPT_SEVERITY_WARNING;  // Default to warning for font substitutions
+            m_loadWarningMessages.push_back( msg );
+        }
+    }
+
+    updateWarningUI();
+}
+
+
+void KISTATUSBAR::AddLoadWarningMessages( const std::vector<LOAD_MESSAGE>& aMessages )
+{
+    wxLogTrace( traceLibraries, "KISTATUSBAR::AddLoadWarningMessages: this=%p, count=%zu",
+                this, aMessages.size() );
+
+    if( aMessages.empty() )
+        return;
+
+    {
+        std::lock_guard<std::mutex> lock( m_loadWarningMutex );
+        m_loadWarningMessages.insert( m_loadWarningMessages.end(), aMessages.begin(), aMessages.end() );
+        wxLogTrace( traceLibraries, "  -> total messages now=%zu", m_loadWarningMessages.size() );
+    }
+
+    // Update UI on main thread
+    wxLogTrace( traceLibraries, "  -> calling CallAfter for updateWarningUI" );
+    CallAfter( [this]() { updateWarningUI(); } );
+}
+
+
+size_t KISTATUSBAR::GetLoadWarningCount() const
+{
+    std::lock_guard<std::mutex> lock( m_loadWarningMutex );
+    return m_loadWarningMessages.size();
+}
+
+
+void KISTATUSBAR::updateWarningUI()
+{
+    wxLogTrace( traceLibraries, "KISTATUSBAR::updateWarningUI: this=%p, m_warningButton=%p",
+                this, m_warningButton );
+
+    if( !m_warningButton )
+    {
+        wxLogTrace( traceLibraries, "  -> no warning button, returning early" );
+        return;
+    }
+
+    size_t messageCount;
+    {
+        std::lock_guard<std::mutex> lock( m_loadWarningMutex );
+        messageCount = m_loadWarningMessages.size();
+    }
+
+    wxLogTrace( traceLibraries, "  -> message count=%zu, showing button=%s",
+                messageCount, messageCount > 0 ? "true" : "false" );
+
+    m_warningButton->Show( messageCount > 0 );
+
+    if( messageCount > 0 )
+    {
+        m_warningButton->SetToolTip( wxString::Format( _( "View %zu load message(s)" ), messageCount ) );
+
+        // Show count badge on the warning button
+        m_warningButton->SetShowBadge( true );
+        wxString badgeText = messageCount > 99
+                ? wxString( "99+" )
+                : wxString::Format( wxS( "%zu" ), messageCount );
+        m_warningButton->SetBadgeText( badgeText );
+
+        wxLogTrace( traceLibraries, "  -> badge set to '%s'", badgeText );
+    }
+
+    Layout();
+    Refresh();
+    wxLogTrace( traceLibraries, "  -> Layout and Refresh complete" );
+}
+
+
+void KISTATUSBAR::ClearLoadWarningMessages()
+{
+    {
+        std::lock_guard<std::mutex> lock( m_loadWarningMutex );
+        m_loadWarningMessages.clear();
+    }
+
+    if( m_warningButton )
+    {
+        m_warningButton->Hide();
+        m_warningButton->SetShowBadge( false );
+        m_warningButton->SetBadgeText( wxEmptyString );
+        Layout();
+        Refresh();
+    }
+}
+
+
+void KISTATUSBAR::onLoadWarningsIconClick( wxCommandEvent& aEvent )
+{
+    // Copy messages under lock to avoid holding lock during modal dialog
+    std::vector<LOAD_MESSAGE> messages;
+    {
+        std::lock_guard<std::mutex> lock( m_loadWarningMutex );
+        messages = m_loadWarningMessages;
+    }
+
+    if( messages.empty() )
+        return;
+
+    DIALOG_HTML_REPORTER dlg( GetParent(), wxID_ANY, _( "Load Messages" ) );
+
+    for( const LOAD_MESSAGE& msg : messages )
+        dlg.m_Reporter->Report( msg.message, msg.severity );
+
+    dlg.m_Reporter->Flush();
+    dlg.ShowModal();
+}
+
 void KISTATUSBAR::SetEllipsedTextField( const wxString& aText, int aFieldId )
 {
     wxRect       fieldRect;
@@ -300,12 +501,36 @@ std::optional<int> KISTATUSBAR::fieldIndex( FIELD aField ) const
 
         break;
     }
+    case FIELD::WARNING:
+    {
+        if( m_styleFlags & WARNING_ICON )
+        {
+            int offset = 2;
+
+            if( m_styleFlags & CANCEL_BUTTON )
+                offset++;
+
+            return offset;
+        }
+
+        break;
+    }
     case FIELD::NOTIFICATION:
     {
-        if( m_styleFlags & ( CANCEL_BUTTON | NOTIFICATION_ICON ) )
-            return 3;
-        else if( m_styleFlags & NOTIFICATION_ICON )
-            return 2;
+        if( m_styleFlags & NOTIFICATION_ICON )
+        {
+            int offset = 2;
+
+            if( m_styleFlags & CANCEL_BUTTON )
+                offset++;
+
+            if( m_styleFlags & WARNING_ICON )
+                offset++;
+
+            return offset;
+        }
+
+        break;
     }
     }
 

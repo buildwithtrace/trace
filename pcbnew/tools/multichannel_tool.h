@@ -102,7 +102,8 @@ public:
     ~MULTICHANNEL_TOOL();
 
     int RepeatLayout( const TOOL_EVENT& aEvent, ZONE* aRefZone );
-    int RepeatLayout( const TOOL_EVENT& aEvent, RULE_AREA& aRefArea, RULE_AREA& aTargetArea );
+    int RepeatLayout( const TOOL_EVENT& aEvent, RULE_AREA& aRefArea, RULE_AREA& aTargetArea,
+                      REPEAT_LAYOUT_OPTIONS& aOptions );
     int AutogenerateRuleAreas( const TOOL_EVENT& aEvent );
 
     void UpdatePickedPoint( const std::optional<VECTOR2I>& aPoint ) override {};
@@ -133,14 +134,17 @@ private:
                                RULE_AREA_COMPAT_DATA& aCompatData );
 
     const SHAPE_LINE_CHAIN buildRAOutline( std::set<FOOTPRINT*>& aFootprints, int aMargin );
+    const SHAPE_LINE_CHAIN buildRAOutline( const std::set<BOARD_ITEM*>& aItems, int aMargin );
 
     std::set<FOOTPRINT*> queryComponentsInSheet( wxString aSheetName ) const;
     std::set<FOOTPRINT*> queryComponentsInComponentClass( const wxString& aComponentClassName ) const;
     std::set<FOOTPRINT*> queryComponentsInGroup( const wxString& aGroupName ) const;
+    std::set<BOARD_ITEM*> queryBoardItemsInGroup( const wxString& aGroupName ) const;
 
     RULE_AREA* findRAByName( const wxString& aName );
     bool       resolveConnectionTopology( RULE_AREA* aRefArea, RULE_AREA* aTargetArea,
-                                          RULE_AREA_COMPAT_DATA& aMatches );
+                                          RULE_AREA_COMPAT_DATA& aMatches,
+                                          const TMATCH::ISOMORPHISM_PARAMS& aParams = {} );
     void       fixupNet( BOARD_CONNECTED_ITEM* aRef, BOARD_CONNECTED_ITEM* aTarget,
                          TMATCH::COMPONENT_MATCHES& aComponentMatches );
     bool       pruneExistingGroups( COMMIT& aCommit, const std::unordered_set<BOARD_ITEM*>& aItemsToCheck );

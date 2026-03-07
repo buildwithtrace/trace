@@ -98,6 +98,9 @@ PCB_BASE_FRAME::~PCB_BASE_FRAME()
     if( GetCanvas() )
         m_canvasType = GetCanvas()->GetBackend();
 
+    if( m_toolManager )
+        m_toolManager->ClearModel();
+
     delete m_pcb;
     m_pcb = nullptr;
 }
@@ -1103,14 +1106,14 @@ void PCB_BASE_FRAME::setFPWatcher( FOOTPRINT* aFootprint )
 
         libfullname = LIBRARY_MANAGER::GetFullURI( *row, true );
     }
+    catch( const IO_ERROR& error )
+    {
+        wxLogTrace( traceLibWatch, "Error: %s", error.What() );
+        return;
+    }
     catch( const std::exception& e )
     {
         DisplayInfoMessage( this, e.what() );
-        return;
-    }
-    catch( const IO_ERROR& error )
-    {
-    wxLogTrace( traceLibWatch, "Error: %s", error.What() );
         return;
     }
 

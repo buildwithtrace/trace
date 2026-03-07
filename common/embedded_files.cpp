@@ -165,7 +165,6 @@ void EMBEDDED_FILES::WriteEmbeddedFiles( OUTPUTFORMATTER& aOut, bool aWriteData 
         // Skip empty files
         if( file.compressedEncodedData.empty() )
         {
-            wxLogDebug( wxT( "Error: Embedded file '%s' is empty" ), file.name );
             continue;
         }
 
@@ -320,6 +319,39 @@ EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::DecompressAndDecode( EMBEDDED_FILE& 
     }
 
     aFile.data_hash = new_hash;
+
+    return RETURN_CODE::OK;
+}
+
+
+EMBEDDED_FILES::RETURN_CODE EMBEDDED_FILES::ComputeFileHash( const wxFileName& aFileName,
+                                                             std::string& aHash )
+{
+    wxFFileInputStream file( aFileName.GetFullPath() );
+
+    if( !file.IsOk() )
+        return RETURN_CODE::FILE_NOT_FOUND;
+
+    wxFileOffset length = file.GetLength();
+    std::vector<char> data( length );
+
+    if( !data.data() )
+        return RETURN_CODE::OUT_OF_MEMORY;
+
+    char* dataPtr = data.data();
+    wxFileOffset totalRead = 0;
+
+    while( !file.Eof() && totalRead < length )
+    {
+        file.Read( dataPtr, length - totalRead );
+        size_t bytesRead = file.LastRead();
+        dataPtr += bytesRead;
+        totalRead += bytesRead;
+    }
+
+    MMH3_HASH hash( EMBEDDED_FILES::Seed() );
+    hash.add( data );
+    aHash = hash.digest().ToString();
 
     return RETURN_CODE::OK;
 }
@@ -582,6 +614,21 @@ EMBEDDED_FILES::EMBEDDED_FILES( const EMBEDDED_FILES& other ) :
         m_files[name] = new EMBEDDED_FILE( *file );
 
     m_fontFiles = other.m_fontFiles;
+    m_fileAddedCallback = other.m_fileAddedCallback;
+}
+
+
+EMBEDDED_FILES::EMBEDDED_FILES( const EMBEDDED_FILES& other, bool aDeepCopy ) :
+        m_embedFonts( other.m_embedFonts )
+{
+    if( aDeepCopy )
+    {
+        for( const auto& [name, file] : other.m_files )
+            m_files[name] = new EMBEDDED_FILE( *file );
+
+        m_fontFiles = other.m_fontFiles;
+    }
+
     m_fileAddedCallback = other.m_fileAddedCallback;
 }
 

@@ -5,9 +5,9 @@ elseif( APPLE )
     set( KICAD_I18N_PATH ${KICAD_DATA}/internat
         CACHE PATH "Location of KiCad i18n files." )
 else()
-    # Default Unix inconvenient locale lookup path
-    set( KICAD_I18N_PATH share/kicad/internat
-        CACHE PATH "Location of KiCad i18n files." )
+    # Default locale lookup path for Trace
+    set( KICAD_I18N_PATH share/trace/internat
+        CACHE PATH "Location of Trace i18n files." )
 endif()
 
 file(STRINGS pofiles/LINGUAS_INSTALL LANG_ARRAY REGEX "^[^#].*")

@@ -46,12 +46,13 @@
 #include <dialogs/dialog_text_entry.h>
 #include <string_utils.h>
 #include <kiplatform/ui.h>
+#include <confirm.h>
+#include <amplitude_client.h>
 
 #include <wx/ffile.h>
 #include <wx/filedlg.h>
 #include <wx/hyperlink.h>
 #include <wx/msgdlg.h>
-#include <wx/wupdlock.h>
 #include <sch_edit_tool.h>
 
 
@@ -79,7 +80,8 @@ DIALOG_ERC::DIALOG_ERC( SCH_EDIT_FRAME* parent ) :
         m_ercRun( false ),
         m_centerMarkerOnIdle( nullptr ),
         m_crossprobe( true ),
-        m_scroll_on_crossprobe( true )
+        m_scroll_on_crossprobe( true ),
+        m_showAllErrors( false )
 {
     m_currentSchematic = &parent->Schematic();
 
@@ -95,6 +97,10 @@ DIALOG_ERC::DIALOG_ERC( SCH_EDIT_FRAME* parent ) :
     m_markerTreeModel = new ERC_TREE_MODEL( parent, m_markerDataView );
     m_markerDataView->AssociateModel( m_markerTreeModel );
     m_markerTreeModel->Update( m_markerProvider, getSeverities() );
+
+    // Prevent RTL locales from mirroring the text in the data views
+    m_markerDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_ignoredList->SetLayoutDirection( wxLayout_LeftToRight );
 
     m_ignoredList->InsertColumn( 0, wxEmptyString, wxLIST_FORMAT_LEFT, DEFAULT_SINGLE_COL_WIDTH );
 
@@ -135,6 +141,7 @@ DIALOG_ERC::DIALOG_ERC( SCH_EDIT_FRAME* parent ) :
     {
         m_crossprobe = cfg->m_ERCDialog.crossprobe;
         m_scroll_on_crossprobe = cfg->m_ERCDialog.scroll_on_crossprobe;
+        m_showAllErrors = cfg->m_ERCDialog.show_all_errors;
     }
 
     // Now all widgets have the size fixed, call FinishDialogSettings
@@ -156,6 +163,7 @@ DIALOG_ERC::~DIALOG_ERC()
     {
         cfg->m_ERCDialog.crossprobe = m_crossprobe;
         cfg->m_ERCDialog.scroll_on_crossprobe = m_scroll_on_crossprobe;
+        cfg->m_ERCDialog.show_all_errors = m_showAllErrors;
     }
 
     m_markerTreeModel->DecRef();
@@ -229,6 +237,11 @@ void DIALOG_ERC::OnMenu( wxCommandEvent& event )
                  wxITEM_CHECK );
     menu.Check( 4207, m_scroll_on_crossprobe );
 
+    menu.Append( 4208, _( "Show all errors" ),
+                 _( "Show duplicate ERC markers on all applicable pins" ),
+                 wxITEM_CHECK );
+    menu.Check( 4208, m_showAllErrors );
+
     // menu_id is the selected submenu id from the popup menu or wxID_NONE
     int menu_id = m_bMenu->GetPopupMenuSelectionFromUser( menu );
 
@@ -239,6 +252,10 @@ void DIALOG_ERC::OnMenu( wxCommandEvent& event )
     else if( menu_id == 1 || menu_id == 4207 )
     {
         m_scroll_on_crossprobe = !m_scroll_on_crossprobe;
+    }
+    else if( menu_id == 2 || menu_id == 4208 )
+    {
+        m_showAllErrors = !m_showAllErrors;
     }
 }
 
@@ -395,8 +412,8 @@ void DIALOG_ERC::OnDeleteAllClick( wxCommandEvent& event )
 
     if( numExcluded > 0 )
     {
-        wxMessageDialog dlg( this, _( "Delete exclusions too?" ), _( "Delete All Markers" ),
-                             wxYES_NO | wxCANCEL | wxCENTER | wxICON_QUESTION );
+        KICAD_MESSAGE_DIALOG dlg( this, _( "Delete exclusions too?" ), _( "Delete All Markers" ),
+                                  wxYES_NO | wxCANCEL | wxCENTER | wxICON_QUESTION );
         dlg.SetYesNoLabels( _( "Errors and Warnings Only" ),
                             _( "Errors, Warnings and Exclusions" ) );
 
@@ -454,6 +471,9 @@ void DIALOG_ERC::OnLinkClicked( wxHtmlLinkEvent& event )
 
 void DIALOG_ERC::OnRunERCClick( wxCommandEvent& event )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "erc_run", {
+        { "app_type", "eeschema" },
+    } );
     wxBusyCursor busy;
 
     SCHEMATIC* sch = &m_parent->Schematic();
@@ -572,7 +592,7 @@ void DIALOG_ERC::testErc()
     SCHEMATIC* sch = &m_parent->Schematic();
 
     SCH_SCREENS screens( sch->Root() );
-    ERC_TESTER tester( sch );
+    ERC_TESTER tester( sch, m_showAllErrors );
 
     {
         wxBusyCursor dummy;
@@ -1084,7 +1104,7 @@ void DIALOG_ERC::deleteAllMarkers( bool aIncludeExclusions )
     // Clear current selection list to avoid selection of deleted items
     // Freeze to avoid repainting the dialog, which can cause a RePaint()
     // of the screen as well
-    wxWindowUpdateLocker updateLock( this );
+    Freeze();
 
     m_parent->GetToolManager()->RunAction( ACTIONS::selectionClear );
 
@@ -1092,6 +1112,8 @@ void DIALOG_ERC::deleteAllMarkers( bool aIncludeExclusions )
 
     SCH_SCREENS screens( m_parent->Schematic().Root() );
     screens.DeleteAllMarkers( MARKER_BASE::MARKER_ERC, aIncludeExclusions );
+
+    Thaw();
 }
 
 
@@ -1102,6 +1124,8 @@ void DIALOG_ERC::OnSaveReport( wxCommandEvent& aEvent )
     wxFileDialog dlg( this, _( "Save Report File" ), Prj().GetProjectPath(), fn.GetFullName(),
                       FILEEXT::ReportFileWildcard() + wxS( "|" ) + FILEEXT::JsonFileWildcard(),
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() != wxID_OK )
         return;

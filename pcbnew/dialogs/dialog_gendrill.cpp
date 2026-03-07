@@ -27,13 +27,14 @@
 #include <wx/msgdlg.h>
 #include <wx/dirdlg.h>
 #include <wx/filedlg.h>
+#include <kiplatform/ui.h>
 
 #include <confirm.h>
 #include <core/arraydim.h>
 #include <widgets/std_bitmap_button.h>
 #include <pcb_edit_frame.h>
 #include <pcbplot.h>
-#include <gendrill_Excellon_writer.h>
+#include <gendrill_excellon_writer.h>
 #include <gendrill_gerber_writer.h>
 #include <bitmaps.h>
 #include <tools/board_editor_control.h>
@@ -326,7 +327,7 @@ void DIALOG_GENDRILL::genDrillAndMapFiles( bool aGenDrill, bool aGenMap, bool aG
 
     wxString path = m_plotOpts.GetOutputDirectory();
     path = ExpandTextVars( path, &textResolver );
-    path = ExpandEnvVarSubstitutions( path, nullptr );
+    path = ExpandEnvVarSubstitutions( path, &Prj() );
 
     wxFileName  outputDir = wxFileName::DirName( path );
     wxString    boardFilename = m_board->GetFileName();
@@ -397,6 +398,8 @@ void DIALOG_GENDRILL::onGenReportFile( wxCommandEvent& event )
 
     wxFileDialog dlg( this, _( "Save Drill Report File" ), defaultPath, fn.GetFullName(),
                       FILEEXT::ReportFileWildcard(), wxFD_SAVE );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;

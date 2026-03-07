@@ -41,6 +41,7 @@
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
+#include <kiplatform/ui.h>
 
 bool PL_EDITOR_FRAME::saveCurrentPageLayout()
 {
@@ -58,7 +59,7 @@ void PL_EDITOR_FRAME::OnFileHistory( wxCommandEvent& event )
 
     filename = GetFileFromHistory( event.GetId(), _( "Drawing Sheet File" ) );
 
-    if( filename != wxEmptyString )
+    if( !filename.IsEmpty() )
     {
         if( IsContentModified() )
         {
@@ -132,6 +133,8 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
                                       wxEmptyString, wxEmptyString,
                                       FILEEXT::DrawingSheetFileWildcard(), wxFD_OPEN );
 
+        KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
+
         if( openFileDialog.ShowModal() == wxID_CANCEL )
             return;
 
@@ -149,13 +152,16 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
             msg.Printf( _( "File '%s' inserted" ), filename );
             SetStatusText( msg );
         }
-    }
+
         break;
+    }
 
     case wxID_OPEN:
     {
          wxFileDialog openFileDialog( this, _( "Open Drawing Sheet" ), wxEmptyString, wxEmptyString,
                                      FILEEXT::DrawingSheetFileWildcard(), wxFD_OPEN );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
 
         if( openFileDialog.ShowModal() == wxID_CANCEL )
             return;
@@ -173,8 +179,9 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
             msg.Printf( _( "File '%s' saved." ), filename );
             SetStatusText( msg );
         }
-    }
+
         break;
+    }
 
     case wxID_SAVE:
         if( !SaveDrawingSheetFile( filename ) )
@@ -187,6 +194,7 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
             msg.Printf( _("File '%s' saved."), filename );
             SetStatusText( msg );
         }
+
         break;
 
     case wxID_SAVEAS:
@@ -195,6 +203,8 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
         wxFileDialog openFileDialog( this, _( "Save Drawing Sheet As" ), dir, wxEmptyString,
                                      FILEEXT::DrawingSheetFileWildcard(),
                                      wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
 
         if( openFileDialog.ShowModal() == wxID_CANCEL )
             return;
@@ -222,8 +232,9 @@ void PL_EDITOR_FRAME::Files_io( wxCommandEvent& event )
             SetCurrentFileName( filename );
             UpdateTitleAndInfo();
         }
-    }
+
         break;
+    }
 
     default:
         break;

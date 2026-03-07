@@ -59,7 +59,7 @@
 
 #include <algorithm>
 #include <functional>
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 #include <typeinfo>
 
 BEGIN_EVENT_TABLE( DIALOG_SHIM, wxDialog )
@@ -67,9 +67,33 @@ BEGIN_EVENT_TABLE( DIALOG_SHIM, wxDialog )
 END_EVENT_TABLE()
 
 
-DIALOG_SHIM::DIALOG_SHIM( wxWindow* aParent, wxWindowID id, const wxString& title,
-                          const wxPoint& pos, const wxSize& size, long style,
-                          const wxString& name ) :
+/**
+ * Strip parenthetical suffixes from dialog titles to create stable persistence keys.
+ *
+ * Dialog titles like "Choose Symbol (1234 items loaded)" would otherwise create unique
+ * keys for each item count, flooding the settings file with duplicate entries.
+ */
+static std::string getDialogKeyFromTitle( const wxString& aTitle )
+{
+    std::string title = aTitle.ToStdString();
+    size_t parenPos = title.rfind( '(' );
+
+    if( parenPos != std::string::npos && parenPos > 0 )
+    {
+        size_t end = parenPos;
+
+        while( end > 0 && title[end - 1] == ' ' )
+            end--;
+
+        return title.substr( 0, end );
+    }
+
+    return title;
+}
+
+
+DIALOG_SHIM::DIALOG_SHIM( wxWindow* aParent, wxWindowID id, const wxString& title, const wxPoint& pos,
+                          const wxSize& size, long style, const wxString& name ) :
         wxDialog( aParent, id, title, pos, size, style, name ),
         KIWAY_HOLDER( nullptr, KIWAY_HOLDER::DIALOG ),
         m_units( EDA_UNITS::MM ),
@@ -83,7 +107,8 @@ DIALOG_SHIM::DIALOG_SHIM( wxWindow* aParent, wxWindowID id, const wxString& titl
         m_parentFrame( nullptr ),
         m_userPositioned( false ),
         m_userResized( false ),
-        m_handlingUndoRedo( false )
+        m_handlingUndoRedo( false ),
+        m_childReleased( false )
 {
     KIWAY_HOLDER* kiwayHolder = nullptr;
     m_initialSize = size;
@@ -321,7 +346,7 @@ bool DIALOG_SHIM::Show( bool show )
         ret = wxDialog::Show( show );
 
         wxRect      savedDialogRect;
-        std::string key = m_hash_key.empty() ? GetTitle().ToStdString() : m_hash_key;
+        std::string key = m_hash_key.empty() ? getDialogKeyFromTitle( GetTitle() ) : m_hash_key;
 
         if( COMMON_SETTINGS* settings = Pgm().GetCommonSettings() )
         {
@@ -352,7 +377,16 @@ bool DIALOG_SHIM::Show( bool show )
                 SetSize( savedDialogRect.GetPosition().x, savedDialogRect.GetPosition().y,
                          std::max( wxDialog::GetSize().x, savedDialogRect.GetSize().x ),
                          std::max( wxDialog::GetSize().y, savedDialogRect.GetSize().y ), 0 );
+
+                // Reset minimum size so the user can resize the dialog smaller than
+                // the saved size. We must clear the current minimum and invalidate
+                // the cached best size so GetBestSize() returns the true sizer
+                // minimum rather than being constrained by the restored size.
+                SetMinSize( wxDefaultSize );
+                InvalidateBestSize();
+                SetMinSize( GetBestSize() );
             }
+
 #ifdef __WXMAC__
             if( m_parent != nullptr )
             {
@@ -363,6 +397,7 @@ bool DIALOG_SHIM::Show( bool show )
                 }
             }
 #endif
+
         }
         else if( m_initialSize != wxDefaultSize )
         {
@@ -402,7 +437,7 @@ void DIALOG_SHIM::resetSize()
 {
     if( COMMON_SETTINGS* settings = Pgm().GetCommonSettings() )
     {
-        std::string key = m_hash_key.empty() ? GetTitle().ToStdString() : m_hash_key;
+        std::string key = m_hash_key.empty() ? getDialogKeyFromTitle( GetTitle() ) : m_hash_key;
 
         auto dlgIt = settings->m_dialogControlValues.find( key );
 
@@ -424,6 +459,31 @@ void DIALOG_SHIM::OnSize( wxSizeEvent& aEvent )
 void DIALOG_SHIM::OnMove( wxMoveEvent& aEvent )
 {
     m_userPositioned = true;
+
+#ifdef __WXMAC__
+    if( m_parent )
+    {
+        int parentDisplay = wxDisplay::GetFromWindow( m_parent );
+        int myDisplay = wxDisplay::GetFromWindow( this );
+
+        if( parentDisplay != wxNOT_FOUND && myDisplay != wxNOT_FOUND )
+        {
+            if( myDisplay != parentDisplay && !m_childReleased )
+            {
+                // Moving to different monitor - release child relationship
+                KIPLATFORM::UI::ReleaseChildWindow( this );
+                m_childReleased = true;
+            }
+            else if( myDisplay == parentDisplay && m_childReleased )
+            {
+                // Back on same monitor - restore child relationship
+                KIPLATFORM::UI::ReparentModal( this );
+                m_childReleased = false;
+            }
+        }
+    }
+#endif
+
     aEvent.Skip();
 }
 
@@ -484,7 +544,7 @@ void DIALOG_SHIM::SaveControlState()
     if( !settings )
         return;
 
-    std::string dialogKey = m_hash_key.empty() ? GetTitle().ToStdString() : m_hash_key;
+    std::string dialogKey = m_hash_key.empty() ? getDialogKeyFromTitle( GetTitle() ) : m_hash_key;
     std::map<std::string, nlohmann::json>& dlgMap = settings->m_dialogControlValues[ dialogKey ];
 
     wxRect rect( GetPosition(), GetSize() );
@@ -559,6 +619,13 @@ void DIALOG_SHIM::SaveControlState()
                         if( index >= 0 && index < (int) notebook->GetPageCount() )
                             dlgMap[ key ] = notebook->GetPageText( notebook->GetSelection() );
                     }
+                    else if( wxAuiNotebook* auiNotebook = dynamic_cast<wxAuiNotebook*>( win ) )
+                    {
+                        int index = auiNotebook->GetSelection();
+
+                        if( index >= 0 && index < (int) auiNotebook->GetPageCount() )
+                            dlgMap[ key ] = auiNotebook->GetPageText( auiNotebook->GetSelection() );
+                    }
                     else if( WX_GRID* grid = dynamic_cast<WX_GRID*>( win ) )
                     {
                         dlgMap[ key ] = grid->GetShownColumnsAsString();
@@ -587,7 +654,7 @@ void DIALOG_SHIM::LoadControlState()
     if( !settings )
         return;
 
-    std::string dialogKey = m_hash_key.empty() ? GetTitle().ToStdString() : m_hash_key;
+    std::string dialogKey = m_hash_key.empty() ? getDialogKeyFromTitle( GetTitle() ) : m_hash_key;
     auto        dlgIt = settings->m_dialogControlValues.find( dialogKey );
 
     if( dlgIt == settings->m_dialogControlValues.end() )
@@ -700,6 +767,19 @@ void DIALOG_SHIM::LoadControlState()
                                 {
                                     if( notebook->GetPageText( page ) == pageTitle )
                                         notebook->SetSelection( page );
+                                }
+                            }
+                        }
+                        else if( wxAuiNotebook* auiNotebook = dynamic_cast<wxAuiNotebook*>( win ) )
+                        {
+                            if( j.is_string() )
+                            {
+                                wxString pageTitle = wxString::FromUTF8( j.get<std::string>().c_str() );
+
+                                for( int page = 0; page < (int) auiNotebook->GetPageCount(); ++page )
+                                {
+                                    if( auiNotebook->GetPageText( page ) == pageTitle )
+                                        auiNotebook->ChangeSelection( page );
                                 }
                             }
                         }
@@ -1260,8 +1340,7 @@ int DIALOG_SHIM::ShowQuasiModal()
     // release the mouse if it's currently captured as the window having it
     // will be disabled when this dialog is shown -- but will still keep the
     // capture making it impossible to do anything in the modal dialog itself
-    wxWindow* win = wxWindow::GetCapture();
-    if( win )
+    if( wxWindow* win = wxWindow::GetCapture() )
         win->ReleaseMouse();
 
     // Get the optimal parent
@@ -1322,8 +1401,7 @@ void DIALOG_SHIM::EndQuasiModal( int retCode )
 
     if( !IsQuasiModal() )
     {
-        wxFAIL_MSG( wxT( "Either DIALOG_SHIM::EndQuasiModal was called twice, or ShowQuasiModal"
-                         "wasn't called" ) );
+        wxFAIL_MSG( wxT( "Either DIALOG_SHIM::EndQuasiModal was called twice, or ShowQuasiModal wasn't called" ) );
         return;
     }
 
@@ -1348,6 +1426,8 @@ void DIALOG_SHIM::OnCloseWindow( wxCloseEvent& aEvent )
 {
     wxString msg = wxString::Format( "Closing dialog %s", GetTitle() );
     APP_MONITOR::AddNavigationBreadcrumb( msg, "dialog.close" );
+
+    SaveControlState();
 
     if( IsQuasiModal() )
     {
@@ -1377,9 +1457,7 @@ void DIALOG_SHIM::OnButton( wxCommandEvent& aEvent )
             // (i.e. the dialog can't refuse to close as it might with OK, because it
             // isn't closing anyway)
             if( Validate() )
-            {
                 ignore_unused( TransferDataFromWindow() );
-            }
         }
         else if( id == wxID_CANCEL )
         {
@@ -1476,11 +1554,12 @@ void DIALOG_SHIM::OnCharHook( wxKeyEvent& aEvt )
         else if( wxStyledTextCtrl* scintilla = dynamic_cast<wxStyledTextCtrl*>( eventSource ) )
         {
             wxString eol = "\n";
+
             switch( scintilla->GetEOLMode() )
             {
             case wxSTC_EOL_CRLF: eol = "\r\n"; break;
-            case wxSTC_EOL_CR: eol = "\r"; break;
-            case wxSTC_EOL_LF: eol = "\n"; break;
+            case wxSTC_EOL_CR:   eol = "\r";   break;
+            case wxSTC_EOL_LF:   eol = "\n";   break;
             }
 
             long pos = scintilla->GetCurrentPos();
@@ -1512,7 +1591,10 @@ void DIALOG_SHIM::OnCharHook( wxKeyEvent& aEvt )
 
         for( size_t i = 0; i < m_tabOrder.size(); ++i )
         {
-            if( m_tabOrder[i] == currentWindow )
+            // Check for exact match or if currentWindow is a child of the control
+            // (e.g., the text entry inside a wxComboBox)
+            if( m_tabOrder[i] == currentWindow
+                || ( currentWindow && m_tabOrder[i]->IsDescendant( currentWindow ) ) )
             {
                 currentIdx = (int) i;
                 break;
@@ -1522,6 +1604,17 @@ void DIALOG_SHIM::OnCharHook( wxKeyEvent& aEvt )
         if( currentIdx >= 0 )
         {
             advance( currentIdx );
+
+            // Skip hidden or disabled controls
+            int startIdx = currentIdx;
+
+            while( !m_tabOrder[currentIdx]->IsShown() || !m_tabOrder[currentIdx]->IsEnabled() )
+            {
+                advance( currentIdx );
+
+                if( currentIdx == startIdx )
+                    break;  // Avoid infinite loop if all controls are hidden
+            }
 
             //todo: We don't currently have non-textentry dialog boxes but this will break if
             // we add them.

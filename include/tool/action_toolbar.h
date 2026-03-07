@@ -21,8 +21,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#ifndef ACTION_TOOLBAR_H
-#define ACTION_TOOLBAR_H
+#pragma once
 
 #include <map>
 #include <memory>
@@ -33,6 +32,7 @@
 #include <wx/popupwin.h>
 #include <wx/panel.h>
 #include <tool/action_manager.h>
+#include <frame_type.h>
 
 class ACTION_MENU;
 class BITMAP_BUTTON;
@@ -322,7 +322,7 @@ public:
      *
      * Not icon-based because we use it for the custom-drawn layer pair bitmap.
      */
-    void SetToolBitmap( const TOOL_ACTION& aAction, const wxBitmap& aBitmap );
+    void SetToolBitmap( const TOOL_ACTION& aAction, const wxBitmapBundle& aBitmap );
 
     /**
      * Apply the default toggle action.
@@ -351,11 +351,16 @@ public:
     /**
      * Get the list of custom controls that could be used on toolbars.
      */
-    static std::list<ACTION_TOOLBAR_CONTROL*>& GetCustomControlList()
+    static std::list<ACTION_TOOLBAR_CONTROL*>& GetAllCustomControls()
     {
         static std::list<ACTION_TOOLBAR_CONTROL*> m_controls;
         return m_controls;
     }
+
+    /**
+     * Get the list of custom controls that could be used on a particular frame type.
+     */
+    static std::list<ACTION_TOOLBAR_CONTROL*> GetCustomControlList( FRAME_T aContext );
 
     static constexpr bool TOGGLE = true;
     static constexpr bool CANCEL = true;
@@ -398,9 +403,12 @@ protected:
     ///< is available for an item
     void OnCustomRender( wxDC& aDc, const wxAuiToolBarItem& aItem, const wxRect& aRect ) override;
 
+    void DoSetToolTipText( const wxString& aTip ) override;
+
 protected:
     // Timer used to determine when the palette should be opened after a group item is pressed
-    wxTimer* m_paletteTimer;
+    EDA_BASE_FRAME*         m_parent;
+    wxTimer*                m_paletteTimer;
 
     wxAuiManager*           m_auiManager;
     TOOL_MANAGER*           m_toolManager;
@@ -434,20 +442,32 @@ class ACTION_TOOLBAR_CONTROL
 {
 public:
     ACTION_TOOLBAR_CONTROL( const std::string& aName, const wxString& aUiName,
-                            const wxString& aDescription ) :
+                            const wxString& aDescription, std::vector<FRAME_T> aSupportedContexts ) :
         m_name( aName ),
         m_uiname( aUiName ),
-        m_description( aDescription )
+        m_description( aDescription ),
+        m_supportedContexts( aSupportedContexts )
     {
         wxASSERT_MSG( aName.starts_with( "control" ),
                       wxString::Format( "Control name \"%s\" must start with \"control\"", aName ) );
 
-        ACTION_TOOLBAR::GetCustomControlList().push_back( this );
+        ACTION_TOOLBAR::GetAllCustomControls().push_back( this );
     }
 
     const std::string& GetName() const { return m_name; }
     const wxString& GetUiName() const { return m_uiname; }
     const wxString& GetDescription() const { return m_description; }
+
+    bool SupportedFor( FRAME_T aFrame ) const
+    {
+        for( FRAME_T candidate : m_supportedContexts )
+        {
+            if( aFrame == candidate )
+                return true;
+        }
+
+        return false;
+    }
 
 protected:
     /**
@@ -464,6 +484,11 @@ protected:
      * User-visible tooltip for the control
      */
     wxString m_description;
+
+    /**
+     * List of frame types that support the control.
+     */
+    std::vector<FRAME_T> m_supportedContexts;
 };
 
 class ACTION_TOOLBAR_CONTROLS
@@ -477,5 +502,3 @@ public:
     static ACTION_TOOLBAR_CONTROL layerSelector;
     static ACTION_TOOLBAR_CONTROL overrideLocks;
 };
-
-#endif

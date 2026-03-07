@@ -224,10 +224,10 @@ public:
      *
      * These parameters are saved in KiCad config for each main frame.
      */
-    bool IsGridVisible() const;
+    bool IsGridVisible();
     virtual void SetGridVisibility( bool aVisible );
 
-    bool         IsGridOverridden() const;
+    bool         IsGridOverridden();
     virtual void SetGridOverrides( bool aOverride );
 
     virtual COLOR4D GetGridColor() { return m_gridColor; }
@@ -470,6 +470,8 @@ public:
 
     wxWindow* GetToolCanvas() const override { return GetCanvas(); }
 
+    void ClearToolbarControl( int aId ) override;
+
     /**
      * Return a reference to the gal rendering options used by GAL for rendering.
      */
@@ -533,7 +535,7 @@ public:
      * @param aCfg is the settings to read the plugin ordering from.
      */
     static std::vector<const PLUGIN_ACTION*> GetOrderedPluginActions( PLUGIN_ACTION_SCOPE aScope,
-        APP_SETTINGS_BASE* aCfg );
+                                                                      APP_SETTINGS_BASE* aCfg );
 
     /**
      * Append actions from API plugins to the given toolbar.
@@ -550,6 +552,8 @@ protected:
     virtual void SetScreen( BASE_SCREEN* aScreen )  { m_currentScreen = aScreen; }
 
     void unitsChangeRefresh() override;
+
+    void setupUIConditions() override;
 
     void setupUnits( APP_SETTINGS_BASE* aCfg );
 

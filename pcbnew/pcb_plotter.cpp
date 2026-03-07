@@ -101,7 +101,10 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
     LSEQ layersToPlot;
     LSEQ commonLayers;
 
-    if( aOutputPathIsSingle && !m_plotOpts.GetDXFMultiLayeredExportOption() )
+    const bool isPdfMultiPage =
+            ( m_plotOpts.GetFormat() == PLOT_FORMAT::PDF && m_plotOpts.m_PDFSingle );
+
+    if( aOutputPathIsSingle && !m_plotOpts.GetDXFMultiLayeredExportOption() && !isPdfMultiPage )
     {
         layersToPlot.push_back( aLayersToPlot[0] );
 
@@ -485,7 +488,7 @@ void PCB_PLOTTER::PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT
             theme = pcbSettings->m_ColorTheme;
     }
 
-    COLOR_SETTINGS* colors = ::GetColorSettings( aJob->m_colorTheme );
+    COLOR_SETTINGS* colors = ::GetColorSettings( theme );
 
     if( colors->GetFilename() != theme && !aOpts.GetBlackAndWhite() )
     {

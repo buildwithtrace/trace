@@ -29,8 +29,8 @@
 #include <string_utils.h>
 
 
-CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aName, bool aOutputIsDir ) :
-        PCB_EXPORT_BASE_COMMAND( aName, false, aOutputIsDir )
+CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aName, IO_TYPE aOutputType ) :
+        PCB_EXPORT_BASE_COMMAND( aName, IO_TYPE::FILE, aOutputType )
 {
     addLayerArg();
     addCommonLayersArg();
@@ -109,7 +109,7 @@ CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aN
 
 
 CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND() :
-        PCB_EXPORT_GERBER_COMMAND( "gerber" )
+        PCB_EXPORT_GERBER_COMMAND( "gerber", IO_TYPE::FILE )
 {
 }
 
@@ -120,6 +120,8 @@ int CLI::PCB_EXPORT_GERBER_COMMAND::populateJob( JOB_EXPORT_PCB_GERBER* aJob )
     aJob->SetConfiguredOutputPath( m_argOutput );
     aJob->m_drawingSheet = m_argDrawingSheet;
     aJob->m_sketchPadsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_PADS_ON_FAB_LAYERS );
+    if( aJob->m_sketchPadsOnFabLayers )
+        aJob->m_plotPadNumbers = true;
     aJob->m_hideDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_HIDE_DNP_FPS_ON_FAB_LAYERS );
     aJob->m_sketchDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_DNP_FPS_ON_FAB_LAYERS );
     aJob->m_crossoutDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_CROSSOUT_DNP_FPS_ON_FAB_LAYERS );

@@ -23,6 +23,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -86,13 +87,23 @@ public:
     FOOTPRINT_LIST_IMPL();
     virtual ~FOOTPRINT_LIST_IMPL() {};
 
-    void WriteCacheToFile( const wxString& aFilePath ) override;
-    void ReadCacheFromFile( const wxString& aFilePath ) override;
-
     bool ReadFootprintFiles( FOOTPRINT_LIBRARY_ADAPTER* aAdapter, const wxString* aNickname = nullptr,
                              PROGRESS_REPORTER* aProgressReporter = nullptr ) override;
 
     void Clear() override;
+
+    /**
+     * Execute a callback with thread-safe access to the footprints for a library.
+     *
+     * The callback receives a vector of pointers to footprint info objects. These pointers
+     * are only valid for the duration of the callback. The internal mutex is held while
+     * the callback executes, preventing modification of the underlying list.
+     *
+     * @param aLibName the library nickname to get footprints for
+     * @param aCallback function to call with the footprints vector
+     */
+    void WithFootprintsForLibrary( const wxString& aLibName,
+                                   const std::function<void( const std::vector<LIB_TREE_ITEM*>& )>& aCallback );
 
 protected:
     void loadFootprints();
@@ -112,8 +123,6 @@ private:
     std::mutex               m_join;
     std::mutex               m_loadInProgress;
 };
-
-extern FOOTPRINT_LIST_IMPL GFootprintList;        // KIFACE scope.
 
 
 #endif // FOOTPRINT_INFO_IMPL_H

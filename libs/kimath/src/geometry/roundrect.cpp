@@ -28,6 +28,8 @@
 #include <geometry/shape_poly_set.h>
 #include <geometry/shape_utils.h>
 
+#include <wx/log.h>
+
 
 namespace
 {
@@ -84,18 +86,29 @@ void ROUNDRECT::TransformToPolygon( SHAPE_POLY_SET& aBuffer, int aMaxError ) con
     // typical maxError.
     int               maxError = aMaxError / 5;
 
-    const int         idx = aBuffer.NewOutline();
-    SHAPE_LINE_CHAIN& outline = aBuffer.Outline( idx );
+    SHAPE_POLY_SET    tmp;
+    const int         idx = tmp.NewOutline();
+    SHAPE_LINE_CHAIN& outline = tmp.Outline( idx );
 
     const int w = m_rect.GetWidth();
     const int h = m_rect.GetHeight();
+
+    // Handle non normalized rect (i.e. w or h < 0 )
+    if( w < 0 || h < 0 )
+    {
+        ROUNDRECT norm_rr( m_rect, m_radius, true );    // build a normalized ROUNDRECT (w,h >= 0)
+        norm_rr.TransformToPolygon( aBuffer, aMaxError );
+        return;
+    }
+
+    // This code works fine only with normalized rect (i.e. w or h >= 0 )
     const int x_edge = m_rect.GetWidth() - 2 * m_radius;
     const int y_edge = m_rect.GetHeight() - 2 * m_radius;
 
-    // This is a class invariant
-    wxASSERT( x_edge >= 0 );
-    wxASSERT( y_edge >= 0 );
-    wxASSERT( m_radius >= 0 );
+    // Handle degenerate cases where dimensions are invalid
+    // This can happen with negative inflate values or zero-size rectangles
+    if( x_edge < 0 || y_edge < 0 || m_radius < 0 || w <= 0 || h <= 0 )
+        return;
 
     const VECTOR2I& m_p0 = m_rect.GetPosition();
 
@@ -163,4 +176,5 @@ void ROUNDRECT::TransformToPolygon( SHAPE_POLY_SET& aBuffer, int aMaxError ) con
     }
 
     outline.SetClosed( true );
+    aBuffer = std::move( tmp );
 }

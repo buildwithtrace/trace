@@ -38,11 +38,12 @@
 
 #include <geometry/shape_poly_set.h>
 
-#include <memory>
 #include <algorithm>
-#include <functional>
-#include <vector>
+#include <atomic>
 #include <deque>
+#include <functional>
+#include <memory>
+#include <vector>
 
 #include <connectivity/connectivity_rtree.h>
 #include <connectivity/connectivity_data.h>
@@ -163,8 +164,8 @@ public:
     void SetValid( bool aValid ) { m_valid = aValid; }
     bool Valid() const { return m_valid; }
 
-    void SetDirty( bool aDirty ) { m_dirty = aDirty; }
-    bool Dirty() const { return m_dirty;  }
+    void SetDirty( bool aDirty ) { m_dirty.store( aDirty, std::memory_order_release ); }
+    bool Dirty() const { return m_dirty.load( std::memory_order_acquire ); }
 
     /**
      * Set the layers spanned by the item to aStartLayer and aEndLayer.
@@ -220,8 +221,16 @@ public:
 
     const BOX2I& BBox()
     {
-        if( m_dirty && m_valid )
-            m_bbox = m_parent->GetBoundingBox();
+        if( m_dirty.load( std::memory_order_acquire ) && m_valid )
+        {
+            std::lock_guard<std::mutex> lock( m_listLock );
+
+            if( m_dirty.load( std::memory_order_relaxed ) && m_valid )
+            {
+                m_bbox = m_parent->GetBoundingBox();
+                m_dirty.store( false, std::memory_order_release );
+            }
+        }
 
         return m_bbox;
     }
@@ -256,7 +265,7 @@ public:
     }
 
 protected:
-    bool            m_dirty;         ///< used to identify recently added item not yet
+    std::atomic<bool> m_dirty;       ///< used to identify recently added item not yet
                                      ///< scanned into the connectivity search
     int             m_start_layer;   ///< start layer of the item N.B. B_Cu is set to INT_MAX
     int             m_end_layer;     ///< end layer of the item N.B. B_Cu is set to INT_MAX
@@ -289,7 +298,11 @@ public:
             m_subpolyIndex( aSubpolyIndex ),
             m_layer( aLayer )
     {
-        m_fillPoly = aParent->GetFilledPolysList( aLayer );
+        std::shared_ptr<SHAPE_POLY_SET> fillPoly = aParent->GetFilledPolysList( aLayer );
+
+        if( fillPoly && aSubpolyIndex < fillPoly->OutlineCount() )
+            m_outline = fillPoly->Outline( aSubpolyIndex );
+
         SetLayers( aLayer, aLayer );
     }
 
@@ -298,16 +311,31 @@ public:
         if( m_zone->IsTeardropArea() )
             return;
 
+        m_triangulatedPolys.clear();
         m_rTree.RemoveAll();
 
-        for( unsigned int ii = 0; ii < m_fillPoly->TriangulatedPolyCount(); ++ii )
+        std::shared_ptr<SHAPE_POLY_SET> fillPoly = m_zone->GetFilledPolysList( m_layer );
+
+        if( !fillPoly )
+            return;
+
+        for( unsigned int ii = 0; ii < fillPoly->TriangulatedPolyCount(); ++ii )
         {
-            const auto* triangleSet = m_fillPoly->TriangulatedPolygon( ii );
+            const auto* triangleSet = fillPoly->TriangulatedPolygon( ii );
 
             if( triangleSet->GetSourceOutlineIndex() != m_subpolyIndex )
                 continue;
 
-            for( const SHAPE_POLY_SET::TRIANGULATED_POLYGON::TRI& tri : triangleSet->Triangles() )
+            // Deep copy the triangulated polygon. The copy constructor copies the vertex storage
+            // and updates all TRI parent pointers to reference our owned copy. This ensures the
+            // triangles remain valid even if the zone is refilled on another thread.
+            m_triangulatedPolys.push_back(
+                    std::make_unique<SHAPE_POLY_SET::TRIANGULATED_POLYGON>( *triangleSet ) );
+        }
+
+        for( const auto& triPoly : m_triangulatedPolys )
+        {
+            for( const SHAPE_POLY_SET::TRIANGULATED_POLYGON::TRI& tri : triPoly->Triangles() )
             {
                 BOX2I     bbox = tri.BBox();
                 const int mmin[2] = { bbox.GetX(), bbox.GetY() };
@@ -324,8 +352,11 @@ public:
 
     bool ContainsPoint( const VECTOR2I& p ) const
     {
+        if( m_outline.PointCount() == 0 )
+            return false;
+
         if( m_zone->IsTeardropArea() )
-            return m_fillPoly->Outline( m_subpolyIndex ).Collide( p ) ;
+            return m_outline.Collide( p );
 
         int  min[2] = { p.x, p.y };
         int  max[2] = { p.x, p.y };
@@ -353,15 +384,33 @@ public:
     virtual int AnchorCount() const override;
     virtual const VECTOR2I GetAnchor( int n ) const override;
 
+    bool HasValidOutline() const
+    {
+        return m_outline.PointCount() > 0;
+    }
+
     const SHAPE_LINE_CHAIN& GetOutline() const
     {
-        return m_fillPoly->Outline( m_subpolyIndex );
+        return m_outline;
+    }
+
+    int OutlinePointCount() const
+    {
+        return m_outline.PointCount();
+    }
+
+    const VECTOR2I& OutlinePoint( int aIndex ) const
+    {
+        return m_outline.CPoint( aIndex );
     }
 
     bool Collide( SHAPE* aRefShape ) const
     {
+        if( m_outline.PointCount() == 0 )
+            return false;
+
         if( m_zone->IsTeardropArea() )
-            return m_fillPoly->Collide( aRefShape );
+            return aRefShape->Collide( &m_outline, 0 );
 
         BOX2I bbox = aRefShape->BBox();
         int  min[2] = { bbox.GetX(), bbox.GetY() };
@@ -391,7 +440,9 @@ private:
     ZONE*                               m_zone;
     int                                 m_subpolyIndex;
     PCB_LAYER_ID                        m_layer;
-    std::shared_ptr<SHAPE_POLY_SET>     m_fillPoly;
+    SHAPE_LINE_CHAIN                    m_outline;       ///< Cached copy of the zone outline
+    ///< Owned deep copies of triangulated polygons (includes vertex storage that TRI references)
+    std::vector<std::unique_ptr<SHAPE_POLY_SET::TRIANGULATED_POLYGON>> m_triangulatedPolys;
     RTree<const SHAPE*, int, 2, double> m_rTree;
 };
 

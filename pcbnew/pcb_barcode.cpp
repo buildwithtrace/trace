@@ -69,6 +69,51 @@ PCB_BARCODE::~PCB_BARCODE()
 }
 
 
+PCB_BARCODE::PCB_BARCODE( const PCB_BARCODE& aOther ) :
+        BOARD_ITEM( aOther ),
+        m_width( aOther.m_width ),
+        m_height( aOther.m_height ),
+        m_pos( aOther.m_pos ),
+        m_margin( aOther.m_margin ),
+        m_text( aOther.m_text ),
+        m_kind( aOther.m_kind ),
+        m_angle( aOther.m_angle ),
+        m_errorCorrection( aOther.m_errorCorrection ),
+        m_poly( aOther.m_poly ),
+        m_symbolPoly( aOther.m_symbolPoly ),
+        m_textPoly( aOther.m_textPoly ),
+        m_bbox( aOther.m_bbox )
+{
+    m_text.SetParent( this );
+}
+
+
+PCB_BARCODE& PCB_BARCODE::operator=( const PCB_BARCODE& aOther )
+{
+    if( this != &aOther )
+    {
+        BOARD_ITEM::operator=( aOther );
+
+        m_width = aOther.m_width;
+        m_height = aOther.m_height;
+        m_pos = aOther.m_pos;
+        m_margin = aOther.m_margin;
+        m_text = aOther.m_text;
+        m_kind = aOther.m_kind;
+        m_angle = aOther.m_angle;
+        m_errorCorrection = aOther.m_errorCorrection;
+        m_poly = aOther.m_poly;
+        m_symbolPoly = aOther.m_symbolPoly;
+        m_textPoly = aOther.m_textPoly;
+        m_bbox = aOther.m_bbox;
+
+        m_text.SetParent( this );
+    }
+
+    return *this;
+}
+
+
 void PCB_BARCODE::SetPosition( const VECTOR2I& aPos )
 {
     VECTOR2I delta = aPos - m_pos;
@@ -290,7 +335,7 @@ void PCB_BARCODE::ComputeBarcode()
         return;
     }
 
-    wxString text = GetText();
+    wxString text = GetShownText();
     wxScopedCharBuffer utf8Text = text.ToUTF8();
     size_t length = utf8Text.length();
     unsigned char* dataPtr = reinterpret_cast<unsigned char*>( utf8Text.data() );
@@ -299,16 +344,10 @@ void PCB_BARCODE::ComputeBarcode()
         return;
 
     if( ZBarcode_Encode( symbol.get(), dataPtr, length ) )
-    {
-        wxLogDebug( wxT( "Zint encode error: %s" ), wxString::FromUTF8( symbol->errtxt ) );
         return;
-    }
 
     if( ZBarcode_Buffer_Vector( symbol.get(), 0 ) ) // 0 means success
-    {
-        wxLogDebug( wxT( "Zint render error: %s" ), wxString::FromUTF8( symbol->errtxt ) );
         return;
-    }
 
     for( zint_vector_rect* rect = symbol->vector->rectangles; rect != nullptr; rect = rect->next )
     {
@@ -603,7 +642,6 @@ EDA_ITEM* PCB_BARCODE::Clone() const
 {
     PCB_BARCODE* item = new PCB_BARCODE( *this );
     item->CopyFrom( this );
-    item->m_text.SetParent( item );
     return item;
 }
 
@@ -671,6 +709,9 @@ int PCB_BARCODE::Compare( const PCB_BARCODE* aBarcode, const PCB_BARCODE* aOther
         return diff;
 
     if( ( diff = (int) aBarcode->GetKind() - (int) aOther->GetKind() ) != 0 )
+        return diff;
+
+    if( ( diff = aBarcode->m_angle.AsTenthsOfADegree() - aOther->m_angle.AsTenthsOfADegree() ) != 0 )
         return diff;
 
     if( ( diff = (int) aBarcode->GetErrorCorrection() - (int) aOther->GetErrorCorrection() ) != 0 )
