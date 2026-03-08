@@ -91,14 +91,7 @@ See the [LICENSE](LICENSE) file for complete GPL warranty disclaimer.
 
 #### macOS
 
-Use our official Mac builder:
-```bash
-git clone https://github.com/buildwithtrace/trace-mac-builder
-cd trace-mac-builder
-python build.py
-```
-
-See [trace-mac-builder](https://github.com/buildwithtrace/trace-mac-builder) for detailed instructions.
+See [Developer Documentation](https://docs.buildwithtrace.com) for macOS build instructions and prerequisites.
 
 #### Windows
 
@@ -247,7 +240,6 @@ Trace is built on the excellent work of the KiCad project and its contributors. 
 ## Repository Information
 
 - **Main Repository**: https://github.com/buildwithtrace/trace
-- **Mac Builder**: https://github.com/buildwithtrace/trace-mac-builder
 - **Windows Builder**: https://github.com/buildwithtrace/trace-win-builder
 - **Backend API**: (Proprietary - not included in this repository)
 
