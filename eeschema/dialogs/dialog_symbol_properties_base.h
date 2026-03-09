@@ -66,6 +66,7 @@ class DIALOG_SYMBOL_PROPERTIES_BASE : public DIALOG_SHIM
 		wxCheckBox* m_cbExcludeFromSim;
 		wxCheckBox* m_cbExcludeFromBom;
 		wxCheckBox* m_cbExcludeFromBoard;
+		wxCheckBox* m_cbExcludeFromPosFiles;
 		wxCheckBox* m_cbDNP;
 		wxButton* m_updateSymbolBtn;
 		wxButton* m_changeSymbolBtn;
@@ -81,7 +82,6 @@ class DIALOG_SYMBOL_PROPERTIES_BASE : public DIALOG_SHIM
 		wxButton* m_stdDialogButtonSizerCancel;
 
 		// Virtual event handlers, override them in your derived class
-		virtual void OnInitDlg( wxInitDialogEvent& event ) { event.Skip(); }
 		virtual void OnUpdateUI( wxUpdateUIEvent& event ) { event.Skip(); }
 		virtual void OnPageChanging( wxNotebookEvent& event ) { event.Skip(); }
 		virtual void OnGridEditorHidden( wxGridEvent& event ) { event.Skip(); }

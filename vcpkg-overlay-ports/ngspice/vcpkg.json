@@ -1,0 +1,32 @@
+{
+  "name": "ngspice",
+  "version": "45.2",
+  "port-version": 101,
+  "description": "Ngspice is a mixed-level/mixed-signal electronic circuit simulator. It is a successor of the latest stable release of Berkeley SPICE",
+  "homepage": "http://ngspice.sourceforge.net/",
+  "license": "CC-BY-SA-4.0",
+  "supports": "!(linux | osx | uwp)",
+  "dependencies": [
+    {
+      "name": "vcpkg-msbuild",
+      "host": true,
+      "platform": "windows"
+    }
+  ],
+  "default-features": [
+    "codemodels"
+  ],
+  "features": {
+    "codemodels": {
+      "description": "Adds optional code models for XSPICE, ADMS (verilog integration) and B-/E-/G- sources."
+    },
+    "fftw": {
+      "description": "Add FFT command support",
+      "dependencies": [
+        {
+          "name": "fftw3"
+        }
+      ]
+    }
+  }
+}

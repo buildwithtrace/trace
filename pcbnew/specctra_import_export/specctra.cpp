@@ -4,6 +4,7 @@
  *
  * Copyright (C) 2007-2011 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -59,6 +60,7 @@
 
 #include "specctra.h"
 #include <macros.h>
+#include <richio.h>
 
 
 namespace DSN {
@@ -269,6 +271,26 @@ void SPECCTRA_DB::LoadPCB( const wxString& aFilename )
 void SPECCTRA_DB::LoadSESSION( const wxString& aFilename )
 {
     FILE_LINE_READER curr_reader( aFilename );
+
+    PushReader( &curr_reader );
+
+    if( NextTok() != T_LEFT )
+        Expecting( T_LEFT );
+
+    if( NextTok() != T_session )
+        Expecting( T_session );
+
+    SetSESSION( new SESSION() );
+
+    doSESSION( m_session );
+
+    PopReader();
+}
+
+
+void SPECCTRA_DB::LoadSESSIONFromString( const std::string& aSesContent )
+{
+    STRING_LINE_READER curr_reader( aSesContent, wxT( "SES from cloud autoroute" ) );
 
     PushReader( &curr_reader );
 
@@ -2502,8 +2524,8 @@ void SPECCTRA_DB::doLIBRARY( LIBRARY* growth )
 
 void SPECCTRA_DB::doNET( NET* growth )
 {
-    T           tok = NextTok();
-    PIN_REFS*   pin_refs;
+    T                     tok = NextTok();
+    std::vector<PIN_REF>* pin_refs;
 
     /*  <net_descriptor >::=
         (net <net_id >
@@ -3898,7 +3920,7 @@ void PARSER::FormatContents( OUTPUTFORMATTER* out, int nestLevel )
     out->Print( nestLevel, "(host_cad \"%s\")\n", host_cad.c_str() );
     out->Print( nestLevel, "(host_version \"%s\")\n", host_version.c_str() );
 
-    for( STRINGS::iterator i = constants.begin(); i != constants.end(); )
+    for( auto i = constants.begin(); i != constants.end(); )
     {
         const std::string& s1 = *i++;
         const std::string& s2 = *i++;

@@ -54,6 +54,7 @@
 class BUS_ALIAS;
 class EDA_ITEM;
 class LIB_SYMBOL;
+class SCH_COMMIT;
 class SCH_PIN;
 class SCH_SYMBOL;
 class SCH_LINE;
@@ -61,6 +62,7 @@ class SCH_LABEL_BASE;
 class PLOTTER;
 class REPORTER;
 class SCH_IO_ALTIUM;
+class SCH_IO_PADS;
 class SCH_EDIT_FRAME;
 class SCH_SHEET_LIST;
 class SCH_IO_KICAD_SEXPR_PARSER;
@@ -257,6 +259,16 @@ public:
      * @param[in] aPlotter The plotter object to plot to.
      */
     void Plot( PLOTTER* aPlotter, const SCH_PLOT_OPTS& aPlotOpts ) const;
+
+    /**
+     * Plot selected schematic objects to \a aPlotter.
+     *
+     * @param[in] aPlotter The plotter object to plot to.
+     * @param[in] aPlotOpts The plot options to use.
+     * @param[in] aItems The items to plot.
+     */
+    void Plot( PLOTTER* aPlotter, const SCH_PLOT_OPTS& aPlotOpts,
+               const std::vector<SCH_ITEM*>& aItems ) const;
 
     /**
      * Remove \a aItem from the schematic associated with this screen.
@@ -618,13 +630,20 @@ public:
 
     std::set<wxString> GetVariantNames() const;
 
-    void DeleteVariant( const wxString& aVariantName );
+    void DeleteVariant( const wxString& aVariantName, SCH_COMMIT* aCommit = nullptr );
+
+    void RenameVariant( const wxString& aOldName, const wxString& aNewName,
+                        SCH_COMMIT* aCommit = nullptr );
+
+    void CopyVariant( const wxString& aSourceVariant, const wxString& aNewVariant,
+                      SCH_COMMIT* aCommit = nullptr );
 
 private:
     friend SCH_EDIT_FRAME;     // Only to populate m_symbolInstances.
     friend SCH_IO_KICAD_SEXPR_PARSER;   // Only to load instance information from schematic file.
     friend SCH_IO_KICAD_SEXPR;   // Only to save the loaded instance information to schematic file.
     friend SCH_IO_ALTIUM;
+    friend SCH_IO_PADS;
     friend TEST_SCH_SCREEN_FIXTURE;
 
     bool doIsJunction( const VECTOR2I& aPosition, bool aBreakCrossings,
@@ -648,6 +667,8 @@ private:
     size_t getLibSymbolNameMatches( const SCH_SYMBOL& aSymbol, std::vector<wxString>& aMatches );
 
 public:
+    bool IsZoomInitialized() const { return m_zoomInitialized; }
+
     /**
      * last value for the zoom level, useful in Eeschema when changing the current displayed
      * sheet to reuse the same zoom level when back to the sheet using this screen
@@ -857,7 +878,13 @@ public:
 
     std::set<wxString> GetVariantNames() const;
 
-    void DeleteVariant( const wxString& aVariantName );
+    void DeleteVariant( const wxString& aVariantName, SCH_COMMIT* aCommit = nullptr );
+
+    void RenameVariant( const wxString& aOldName, const wxString& aNewName,
+                        SCH_COMMIT* aCommit = nullptr );
+
+    void CopyVariant( const wxString& aSourceVariant, const wxString& aNewVariant,
+                      SCH_COMMIT* aCommit = nullptr );
 
 private:
     void addScreenToList( SCH_SCREEN* aScreen, SCH_SHEET* aSheet );

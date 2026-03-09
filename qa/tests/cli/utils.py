@@ -37,12 +37,12 @@ logger = logging.getLogger("cli_util")
 Image.MAX_IMAGE_PIXELS = 800 * 1024 * 1024 // 4 # Increase limit to ~800MB uncompressed RGBA, 4bpp (~600MB RGB, 3bpp)
 
 def kicad_cli() -> str:
-    if 'KICAD_CLI' in os.environ:
-        return os.environ.get('KICAD_CLI')
+    if 'TRACE_CLI' in os.environ:
+        return os.environ.get('TRACE_CLI')
 
-    return "kicad-cli"
+    return "trace-cli"
 
-def run_and_capture( command: list ) -> Tuple[ str, str, int ]:
+def run_and_capture( command: list[str] ) -> Tuple[ str, str, int ]:
     logger.info("Executing command \"%s\"", " ".join( command ))
 
     env = {}
@@ -65,6 +65,9 @@ def run_and_capture( command: list ) -> Tuple[ str, str, int ]:
         if base_path is not None:
             logger.info("Using QA data base path '%s'", str(base_path))
             env['KICAD_CONFIG_HOME'] = str(base_path / 'config')
+            # Set both TRACE and KICAD versioned variables for compatibility
+            env['TRACE1_SYMBOL_DIR'] = str(base_path / 'libraries')
+            env['TRACE1_FOOTPRINT_DIR'] = str(base_path / 'libraries')
             env['KICAD9_SYMBOL_DIR'] = str(base_path / 'libraries')
             env['KICAD9_FOOTPRINT_DIR'] = str(base_path / 'libraries')
         else:
@@ -86,16 +89,17 @@ def run_and_capture( command: list ) -> Tuple[ str, str, int ]:
 
     return out, err, proc.returncode
 
-def textdiff_files( golden_filepath: str, new_filepath: str, skip: int = 0 ) -> bool:
-    status: bool = True
 
+def textdiff_files( golden_filepath: Path, new_filepath: Path, skip: int = 0 ) -> bool:
     with open( golden_filepath, 'r' ) as f:
         golden_lines = f.readlines()[skip:]
 
     with open( new_filepath, 'r' ) as f:
         new_lines = f.readlines()[skip:]
 
-    diff = difflib.unified_diff( golden_lines, new_lines, fromfile = golden_filepath, tofile = new_filepath )
+    diff = difflib.unified_diff(
+        golden_lines, new_lines, fromfile=str(golden_filepath), tofile=str(new_filepath)
+    )
     diff_text = ''.join(list(diff))
 
     if diff_text != "":

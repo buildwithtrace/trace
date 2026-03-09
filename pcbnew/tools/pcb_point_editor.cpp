@@ -269,7 +269,7 @@ public:
     }
 
     static void UpdateItem( PCB_SHAPE& aRectangle, const EDIT_POINT& aEditedPoint,
-                            EDIT_POINTS& aPoints )
+                            EDIT_POINTS& aPoints, const VECTOR2I& aMinSize = { 0, 0 } )
     {
         // You can have more points if your item wants to have more points
         // (this class assumes the rect points come first, but that can be changed)
@@ -301,7 +301,8 @@ public:
         VECTOR2I botLeft = aPoints.Point( RECT_BOT_LEFT ).GetPosition();
         VECTOR2I botRight = aPoints.Point( RECT_BOT_RIGHT ).GetPosition();
 
-        PinEditedCorner( aEditedPoint, aPoints, topLeft, topRight, botLeft, botRight );
+        PinEditedCorner( aEditedPoint, aPoints, topLeft, topRight, botLeft, botRight,
+                         { 0, 0 }, { 0, 0 }, aMinSize );
 
         if( isModified( aEditedPoint, aPoints.Point( RECT_TOP_LEFT ) )
             || isModified( aEditedPoint, aPoints.Point( RECT_TOP_RIGHT ) )
@@ -417,10 +418,11 @@ public:
      */
     static void PinEditedCorner( const EDIT_POINT& aEditedPoint, const EDIT_POINTS& aEditPoints,
                                 VECTOR2I& aTopLeft, VECTOR2I& aTopRight, VECTOR2I& aBotLeft, VECTOR2I& aBotRight,
-                                const VECTOR2I& aHole = { 0, 0 }, const VECTOR2I& aHoleSize = { 0, 0 } )
+                                const VECTOR2I& aHole = { 0, 0 }, const VECTOR2I& aHoleSize = { 0, 0 },
+                                const VECTOR2I& aMinSize = { 0, 0 } )
     {
-        int minWidth = EDA_UNIT_UTILS::Mils2IU( pcbIUScale, 1 );
-        int minHeight = EDA_UNIT_UTILS::Mils2IU( pcbIUScale, 1 );
+        int minWidth = std::max( EDA_UNIT_UTILS::Mils2IU( pcbIUScale, 1 ), aMinSize.x );
+        int minHeight = std::max( EDA_UNIT_UTILS::Mils2IU( pcbIUScale, 1 ), aMinSize.y );
 
         if( isModified( aEditedPoint, aEditPoints.Point( RECT_TOP_LEFT ) ) )
         {
@@ -1637,7 +1639,11 @@ public:
                      std::vector<EDA_ITEM*>& aUpdatedItems ) override
     {
         if( m_textbox.GetShape() == SHAPE_T::RECTANGLE )
-            RECTANGLE_POINT_EDIT_BEHAVIOR::UpdateItem( m_textbox, aEditedPoint, aPoints );
+        {
+            m_textbox.ClearBoundingBoxCache();
+            VECTOR2I minSize = m_textbox.GetMinSize();
+            RECTANGLE_POINT_EDIT_BEHAVIOR::UpdateItem( m_textbox, aEditedPoint, aPoints, minSize );
+        }
     }
 
 private:
@@ -1648,22 +1654,32 @@ class SHAPE_GROUP_POINT_EDIT_BEHAVIOR : public POINT_EDIT_BEHAVIOR
 {
 public:
     SHAPE_GROUP_POINT_EDIT_BEHAVIOR( PCB_GROUP& aGroup ) :
-            m_group( aGroup )
+            m_group( &aGroup ),
+            m_parent( &aGroup )
     {
-        // Store original line widths as doubles for better scaling precision
-        for( BOARD_ITEM* item : m_group.GetBoardItems() )
+        for( BOARD_ITEM* item : aGroup.GetBoardItems() )
         {
             if( item->Type() == PCB_SHAPE_T )
             {
                 PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( item );
+                m_shapes.push_back( shape );
                 m_originalWidths[shape] = static_cast<double>( shape->GetWidth() );
             }
         }
     }
 
+    SHAPE_GROUP_POINT_EDIT_BEHAVIOR( std::vector<PCB_SHAPE*> aShapes, BOARD_ITEM* aParent ) :
+            m_group( nullptr ),
+            m_shapes( std::move( aShapes ) ),
+            m_parent( aParent )
+    {
+        for( PCB_SHAPE* shape : m_shapes )
+            m_originalWidths[shape] = static_cast<double>( shape->GetWidth() );
+    }
+
     void MakePoints( EDIT_POINTS& aPoints ) override
     {
-        BOX2I bbox = m_group.GetBoundingBox();
+        BOX2I bbox = getBoundingBox();
         VECTOR2I tl = bbox.GetOrigin();
         VECTOR2I br = bbox.GetEnd();
 
@@ -1681,7 +1697,7 @@ public:
 
     bool UpdatePoints( EDIT_POINTS& aPoints ) override
     {
-        BOX2I bbox = m_group.GetBoundingBox();
+        BOX2I bbox = getBoundingBox();
         VECTOR2I tl = bbox.GetOrigin();
         VECTOR2I br = bbox.GetEnd();
 
@@ -1696,18 +1712,29 @@ public:
     void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
                      std::vector<EDA_ITEM*>& aUpdatedItems ) override
     {
-        BOX2I oldBox = m_group.GetBoundingBox();
+        BOX2I oldBox = getBoundingBox();
         VECTOR2I oldCenter = oldBox.Centre();
 
         if( isModified( aEditedPoint, aPoints.Point( RECT_CENTER ) ) )
         {
             VECTOR2I delta = aPoints.Point( RECT_CENTER ).GetPosition() - oldCenter;
 
-            aCommit.Modify( &m_group, nullptr, RECURSE_MODE::RECURSE );
-            m_group.Move( delta );
+            if( m_group )
+            {
+                aCommit.Modify( m_group, nullptr, RECURSE_MODE::RECURSE );
+                m_group->Move( delta );
+            }
+            else
+            {
+                for( PCB_SHAPE* shape : m_shapes )
+                {
+                    aCommit.Modify( shape );
+                    shape->Move( delta );
+                }
+            }
 
-            for( BOARD_ITEM* item : m_group.GetBoardItems() )
-                aUpdatedItems.push_back( item );
+            for( PCB_SHAPE* shape : m_shapes )
+                aUpdatedItems.push_back( shape );
 
             UpdatePoints( aPoints );
             return;
@@ -1724,12 +1751,16 @@ public:
         double sy = static_cast<double>( br.y - tl.y ) / static_cast<double>( oldBox.GetHeight() );
         double scale = ( sx + sy ) / 2.0;
 
-        for( BOARD_ITEM* item : m_group.GetBoardItems() )
-        {
-            if( item->Type() != PCB_SHAPE_T )
-                continue;
+        // Prevent scaling below a minimum threshold to avoid precision loss when shapes
+        // are scaled to near-zero size. Also prevent negative scaling which would flip
+        // shapes when dragging past the center point.
+        const double MIN_SCALE = 0.01;
 
-            PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( item );
+        if( scale < MIN_SCALE )
+            scale = MIN_SCALE;
+
+        for( PCB_SHAPE* shape : m_shapes )
+        {
             aCommit.Modify( shape );
             shape->Move( -oldCenter );
             shape->Scale( scale );
@@ -1742,7 +1773,6 @@ public:
             }
             else
             {
-                // Shouldn't happen, but just in case
                 shape->SetWidth( KiROUND( shape->GetWidth() * scale ) );
             }
 
@@ -1752,8 +1782,23 @@ public:
         UpdatePoints( aPoints );
     }
 
+    BOARD_ITEM* GetParent() const { return m_parent; }
+
 private:
-    PCB_GROUP& m_group;
+    BOX2I getBoundingBox() const
+    {
+        BOX2I bbox;
+
+        for( const PCB_SHAPE* shape : m_shapes )
+            bbox.Merge( shape->GetBoundingBox() );
+
+        return bbox;
+    }
+
+private:
+    PCB_GROUP*                             m_group;
+    std::vector<PCB_SHAPE*>                m_shapes;
+    BOARD_ITEM*                            m_parent;
     std::unordered_map<PCB_SHAPE*, double> m_originalWidths;
 };
 
@@ -1766,6 +1811,7 @@ PCB_POINT_EDITOR::PCB_POINT_EDITOR() :
         m_hoveredPoint( nullptr ),
         m_original( VECTOR2I( 0, 0 ) ),
         m_arcEditMode( ARC_EDIT_MODE::KEEP_CENTER_ADJUST_ANGLE_RADIUS ),
+        m_radiusHelper( nullptr ),
         m_altConstrainer( VECTOR2I( 0, 0 ) ),
         m_inPointEditorTool( false ),
         m_angleSnapPos( VECTOR2I( 0, 0 ) ),
@@ -1777,6 +1823,20 @@ PCB_POINT_EDITOR::PCB_POINT_EDITOR() :
 void PCB_POINT_EDITOR::Reset( RESET_REASON aReason )
 {
     m_frame = getEditFrame<PCB_BASE_FRAME>();
+
+    if( KIGFX::VIEW* view = getView() )
+    {
+        if( m_angleItem && view->HasItem( m_angleItem.get() ) )
+            view->Remove( m_angleItem.get() );
+
+        if( m_editPoints && view->HasItem( m_editPoints.get() ) )
+            view->Remove( m_editPoints.get() );
+
+        if( view->HasItem( &m_preview ) )
+            view->Remove( &m_preview );
+    }
+
+    m_angleItem.reset();
     m_editPoints.reset();
     m_altConstraint.reset();
     getViewControls()->SetAutoPan( false );
@@ -1785,10 +1845,7 @@ void PCB_POINT_EDITOR::Reset( RESET_REASON aReason )
 }
 
 
-/**
- * Condition to check if a point editor can add a corner to the given item.
- */
-static bool canAddCorner( const EDA_ITEM& aItem )
+bool PCB_POINT_EDITOR::CanAddCorner( const EDA_ITEM& aItem )
 {
     const KICAD_T type = aItem.Type();
 
@@ -1806,14 +1863,10 @@ static bool canAddCorner( const EDA_ITEM& aItem )
 }
 
 
-/**
- * Condition to check if a point editor can add a chamfer to a corner of the given item
- */
-static bool canChamferCorner( const EDA_ITEM& aItem )
+bool PCB_POINT_EDITOR::CanChamferCorner( const EDA_ITEM& aItem )
 {
     const auto type = aItem.Type();
 
-    // Works only for zones and polygons
     if( type == PCB_ZONE_T )
         return true;
 
@@ -1881,26 +1934,6 @@ bool PCB_POINT_EDITOR::Init()
 
     wxASSERT_MSG( m_selectionTool, wxT( "pcbnew.InteractiveSelection tool is not available" ) );
 
-    const auto addCornerCondition =
-            []( const SELECTION& aSelection ) -> bool
-            {
-                const EDA_ITEM* item = aSelection.Front();
-                return ( item != nullptr ) && canAddCorner( *item );
-            };
-
-    const auto addChamferCondition =
-            []( const SELECTION& aSelection ) -> bool
-            {
-                const EDA_ITEM* item = aSelection.Front();
-                return ( item != nullptr ) && canChamferCorner( *item );
-            };
-
-    const auto removeCornerCondition =
-            [this]( const SELECTION& aSelection ) -> bool
-            {
-                return PCB_POINT_EDITOR::removeCornerCondition( aSelection );
-            };
-
     const auto arcIsEdited =
             []( const SELECTION& aSelection ) -> bool
             {
@@ -1913,12 +1946,7 @@ bool PCB_POINT_EDITOR::Init()
 
     auto& menu = m_selectionTool->GetToolMenu().GetMenu();
 
-    // clang-format off
-    menu.AddItem( PCB_ACTIONS::pointEditorAddCorner,        S_C::Count( 1 ) && addCornerCondition );
-    menu.AddItem( PCB_ACTIONS::pointEditorRemoveCorner,     S_C::Count( 1 ) && removeCornerCondition );
-    menu.AddItem( PCB_ACTIONS::pointEditorChamferCorner,    S_C::Count( 1 ) && addChamferCondition );
-    menu.AddItem( PCB_ACTIONS::cycleArcEditMode,            S_C::Count( 1 ) && arcIsEdited );
-    // clang-format on
+    menu.AddItem( PCB_ACTIONS::cycleArcEditMode, S_C::Count( 1 ) && arcIsEdited );
 
     return true;
 }
@@ -2152,8 +2180,14 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     PCB_BASE_EDIT_FRAME* editFrame = getEditFrame<PCB_BASE_EDIT_FRAME>();
     const PCB_SELECTION& selection = m_selectionTool->GetSelection();
 
-    if( selection.Size() != 1 || selection.Front()->GetEditFlags() || !selection.Front()->IsBOARD_ITEM() )
+    if( selection.Size() == 0 )
         return 0;
+
+    for( EDA_ITEM* selItem : selection )
+    {
+        if( selItem->GetEditFlags() || !selItem->IsBOARD_ITEM() )
+            return 0;
+    }
 
     BOARD_ITEM* item = static_cast<BOARD_ITEM*>( selection.Front() );
 
@@ -2170,8 +2204,47 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     std::vector<std::unique_ptr<BOARD_ITEM>> clones;
 
     m_editorBehavior.reset();
-    // Will also make the edit behavior if supported
-    m_editPoints = makePoints( item );
+
+    if( selection.Size() > 1 )
+    {
+        // Multi-selection: check if all items are shapes
+        std::vector<PCB_SHAPE*> shapes;
+        bool allShapes = true;
+        bool anyLocked = false;
+
+        for( EDA_ITEM* selItem : selection )
+        {
+            if( selItem->Type() == PCB_SHAPE_T )
+            {
+                PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( selItem );
+                shapes.push_back( shape );
+
+                if( shape->IsLocked() )
+                    anyLocked = true;
+            }
+            else
+            {
+                allShapes = false;
+            }
+        }
+
+        if( allShapes && shapes.size() > 1 && !anyLocked )
+        {
+            m_editorBehavior = std::make_unique<SHAPE_GROUP_POINT_EDIT_BEHAVIOR>(
+                    std::move( shapes ), item );
+            m_editPoints = std::make_shared<EDIT_POINTS>( item );
+            m_editorBehavior->MakePoints( *m_editPoints );
+        }
+        else
+        {
+            return 0;
+        }
+    }
+    else
+    {
+        // Single selection: use existing makePoints logic
+        m_editPoints = makePoints( item );
+    }
 
     if( !m_editPoints )
         return 0;
@@ -2181,14 +2254,15 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     // Only add the angle_item if we are editing a polygon or zone
     if( item->Type() == PCB_ZONE_T || ( graphicItem && graphicItem->GetShape() == SHAPE_T::POLY ) )
     {
-        m_angleItem = std::make_unique<KIGFX::PREVIEW::ANGLE_ITEM>( m_editPoints.get() );
+        m_angleItem = std::make_unique<KIGFX::PREVIEW::ANGLE_ITEM>( m_editPoints );
     }
 
     m_preview.FreeItems();
+    m_radiusHelper = nullptr;
     getView()->Add( &m_preview );
 
-    RECT_RADIUS_TEXT_ITEM* radiusHelper = new RECT_RADIUS_TEXT_ITEM( pcbIUScale, editFrame->GetUserUnits() );
-    m_preview.Add( radiusHelper );
+    m_radiusHelper = new RECT_RADIUS_TEXT_ITEM( pcbIUScale, editFrame->GetUserUnits() );
+    m_preview.Add( m_radiusHelper );
 
     getView()->Add( m_editPoints.get() );
 
@@ -2322,6 +2396,44 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 updateSnapLineDirections();
             }
 
+            // For polygon lines, Ctrl temporarily toggles between CONVERGING and FIXED_LENGTH modes
+            EDIT_LINE* line = dynamic_cast<EDIT_LINE*>( m_editedPoint );
+            bool       ctrlHeld = evt->Modifier( MD_CTRL );
+
+            if( line )
+            {
+                bool isPoly = false;
+
+                switch( item->Type() )
+                {
+                case PCB_ZONE_T:
+                    isPoly = true;
+                    break;
+
+                case PCB_SHAPE_T:
+                    isPoly = static_cast<PCB_SHAPE*>( item )->GetShape() == SHAPE_T::POLY;
+                    break;
+
+                default:
+                    break;
+                }
+
+                if( isPoly )
+                {
+                    EC_CONVERGING* constraint =
+                            dynamic_cast<EC_CONVERGING*>( line->GetConstraint() );
+
+                    if( constraint )
+                    {
+                        POLYGON_LINE_MODE targetMode = ctrlHeld ? POLYGON_LINE_MODE::FIXED_LENGTH
+                                                                : POLYGON_LINE_MODE::CONVERGING;
+
+                        if( constraint->GetMode() != targetMode )
+                            constraint->SetMode( targetMode );
+                    }
+                }
+            }
+
             // Keep point inside of limits with some padding
             VECTOR2I pos = GetClampedCoords<double, int>( evt->Position(), COORDS_PADDING );
             LSET     snapLayers;
@@ -2404,12 +2516,59 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 m_editedPoint->SetPosition( pos );
                 m_altConstraint->Apply( grid );
                 constraintSnapped = true;
+
+                // For constrained lines (like zone edges), try to snap to nearby anchors
+                // that lie on the constraint line
+                if( grid.GetSnap() && !snapLayers.empty() )
+                {
+                    VECTOR2I constrainedPos = m_editedPoint->GetPosition();
+                    VECTOR2I snapPos = grid.BestSnapAnchor( constrainedPos, snapLayers,
+                                                            grid.GetItemGrid( item ), { item } );
+
+                    if( snapPos != constrainedPos )
+                    {
+                        m_editedPoint->SetPosition( snapPos );
+                        m_altConstraint->Apply( grid );
+                        VECTOR2I projectedPos = m_editedPoint->GetPosition();
+                        const int snapTolerance = KiROUND( getView()->ToWorld( 5 ) );
+
+                        if( ( projectedPos - snapPos ).EuclideanNorm() > snapTolerance )
+                            m_editedPoint->SetPosition( constrainedPos );
+                    }
+                }
             }
             else if( !m_angleSnapActive && m_editedPoint->IsConstrained() )
             {
                 m_editedPoint->SetPosition( pos );
                 m_editedPoint->ApplyConstraint( grid );
                 constraintSnapped = true;
+
+                // For constrained lines (like zone edges), try to snap to nearby anchors
+                // that lie on the constraint line. First get the constrained position, then
+                // look for snap anchors and verify they're on the constraint line.
+                if( grid.GetSnap() && !snapLayers.empty() )
+                {
+                    VECTOR2I constrainedPos = m_editedPoint->GetPosition();
+                    VECTOR2I snapPos = grid.BestSnapAnchor( constrainedPos, snapLayers,
+                                                            grid.GetItemGrid( item ), { item } );
+
+                    // If we found a snap anchor different from the constrained position,
+                    // check if setting the point there and reapplying the constraint
+                    // results in a position close to the snap point
+                    if( snapPos != constrainedPos )
+                    {
+                        m_editedPoint->SetPosition( snapPos );
+                        m_editedPoint->ApplyConstraint( grid );
+                        VECTOR2I projectedPos = m_editedPoint->GetPosition();
+
+                        // If the projection is close to the snap anchor, use it
+                        // Otherwise revert to the original constrained position
+                        const int snapTolerance = KiROUND( getView()->ToWorld( 5 ) );
+
+                        if( ( projectedPos - snapPos ).EuclideanNorm() > snapTolerance )
+                            m_editedPoint->SetPosition( constrainedPos );
+                    }
+                }
             }
             else if( !m_angleSnapActive && m_editedPoint->GetGridConstraint() == SNAP_TO_GRID )
             {
@@ -2433,23 +2592,26 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             getViewControls()->ForceCursorPosition( true, m_editedPoint->GetPosition() );
             updatePoints();
 
-            if( m_editPoints->PointsSize() > RECT_RADIUS
-                && m_editedPoint == &m_editPoints->Point( RECT_RADIUS ) )
+            if( m_radiusHelper )
             {
-                if( PCB_SHAPE* rect = dynamic_cast<PCB_SHAPE*>( item ) )
+                if( m_editPoints->PointsSize() > RECT_RADIUS
+                    && m_editedPoint == &m_editPoints->Point( RECT_RADIUS ) )
                 {
-                    int radius = rect->GetCornerRadius();
-                    int offset = radius - M_SQRT1_2 * radius;
-                    VECTOR2I topLeft = rect->GetTopLeft();
-                    VECTOR2I botRight = rect->GetBotRight();
-                    VECTOR2I topRight( botRight.x, topLeft.y );
-                    VECTOR2I center( topRight.x - offset, topRight.y + offset );
-                    radiusHelper->Set( radius, center, VECTOR2I( 1, -1 ), editFrame->GetUserUnits() );
+                    if( PCB_SHAPE* rect = dynamic_cast<PCB_SHAPE*>( item ) )
+                    {
+                        int radius = rect->GetCornerRadius();
+                        int offset = radius - M_SQRT1_2 * radius;
+                        VECTOR2I topLeft = rect->GetTopLeft();
+                        VECTOR2I botRight = rect->GetBotRight();
+                        VECTOR2I topRight( botRight.x, topLeft.y );
+                        VECTOR2I center( topRight.x - offset, topRight.y + offset );
+                        m_radiusHelper->Set( radius, center, VECTOR2I( 1, -1 ), editFrame->GetUserUnits() );
+                    }
                 }
-            }
-            else
-            {
-                radiusHelper->Hide();
+                else
+                {
+                    m_radiusHelper->Hide();
+                }
             }
 
             getView()->Update( &m_preview );
@@ -2482,7 +2644,9 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                     getView()->Update( m_angleItem.get() );
             }
 
-            radiusHelper->Hide();
+            if( m_radiusHelper )
+                m_radiusHelper->Hide();
+
             getView()->Update( &m_preview );
 
             getViewControls()->SetAutoPan( false );
@@ -2497,6 +2661,7 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
                 PCB_GENERATOR* generator = static_cast<PCB_GENERATOR*>( item );
 
                 m_preview.FreeItems();
+                m_radiusHelper = nullptr;
                 m_toolMgr->RunSynchronousAction( PCB_ACTIONS::genFinishEdit, &commit, generator );
 
                 commit.Push( generator->GetCommitMessage() );
@@ -2556,16 +2721,17 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
             // Re-create the points for items which can have different behavior on different layers
             if( item->Type() == PCB_PAD_T && m_isFootprintEditor )
             {
-                getView()->Remove( m_editPoints.get() );
+                if( getView()->HasItem( m_editPoints.get() ) )
+                    getView()->Remove( m_editPoints.get() );
 
-                if( m_angleItem )
+                if( m_angleItem && getView()->HasItem( m_angleItem.get() ) )
                     getView()->Remove( m_angleItem.get() );
 
                 m_editPoints = makePoints( item );
 
                 if( m_angleItem )
                 {
-                    m_angleItem->SetEditPoints( m_editPoints.get() );
+                    m_angleItem->SetEditPoints( m_editPoints );
                     getView()->Add( m_angleItem.get() );
                 }
 
@@ -2589,13 +2755,17 @@ int PCB_POINT_EDITOR::OnSelectionChange( const TOOL_EVENT& aEvent )
     }
 
     m_preview.FreeItems();
-    getView()->Remove( &m_preview );
+    m_radiusHelper = nullptr;
+
+    if( getView()->HasItem( &m_preview ) )
+        getView()->Remove( &m_preview );
 
     if( m_editPoints )
     {
-        getView()->Remove( m_editPoints.get() );
+        if( getView()->HasItem( m_editPoints.get() ) )
+            getView()->Remove( m_editPoints.get() );
 
-        if( m_angleItem )
+        if( m_angleItem && getView()->HasItem( m_angleItem.get() ) )
             getView()->Remove( m_angleItem.get() );
 
         m_editPoints.reset();
@@ -2700,6 +2870,7 @@ void PCB_POINT_EDITOR::updateItem( BOARD_COMMIT& aCommit )
         // themselves (ROUTER_PREVIEW_ITEMs) are owned by the router.
 
         m_preview.FreeItems();
+        m_radiusHelper = nullptr;
 
         for( EDA_ITEM* previewItem : generatorItem->GetPreviewItems( generatorTool, frame(), STATUS_ITEMS_ONLY ) )
             m_preview.Add( previewItem );
@@ -2764,7 +2935,9 @@ void PCB_POINT_EDITOR::updatePoints()
 
     if( !m_editorBehavior->UpdatePoints( *m_editPoints ) )
     {
-        getView()->Remove( m_editPoints.get() );
+        if( getView()->HasItem( m_editPoints.get() ) )
+            getView()->Remove( m_editPoints.get() );
+
         m_editPoints = makePoints( item );
         getView()->Add( m_editPoints.get() );
     }
@@ -2814,12 +2987,12 @@ void PCB_POINT_EDITOR::setEditedPoint( EDIT_POINT* aPoint )
 
 void PCB_POINT_EDITOR::setAltConstraint( bool aEnabled )
 {
-    if( aEnabled )
-    {
-        EDA_ITEM*  parent = m_editPoints->GetParent();
-        EDIT_LINE* line = dynamic_cast<EDIT_LINE*>( m_editedPoint );
-        bool       isPoly;
+    EDA_ITEM*  parent = m_editPoints ? m_editPoints->GetParent() : nullptr;
+    EDIT_LINE* line = dynamic_cast<EDIT_LINE*>( m_editedPoint );
+    bool       isPoly = false;
 
+    if( parent )
+    {
         switch( parent->Type() )
         {
         case PCB_ZONE_T:
@@ -2831,14 +3004,22 @@ void PCB_POINT_EDITOR::setAltConstraint( bool aEnabled )
             break;
 
         default:
-            isPoly = false;
             break;
         }
+    }
 
+    if( aEnabled )
+    {
         if( line && isPoly )
         {
-            EC_CONVERGING* altConstraint = new EC_CONVERGING( *line, *m_editPoints );
-            m_altConstraint.reset( (EDIT_CONSTRAINT<EDIT_POINT>*) altConstraint );
+            // For polygon lines, toggle the mode on the existing constraint rather than
+            // creating a new one. This preserves the original reference positions.
+            EC_CONVERGING* constraint = dynamic_cast<EC_CONVERGING*>( line->GetConstraint() );
+
+            if( constraint )
+                constraint->SetMode( POLYGON_LINE_MODE::FIXED_LENGTH );
+
+            // Don't set m_altConstraint - we're modifying the line's own constraint
         }
         else
         {
@@ -2853,6 +3034,15 @@ void PCB_POINT_EDITOR::setAltConstraint( bool aEnabled )
     }
     else
     {
+        if( line && isPoly )
+        {
+            // Restore the line's constraint to CONVERGING mode
+            EC_CONVERGING* constraint = dynamic_cast<EC_CONVERGING*>( line->GetConstraint() );
+
+            if( constraint )
+                constraint->SetMode( POLYGON_LINE_MODE::CONVERGING );
+        }
+
         m_altConstraint.reset();
     }
 }
@@ -2889,7 +3079,7 @@ static std::pair<bool, SHAPE_POLY_SET::VERTEX_INDEX> findVertex( SHAPE_POLY_SET&
 }
 
 
-bool PCB_POINT_EDITOR::removeCornerCondition( const SELECTION& )
+bool PCB_POINT_EDITOR::CanRemoveCorner( const SELECTION& )
 {
     if( !m_editPoints || !m_editedPoint )
         return false;
@@ -2953,7 +3143,7 @@ int PCB_POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
     const VECTOR2I&      cursorPos = getViewControls()->GetCursorPosition();
 
     // called without an active edited polygon
-    if( !item || !canAddCorner( *item ) )
+    if( !item || !CanAddCorner( *item ) )
         return 0;
 
     PCB_SHAPE* graphicItem = dynamic_cast<PCB_SHAPE*>( item );

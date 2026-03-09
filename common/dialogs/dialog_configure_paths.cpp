@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2015 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,6 +26,7 @@
 #include <dialogs/dialog_configure_paths.h>
 
 #include <algorithm>
+#include <set>
 
 #include <bitmaps.h>
 #include <confirm.h>
@@ -35,6 +37,7 @@
 #include <filename_resolver.h>
 #include <env_vars.h>
 #include <grid_tricks.h>
+#include <libraries/library_manager.h>
 #include <pgm_base.h>
 #include <widgets/grid_text_button_helpers.h>
 #include <widgets/grid_text_helpers.h>
@@ -42,6 +45,7 @@
 #include <widgets/wx_grid.h>
 
 #include <wx/dirdlg.h>
+#include <wx/regex.h>
 
 
 enum TEXT_VAR_GRID_COLUMNS
@@ -120,15 +124,74 @@ bool DIALOG_CONFIGURE_PATHS::TransferDataToWindow()
    if( !wxDialog::TransferDataToWindow() )
        return false;
 
+    // Regex to match KICADn_* versioned variables (which we hide in favor of TRACEn_* versions)
+    wxRegEx kicadVersionedRegex( wxS( "^KICAD[0-9]+_" ) );
+
     const ENV_VAR_MAP& envVars = Pgm().GetLocalEnvVariables();
 
     for( auto it = envVars.begin(); it != envVars.end(); ++it )
     {
+        // Skip KICAD versioned variables - only show TRACE versions in the UI
+        if( kicadVersionedRegex.Matches( it->first ) )
+            continue;
+
+        // Skip KICAD_USER_TEMPLATE_DIR - only show TRACE_USER_TEMPLATE_DIR in the UI
+        if( it->first == wxS( "KICAD_USER_TEMPLATE_DIR" ) )
+            continue;
+
         const wxString& path = it->second.GetValue();
         AppendEnvVar( it->first, path, it->second.GetDefinedExternally() );
 
         if( m_curdir.IsEmpty() && !path.StartsWith( "${" ) && !path.StartsWith( "$(" ) )
             m_curdir = path;
+    }
+
+    // Scan library tables for environment variables that are used but not in envVars.
+    // This allows users to see and manage obsolete versioned variables (e.g., KICAD8_FOOTPRINT_DIR)
+    // that may still be referenced in library tables from older KiCad versions.
+    wxRegEx envVarRegex( wxS( ".*?(\\$\\{(.+?)\\})|(\\$\\((.+?)\\)).*?" ), wxRE_ADVANCED );
+    std::set<wxString> foundEnvVars;
+
+    LIBRARY_MANAGER& libMgr = Pgm().GetLibraryManager();
+
+    for( LIBRARY_TABLE_TYPE tableType : { LIBRARY_TABLE_TYPE::SYMBOL,
+                                          LIBRARY_TABLE_TYPE::FOOTPRINT,
+                                          LIBRARY_TABLE_TYPE::DESIGN_BLOCK } )
+    {
+        for( LIBRARY_TABLE_SCOPE scope : { LIBRARY_TABLE_SCOPE::GLOBAL,
+                                           LIBRARY_TABLE_SCOPE::PROJECT } )
+        {
+            std::vector<LIBRARY_TABLE_ROW*> rows = libMgr.Rows( tableType, scope, true );
+
+            for( const LIBRARY_TABLE_ROW* row : rows )
+            {
+                wxString uri = row->URI();
+
+                while( envVarRegex.Matches( uri ) )
+                {
+                    wxString envvar = envVarRegex.GetMatch( uri, 2 );
+
+                    if( envvar.IsEmpty() )
+                        envvar = envVarRegex.GetMatch( uri, 4 );
+
+                    if( !envvar.IsEmpty() )
+                        foundEnvVars.insert( envvar );
+
+                    uri.Replace( envVarRegex.GetMatch( uri, 0 ), wxEmptyString );
+                }
+            }
+        }
+    }
+
+    for( const wxString& envvar : foundEnvVars )
+    {
+        if( envVars.count( envvar ) == 0 && envvar != PROJECT_VAR_NAME )
+        {
+            wxString value;
+            bool isExternal = wxGetEnv( envvar, &value );
+
+            AppendEnvVar( envvar, value, isExternal );
+        }
     }
 
     return true;
@@ -170,6 +233,9 @@ bool DIALOG_CONFIGURE_PATHS::TransferDataFromWindow()
     if( !wxDialog::TransferDataFromWindow() )
         return false;
 
+    // Regex to match TRACEn_* versioned variables
+    wxRegEx traceVersionedRegex( wxS( "^TRACE([0-9]+)_(.+)$" ) );
+
     // Update environment variables
     ENV_VAR_MAP& envVarMap = Pgm().GetLocalEnvVariables();
 
@@ -209,11 +275,41 @@ bool DIALOG_CONFIGURE_PATHS::TransferDataFromWindow()
             envVarMap.at( name ).SetValue( path );
         else
             envVarMap[ name ] = ENV_VAR_ITEM( name, path );
+
+        // If this is a TRACEn_* variable, also update the corresponding KICADn_* variable
+        if( traceVersionedRegex.Matches( name ) )
+        {
+            wxString baseName = traceVersionedRegex.GetMatch( name, 2 );
+            wxString kicadName = ENV_VAR::GetKicadVersionedEnvVarName( baseName );
+
+            if( envVarMap.count( kicadName ) )
+                envVarMap.at( kicadName ).SetValue( path );
+            else
+                envVarMap[ kicadName ] = ENV_VAR_ITEM( kicadName, path );
+        }
+
+        // If this is TRACE_USER_TEMPLATE_DIR, also update KICAD_USER_TEMPLATE_DIR
+        if( name == wxS( "TRACE_USER_TEMPLATE_DIR" ) )
+        {
+            if( envVarMap.count( wxS( "KICAD_USER_TEMPLATE_DIR" ) ) )
+                envVarMap.at( wxS( "KICAD_USER_TEMPLATE_DIR" ) ).SetValue( path );
+            else
+                envVarMap[ wxS( "KICAD_USER_TEMPLATE_DIR" ) ] = ENV_VAR_ITEM( wxS( "KICAD_USER_TEMPLATE_DIR" ), path );
+        }
     }
 
-    // Remove deleted env vars
+    // Remove deleted env vars (but don't remove hidden KICAD variables)
+    wxRegEx kicadVersionedRegex( wxS( "^KICAD[0-9]+_" ) );
+
     for( auto it = envVarMap.begin(); it != envVarMap.end();  )
     {
+        // Don't remove hidden KICAD versioned variables or KICAD_USER_TEMPLATE_DIR
+        if( kicadVersionedRegex.Matches( it->first ) || it->first == wxS( "KICAD_USER_TEMPLATE_DIR" ) )
+        {
+            ++it;
+            continue;
+        }
+
         bool found = false;
 
         for( int row = 0; row < m_EnvVars->GetNumberRows(); ++row )
@@ -242,6 +338,12 @@ bool DIALOG_CONFIGURE_PATHS::TransferDataFromWindow()
 void DIALOG_CONFIGURE_PATHS::OnGridCellChanging( wxGridEvent& event )
 {
     wxGrid*  grid = dynamic_cast<wxGrid*>( event.GetEventObject() );
+
+    // Mid-edit notifications from text-button editors fire while the user is still typing.
+    // Only validate when the edit is being committed (cell edit control already disabled).
+    if( grid && grid->IsCellEditControlEnabled() )
+        return;
+
     int      row = event.GetRow();
     int      col = event.GetCol();
     wxString text = event.GetString();
@@ -280,7 +382,7 @@ void DIALOG_CONFIGURE_PATHS::OnGridCellChanging( wxGridEvent& event )
         {
             wxString msg1 = _( "This path was defined  externally to the running process and\n"
                                "will only be temporarily overwritten." );
-            wxString msg2 = _( "The next time KiCad is launched, any paths that have already\n"
+            wxString msg2 = _( "The next time Trace is launched, any paths that have already\n"
                                "been defined are honored and any settings defined in the path\n"
                                "configuration dialog are ignored.  If you did not intend for\n"
                                "this behavior, either rename any conflicting entries or remove\n"
@@ -374,6 +476,9 @@ void DIALOG_CONFIGURE_PATHS::OnHelp( wxCommandEvent& event )
         m_helpBox = new HTML_WINDOW( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                      wxHW_SCROLLBAR_AUTO );
 
+        // Regex to match KICADn_* versioned variables (which we hide in favor of TRACEn_* versions)
+        wxRegEx kicadVersionedRegex( wxS( "^KICAD[0-9]+_" ) );
+
         wxString msg = _( "Enter the name and value for each environment variable.  Grey entries "
                           "are names that have been defined externally at the system or user "
                           "level.  Environment variables defined at the system or user level "
@@ -386,6 +491,14 @@ void DIALOG_CONFIGURE_PATHS::OnHelp( wxCommandEvent& event )
 
         for( const wxString& var : ENV_VAR::GetPredefinedEnvVars() )
         {
+            // Skip KICAD versioned variables - only show TRACE versions in the help
+            if( kicadVersionedRegex.Matches( var ) )
+                continue;
+
+            // Skip KICAD_USER_TEMPLATE_DIR - only show TRACE_USER_TEMPLATE_DIR in the help
+            if( var == wxS( "KICAD_USER_TEMPLATE_DIR" ) )
+                continue;
+
             msg << "<br><br><b>" << var << "</b>";
 
             const auto desc = ENV_VAR::LookUpEnvVarHelp( var );

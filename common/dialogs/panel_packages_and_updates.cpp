@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2022 Andrew Lutsenko, anlutsenko at gmail dot com
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -47,9 +48,9 @@ PANEL_PACKAGES_AND_UPDATES::PANEL_PACKAGES_AND_UPDATES( wxWindow* parent ) :
 
 bool PANEL_PACKAGES_AND_UPDATES::TransferDataToWindow()
 {
-    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
     {
-        m_cbKicadUpdate->SetValue( cfg->m_KiCadUpdateCheck );
+        m_cbKicadUpdate->SetValue( cfg->m_TraceUpdateCheck );
         m_cbPcmUpdate->SetValue( cfg->m_PcmUpdateCheck );
         m_libAutoAdd->SetValue( cfg->m_PcmLibAutoAdd );
         m_libAutoRemove->SetValue( cfg->m_PcmLibAutoRemove );
@@ -62,9 +63,9 @@ bool PANEL_PACKAGES_AND_UPDATES::TransferDataToWindow()
 
 bool PANEL_PACKAGES_AND_UPDATES::TransferDataFromWindow()
 {
-    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+    if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
     {
-        cfg->m_KiCadUpdateCheck = m_cbKicadUpdate->GetValue();
+        cfg->m_TraceUpdateCheck = m_cbKicadUpdate->GetValue();
         cfg->m_PcmUpdateCheck = m_cbPcmUpdate->GetValue();
         cfg->m_PcmLibAutoAdd = m_libAutoAdd->GetValue();
         cfg->m_PcmLibAutoRemove = m_libAutoRemove->GetValue();

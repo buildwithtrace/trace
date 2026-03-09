@@ -58,6 +58,7 @@ BOOST_AUTO_TEST_CASE( BarcodeWriteRead )
 
     const std::filesystem::path savePath = std::filesystem::temp_directory_path() / "barcode_roundtrip.kicad_pcb";
 
+    std::filesystem::remove( savePath );
     KI_TEST::DumpBoardToFile( *board, savePath.string() );
     std::unique_ptr<BOARD> board2 = KI_TEST::ReadBoardFromFileOrStream( savePath.string() );
     BOARD_ITEM&            item2 = KI_TEST::RequireBoardItemWithTypeAndId( *board2, PCB_BARCODE_T, id );
@@ -96,6 +97,7 @@ BOOST_AUTO_TEST_CASE( BarcodeFootprintWriteRead )
 
     const std::filesystem::path savePath = std::filesystem::temp_directory_path() / "barcode_roundtrip.kicad_mod";
 
+    std::filesystem::remove( savePath );
     KI_TEST::DumpFootprintToFile( footprint, savePath.string() );
     std::unique_ptr<FOOTPRINT> footprint2 = KI_TEST::ReadFootprintFromFileOrStream( savePath.string() );
 
@@ -213,4 +215,177 @@ BOOST_AUTO_TEST_CASE( BarcodePositioningAlignment )
 
         board->Add( barcode, ADD_MODE::APPEND, true );
     }
+}
+
+
+BOOST_AUTO_TEST_CASE( BarcodeTextVariableExpansion )
+{
+    SETTINGS_MANAGER settingsManager;
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    // Set up board-level text variables that should be expanded
+    std::map<wxString, wxString> properties;
+    properties[wxT( "PART_NUMBER" )] = wxT( "PN12345" );
+    properties[wxT( "VERSION" )] = wxT( "1.0" );
+    board->SetProperties( properties );
+
+    // Create a barcode with text variables in the content
+    PCB_BARCODE* barcode = new PCB_BARCODE( board.get() );
+    barcode->SetText( wxT( "${PART_NUMBER}_${VERSION}" ) );
+    barcode->SetLayer( F_SilkS );
+    barcode->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 50.0 ), pcbIUScale.mmToIU( 50.0 ) ) );
+    barcode->SetWidth( pcbIUScale.mmToIU( 10.0 ) );
+    barcode->SetHeight( pcbIUScale.mmToIU( 10.0 ) );
+    barcode->SetKind( BARCODE_T::QR_CODE );
+    barcode->SetErrorCorrection( BARCODE_ECC_T::M );
+
+    board->Add( barcode, ADD_MODE::APPEND, true );
+
+    // Verify GetText returns the raw text with variables
+    BOOST_CHECK_EQUAL( barcode->GetText(), wxT( "${PART_NUMBER}_${VERSION}" ) );
+
+    // Verify GetShownText returns the expanded text
+    BOOST_CHECK_EQUAL( barcode->GetShownText(), wxT( "PN12345_1.0" ) );
+
+    // Assemble the barcode and verify the QR code encodes the expanded text
+    barcode->AssembleBarcode();
+
+    // Create a reference barcode with the literal expanded text to compare polygon shapes
+    PCB_BARCODE* refBarcode = new PCB_BARCODE( board.get() );
+    refBarcode->SetText( wxT( "PN12345_1.0" ) );
+    refBarcode->SetLayer( F_SilkS );
+    refBarcode->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 100.0 ), pcbIUScale.mmToIU( 50.0 ) ) );
+    refBarcode->SetWidth( pcbIUScale.mmToIU( 10.0 ) );
+    refBarcode->SetHeight( pcbIUScale.mmToIU( 10.0 ) );
+    refBarcode->SetKind( BARCODE_T::QR_CODE );
+    refBarcode->SetErrorCorrection( BARCODE_ECC_T::M );
+    refBarcode->AssembleBarcode();
+
+    board->Add( refBarcode, ADD_MODE::APPEND, true );
+
+    // The symbol polygons should have the same structure since they encode the same content.
+    // Compare the number of outlines as a proxy for encoding the same data.
+    BOOST_CHECK_EQUAL( barcode->GetSymbolPoly().OutlineCount(),
+                       refBarcode->GetSymbolPoly().OutlineCount() );
+
+    // The bounding boxes should be the same size since they encode the same content
+    BOX2I varBbox = barcode->GetSymbolPoly().BBox();
+    BOX2I refBbox = refBarcode->GetSymbolPoly().BBox();
+    BOOST_CHECK_EQUAL( varBbox.GetWidth(), refBbox.GetWidth() );
+    BOOST_CHECK_EQUAL( varBbox.GetHeight(), refBbox.GetHeight() );
+}
+
+
+BOOST_AUTO_TEST_CASE( BarcodeUndefinedVariable )
+{
+    SETTINGS_MANAGER settingsManager;
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    // Don't set any properties - variable won't be resolvable
+
+    // Create a barcode with an undefined variable
+    PCB_BARCODE* barcode = new PCB_BARCODE( board.get() );
+    barcode->SetText( wxT( "${UNDEFINED_VAR}" ) );
+    barcode->SetLayer( F_SilkS );
+    barcode->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 50.0 ), pcbIUScale.mmToIU( 50.0 ) ) );
+    barcode->SetWidth( pcbIUScale.mmToIU( 10.0 ) );
+    barcode->SetHeight( pcbIUScale.mmToIU( 10.0 ) );
+    barcode->SetKind( BARCODE_T::QR_CODE );
+    barcode->SetErrorCorrection( BARCODE_ECC_T::M );
+
+    board->Add( barcode, ADD_MODE::APPEND, true );
+
+    // Verify GetText returns the raw text with the variable reference
+    BOOST_CHECK_EQUAL( barcode->GetText(), wxT( "${UNDEFINED_VAR}" ) );
+
+    // Verify GetShownText returns the unexpanded text (since variable is undefined)
+    BOOST_CHECK_EQUAL( barcode->GetShownText(), wxT( "${UNDEFINED_VAR}" ) );
+
+    // Assemble the barcode - for QR codes this should still work since QR can encode any text
+    barcode->AssembleBarcode();
+
+    // QR codes should still generate a polygon even with ${} in the text
+    BOOST_CHECK( barcode->GetSymbolPoly().OutlineCount() > 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( BarcodeCode39UndefinedVariable )
+{
+    SETTINGS_MANAGER settingsManager;
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    // Don't set any properties - variable won't be resolvable
+
+    // Create a CODE_39 barcode with an undefined variable
+    // CODE_39 cannot encode $ { } characters, so this should fail to generate
+    PCB_BARCODE* barcode = new PCB_BARCODE( board.get() );
+    barcode->SetText( wxT( "${UNDEFINED_VAR}" ) );
+    barcode->SetLayer( F_SilkS );
+    barcode->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 50.0 ), pcbIUScale.mmToIU( 50.0 ) ) );
+    barcode->SetWidth( pcbIUScale.mmToIU( 20.0 ) );
+    barcode->SetHeight( pcbIUScale.mmToIU( 5.0 ) );
+    barcode->SetKind( BARCODE_T::CODE_39 );
+
+    board->Add( barcode, ADD_MODE::APPEND, true );
+
+    // Assemble the barcode
+    barcode->AssembleBarcode();
+
+    // CODE_39 cannot encode ${} so the polygon should be empty
+    // This is expected behavior - invalid characters cause encoding to fail
+    BOOST_CHECK_EQUAL( barcode->GetSymbolPoly().OutlineCount(), 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( BarcodeDialogEditFlow )
+{
+    SETTINGS_MANAGER settingsManager;
+
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    // Set up board-level text variables
+    std::map<wxString, wxString> properties;
+    properties[wxT( "PART_NUMBER" )] = wxT( "PN12345" );
+    board->SetProperties( properties );
+
+    // Create a barcode and add it to the board (simulates existing barcode)
+    PCB_BARCODE* currentBarcode = new PCB_BARCODE( board.get() );
+    currentBarcode->SetText( wxT( "INITIAL_TEXT" ) );
+    currentBarcode->SetKind( BARCODE_T::QR_CODE );
+    currentBarcode->SetWidth( pcbIUScale.mmToIU( 10.0 ) );
+    currentBarcode->SetHeight( pcbIUScale.mmToIU( 10.0 ) );
+    currentBarcode->AssembleBarcode();
+    board->Add( currentBarcode, ADD_MODE::APPEND, true );
+
+    // Simulate dialog creating a dummy barcode for preview
+    PCB_BARCODE* dummyBarcode = new PCB_BARCODE( board.get() );
+
+    // Simulate copying current to dummy (as in initValues)
+    *dummyBarcode = *currentBarcode;
+
+    // Verify dummy's m_text parent chain is correct after copy
+    BOOST_CHECK( dummyBarcode->Text().GetParent() == static_cast<EDA_ITEM*>( dummyBarcode ) );
+    BOOST_CHECK( dummyBarcode->GetBoard() == board.get() );
+    BOOST_CHECK( dummyBarcode->Text().GetBoard() == board.get() );
+
+    // Simulate user changing text to use a variable
+    dummyBarcode->SetText( wxT( "${PART_NUMBER}" ) );
+    dummyBarcode->AssembleBarcode();
+
+    // Verify variable expansion works in dummy
+    BOOST_CHECK_EQUAL( dummyBarcode->GetShownText(), wxT( "PN12345" ) );
+    BOOST_CHECK( dummyBarcode->GetSymbolPoly().OutlineCount() > 0 );
+
+    // Simulate dialog closing and applying changes to current barcode
+    currentBarcode->SetText( wxT( "${PART_NUMBER}" ) );
+    currentBarcode->AssembleBarcode();
+
+    // Verify variable expansion works in current barcode
+    BOOST_CHECK_EQUAL( currentBarcode->GetShownText(), wxT( "PN12345" ) );
+    BOOST_CHECK( currentBarcode->GetSymbolPoly().OutlineCount() > 0 );
+
+    delete dummyBarcode;
 }

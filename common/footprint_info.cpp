@@ -31,13 +31,8 @@
 #include <footprint_info.h>
 #include <dialogs/html_message_box.h>
 #include <string_utils.h>
-#include <kiface_ids.h>
-#include <kiway.h>
 #include <lib_id.h>
-#include <thread>
-#include <utility>
 #include <wx/tokenzr.h>
-#include <kiface_base.h>
 
 FOOTPRINT_INFO* FOOTPRINT_LIST::GetFootprintInfo( const wxString& aLibNickname,
                                                   const wxString& aFootprintName )
@@ -111,65 +106,17 @@ bool operator<( const FOOTPRINT_INFO& lhs, const FOOTPRINT_INFO& rhs )
 }
 
 
-void FOOTPRINT_LIST::DisplayErrors( wxTopLevelWindow* aWindow )
+wxString FOOTPRINT_LIST::GetErrorMessages()
 {
-    // @todo: go to a more HTML !<table>! ? centric output, possibly with recommendations
-    // for remedy of errors.  Add numeric error codes to PARSE_ERROR, and switch on them for
-    // remedies, etc.  Full access is provided to everything in every exception!
-
-    HTML_MESSAGE_BOX dlg( aWindow, _( "Load Error" ) );
-
-    dlg.MessageSet( _( "Errors were encountered loading footprints:" ) );
-
-    wxString msg;
+    wxString messages;
 
     while( std::unique_ptr<IO_ERROR> error = PopError() )
     {
-        wxString tmp = EscapeHTML( error->Problem() );
+        if( !messages.IsEmpty() )
+            messages += wxS( "\n" );
 
-        // Preserve new lines in error messages so queued errors don't run together.
-        tmp.Replace( wxS( "\n" ), wxS( "<BR>" ) );
-        msg += wxT( "<p>" ) + tmp + wxT( "</p>" );
+        messages += error->Problem();
     }
 
-    dlg.AddHTML_Text( msg );
-
-    dlg.ShowModal();
-}
-
-
-static FOOTPRINT_LIST* get_instance_from_id( KIWAY& aKiway, int aId )
-{
-    void* ptr = nullptr;
-
-    try
-    {
-        ptr = Kiface().IfaceOrAddress( aId );
-
-        if( !ptr )
-        {
-            KIFACE* kiface = aKiway.KiFACE( KIWAY::FACE_PCB );
-            ptr = kiface->IfaceOrAddress( aId );
-        }
-
-        return static_cast<FOOTPRINT_LIST*>( ptr );
-    }
-    catch( ... )
-    {
-        return nullptr;
-    }
-}
-
-
-FOOTPRINT_LIST* FOOTPRINT_LIST::GetInstance( KIWAY& aKiway )
-{
-    FOOTPRINT_LIST* footprintInfo = get_instance_from_id( aKiway, KIFACE_FOOTPRINT_LIST );
-
-    if( !footprintInfo )
-        return nullptr;
-
-    if( !footprintInfo->GetCount() )
-        footprintInfo->ReadCacheFromFile( aKiway.Prj().GetProjectPath() + wxS( "fp-info-cache" ) );
-
-    return footprintInfo;
+    return messages;
 }

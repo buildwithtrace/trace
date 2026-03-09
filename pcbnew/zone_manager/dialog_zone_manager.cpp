@@ -52,7 +52,6 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
         m_pcbFrame( aParent ),
         m_zoneSettingsBag( aParent->GetBoard() ),
         m_priorityDragIndex( {} ),
-        m_needZoomGAL( true ),
         m_isFillingZones( false ),
         m_zoneFillComplete( false )
 {
@@ -67,7 +66,7 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
     m_sizerProperties->Add( m_panelZoneProperties, 0,  wxEXPAND, 5 );
 
     m_zonePreviewNotebook = new ZONE_PREVIEW_NOTEBOOK( m_zonePanel, aParent );
-    m_sizerPreview->Add( m_zonePreviewNotebook, 1, wxALL | wxEXPAND, 5 );
+    m_sizerPreview->Add( m_zonePreviewNotebook, 1, wxBOTTOM | wxLEFT | wxRIGHT | wxEXPAND, 5 );
 
     for( const auto& [k, v] : MODEL_ZONES_OVERVIEW::GetColumnNames() )
     {
@@ -79,6 +78,7 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
 
     m_modelZonesOverview = new MODEL_ZONES_OVERVIEW( this, m_pcbFrame, m_zoneSettingsBag );
     m_viewZonesOverview->AssociateModel( m_modelZonesOverview.get() );
+    m_viewZonesOverview->SetLayoutDirection( wxLayout_LeftToRight );
 
 #if wxUSE_DRAG_AND_DROP
     m_viewZonesOverview->EnableDragSource( wxDF_UNICODETEXT );
@@ -96,28 +96,19 @@ DIALOG_ZONE_MANAGER::DIALOG_ZONE_MANAGER( PCB_BASE_FRAME* aParent ) :
     Bind( wxEVT_CHECKBOX, &DIALOG_ZONE_MANAGER::OnCheckBoxClicked, this );
     Bind( wxEVT_IDLE, &DIALOG_ZONE_MANAGER::OnIdle, this );
     Bind( wxEVT_BOOKCTRL_PAGE_CHANGED,
-            [this]( wxNotebookEvent& aEvent )
-            {
-                Layout();
-            },
-            m_zonePreviewNotebook->GetId() );
+          [this]( wxNotebookEvent& aEvent )
+          {
+              Layout();
+          },
+          m_zonePreviewNotebook->GetId() );
 
     Layout();
     m_MainBoxSizer->Fit( this );
     finishDialogSettings();
-
-    //NOTE - Works on Windows and MacOS , need further handling in IDLE on Ubuntu
-    FitCanvasToScreen();
 }
 
 
 DIALOG_ZONE_MANAGER::~DIALOG_ZONE_MANAGER() = default;
-
-
-void DIALOG_ZONE_MANAGER::FitCanvasToScreen()
-{
-    m_zonePreviewNotebook->FitCanvasToScreen();
-}
 
 
 bool DIALOG_ZONE_MANAGER::TransferDataToWindow()
@@ -190,19 +181,12 @@ void DIALOG_ZONE_MANAGER::OnIdle( wxIdleEvent& aEvent )
     WXUNUSED( aEvent )
     m_viewZonesOverview->SetFocus();
     Unbind( wxEVT_IDLE, &DIALOG_ZONE_MANAGER::OnIdle, this );
-
-    if( !m_needZoomGAL )
-        return;
-
-    m_needZoomGAL = false;
-    FitCanvasToScreen();
 }
 
 
 void DIALOG_ZONE_MANAGER::onDialogResize( wxSizeEvent& event )
 {
     event.Skip();
-    FitCanvasToScreen();
 }
 
 
@@ -374,33 +358,42 @@ void DIALOG_ZONE_MANAGER::OnUpdateDisplayedZonesClick( wxCommandEvent& aEvent )
         return;
 
     m_isFillingZones = true;
-    m_panelZoneProperties->TransferZoneSettingsFromWindow();
+
+    if( !m_panelZoneProperties->TransferZoneSettingsFromWindow() )
+    {
+        m_isFillingZones = false;
+        return;
+    }
+
     m_zoneSettingsBag.UpdateClonedZones();
 
     BOARD* board = m_pcbFrame->GetBoard();
     board->IncrementTimeStamp();
 
-    auto commit = std::make_unique<BOARD_COMMIT>( m_pcbFrame );
-    m_filler = std::make_unique<ZONE_FILLER>( board, commit.get() );
+    // Save the original zones before swapping so we can restore them later
+    ZONES originalZones = board->Zones();
+
+    // Do not use a commit here since we're operating on cloned zones that are not owned by the
+    // board. Using a commit would create undo entries pointing to the clones, which would cause
+    // corruption when the commit is destroyed.
+    m_filler = std::make_unique<ZONE_FILLER>( board, nullptr );
     auto reporter = std::make_unique<WX_PROGRESS_REPORTER>( this, _( "Fill All Zones" ), 5, PR_CAN_ABORT );
     m_filler->SetProgressReporter( reporter.get() );
 
     // TODO: replace these const_cast calls with a different solution that avoids mutating the
-    // container of the board.  This is relatively safe as-is because the original zones list is
+    // container of the board. This is relatively safe as-is because the original zones list is
     // swapped back in below, but still should be changed to avoid invalidating the board state
     // in case this code is refactored to be a non-modal dialog in the future.
     const_cast<ZONES&>( board->Zones() ) = m_zoneSettingsBag.GetClonedZoneList();
 
-    //NOTE - Nether revert nor commit is needed here , cause the cloned zones are not owned by
-    //       the pcb frame.
     m_zoneFillComplete = m_filler->Fill( board->Zones() );
     board->BuildConnectivity();
 
     m_zonePreviewNotebook->OnZoneSelectionChanged( m_panelZoneProperties->GetZone() );
 
-    //NOTE - The connectivity MUST be rebuilt to remove stale pointers to cloned zones in case of
-    //       a cancel.
-    const_cast<ZONES&>( board->Zones() ) = m_zoneSettingsBag.GetOriginalZoneList();
+    // Restore the original zones. The connectivity MUST be rebuilt to remove stale pointers to
+    // cloned zones in case of a cancel.
+    const_cast<ZONES&>( board->Zones() ) = originalZones;
     board->BuildConnectivity();
 
     m_isFillingZones = false;

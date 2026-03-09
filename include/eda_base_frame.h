@@ -201,13 +201,22 @@ public:
     virtual void OnSize( wxSizeEvent& aEvent );
 
     /**
-     * Select the given action in the left toolbar group which contains it, if any.
+     * Select the given action in the toolbar group which contains it, if any.
      * This updates the displayed icon/tooltip and UI conditions for that group.
      */
-    void SelectLeftToolbarAction( const TOOL_ACTION& aAction )
+    void SelectToolbarAction( const TOOL_ACTION& aAction )
     {
         if( m_tbLeft )
             m_tbLeft->SelectAction( aAction );
+
+        if( m_tbTopMain )
+            m_tbTopMain->SelectAction( aAction );
+
+        if( m_tbTopAux )
+            m_tbTopAux->SelectAction( aAction );
+
+        if( m_tbRight )
+            m_tbRight->SelectAction( aAction );
     }
 
     void OnMaximize( wxMaximizeEvent& aEvent );
@@ -626,6 +635,8 @@ public:
         return Close( aForce );
     }
 
+    virtual void ClearToolbarControl( int aId ) { }
+
     /**
      * Update the UI in response to a change in the system colors.
      */
@@ -727,6 +738,11 @@ protected:
      * @param aControlTool is the tool to associate with the menu.
      */
     void AddMenuLanguageList( ACTION_MENU* aMasterMenu, TOOL_INTERACTIVE* aControlTool );
+
+    /**
+     * An event handler called on a language menu selection.
+     */
+    void OnLanguageSelectionEvent( wxCommandEvent& aEvent );
 
     /**
      * Execute action on accepted dropped file.

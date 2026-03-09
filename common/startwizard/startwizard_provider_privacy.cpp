@@ -97,9 +97,9 @@ wxPanel* STARTWIZARD_PROVIDER_PRIVACY::GetWizardPanel( wxWindow* aParent, STARTW
 void STARTWIZARD_PROVIDER_PRIVACY::Finish()
 {
     COMMON_SETTINGS* commonSettings = Pgm().GetCommonSettings();
-    KICAD_SETTINGS* settings = Pgm().GetSettingsManager().GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS* settings = Pgm().GetSettingsManager().GetAppSettings<KICAD_SETTINGS>( "trace" );
 
-    settings->m_KiCadUpdateCheck = m_model->m_autoUpdateKiCad;
+    settings->m_TraceUpdateCheck = m_model->m_autoUpdateKiCad;
     settings->m_PcmUpdateCheck   = m_model->m_autoUpdatePCM;
     commonSettings->m_DoNotShowAgain.update_check_prompt = true;
 
@@ -113,9 +113,9 @@ void STARTWIZARD_PROVIDER_PRIVACY::Finish()
 void STARTWIZARD_PROVIDER_PRIVACY::ApplyDefaults()
 {
     COMMON_SETTINGS* commonSettings = Pgm().GetCommonSettings();
-    KICAD_SETTINGS* settings = Pgm().GetSettingsManager().GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS* settings = Pgm().GetSettingsManager().GetAppSettings<KICAD_SETTINGS>( "trace" );
 
-    settings->m_KiCadUpdateCheck = true;
+    settings->m_TraceUpdateCheck = true;
     settings->m_PcmUpdateCheck   = true;
     APP_MONITOR::SENTRY::Instance()->SetSentryOptIn( false );
 

@@ -45,6 +45,7 @@
 #include <executable_names.h>
 #include <gestfich.h>
 #include <tools/kicad_manager_actions.h>
+#include <confirm.h>
 
 #define URL_GET_INVOLVED wxS( "https://go.kicad.org/contribute/" )
 #define URL_DONATE wxS( "https://go.kicad.org/app-donate" )
@@ -140,8 +141,7 @@ int COMMON_CONTROL::ShowLibraryTable( const TOOL_EVENT& aEvent )
         try     // Kicad frame was not available, try to start it
         {
             if( KIFACE* kiface = m_frame->Kiway().KiFACE( KIWAY::FACE_SCH ) )
-                kiface->CreateKiWindow( m_frame, DIALOG_DESIGN_BLOCK_LIBRARY_TABLE,
-                                        &m_frame->Kiway() );
+                kiface->CreateKiWindow( m_frame, DIALOG_DESIGN_BLOCK_LIBRARY_TABLE, &m_frame->Kiway() );
         }
         catch( ... )
         {
@@ -186,6 +186,18 @@ int COMMON_CONTROL::ShowPlayer( const TOOL_EVENT& aEvent )
     wxCHECK_MSG( editor != nullptr, 0, wxT( "Cannot open/create the editor frame" ) );
 
     showFrame( editor );
+
+    return 0;
+}
+
+
+int COMMON_CONTROL::Quit( const TOOL_EVENT& aEvent )
+{
+    m_frame->CallAfter(
+            [this]()
+            {
+                m_frame->Kiway().OnKiCadExit();
+            } );
 
     return 0;
 }
@@ -256,9 +268,6 @@ int COMMON_CONTROL::Execute( const TOOL_EVENT& aEvent )
     if( execFile.IsEmpty() )
         return 0;
 
-    if( aEvent.Parameter<wxString*>() )
-        param = *aEvent.Parameter<wxString*>();
-
     return Execute( execFile, param );
 }
 
@@ -270,13 +279,9 @@ int COMMON_CONTROL::ShowProjectManager( const TOOL_EVENT& aEvent )
     EDA_BASE_FRAME* top = static_cast<EDA_BASE_FRAME*>( m_frame->Kiway().GetTop() );
 
     if( top && top->GetFrameType() == KICAD_MAIN_FRAME_T )
-    {
         showFrame( top );
-    }
     else
-    {
-        wxMessageDialog( m_frame, _( "Can not switch to project manager in stand-alone mode." ) );
-    }
+        KICAD_MESSAGE_DIALOG( m_frame, _( "Can not switch to project manager in stand-alone mode." ) );
 
     return 0;
 }
@@ -320,8 +325,8 @@ int COMMON_CONTROL::ShowHelp( const TOOL_EVENT& aEvent )
             msg = wxString::Format( _( "Help file '%s' or\n'%s' could not be found.\n"
                                        "Do you want to access the KiCad online help?" ),
                                     names[0], names[1] );
-            wxMessageDialog dlg( nullptr, msg, _( "File Not Found" ),
-                                 wxYES_NO | wxNO_DEFAULT | wxCANCEL );
+            KICAD_MESSAGE_DIALOG dlg( nullptr, msg, _( "File Not Found" ),
+                                      wxYES_NO | wxNO_DEFAULT | wxCANCEL );
 
             if( dlg.ShowModal() != wxID_YES )
                 return -1;
@@ -340,8 +345,8 @@ int COMMON_CONTROL::ShowHelp( const TOOL_EVENT& aEvent )
             msg = wxString::Format( _( "Help file '%s' could not be found.\n"
                                        "Do you want to access the KiCad online help?" ),
                                     base_name );
-            wxMessageDialog dlg( nullptr, msg, _( "File Not Found" ),
-                                 wxYES_NO | wxNO_DEFAULT | wxCANCEL );
+            KICAD_MESSAGE_DIALOG dlg( nullptr, msg, _( "File Not Found" ),
+                                      wxYES_NO | wxNO_DEFAULT | wxCANCEL );
 
             if( dlg.ShowModal() != wxID_YES )
                 return -1;
@@ -422,6 +427,8 @@ int COMMON_CONTROL::ReportBug( const TOOL_EVENT& aEvent )
 
 void COMMON_CONTROL::setTransitions()
 {
+    Go( &COMMON_CONTROL::Quit,               ACTIONS::quit.MakeEvent() );
+
     Go( &COMMON_CONTROL::OpenPreferences,    ACTIONS::openPreferences.MakeEvent() );
     Go( &COMMON_CONTROL::ConfigurePaths,     ACTIONS::configurePaths.MakeEvent() );
     Go( &COMMON_CONTROL::ShowLibraryTable,   ACTIONS::showSymbolLibTable.MakeEvent() );
@@ -431,7 +438,7 @@ void COMMON_CONTROL::setTransitions()
     Go( &COMMON_CONTROL::ShowPlayer,         ACTIONS::showSymbolEditor.MakeEvent() );
     Go( &COMMON_CONTROL::ShowPlayer,         ACTIONS::showFootprintBrowser.MakeEvent() );
     Go( &COMMON_CONTROL::ShowPlayer,         ACTIONS::showFootprintEditor.MakeEvent() );
-    Go( &COMMON_CONTROL::Execute,         ACTIONS::showCalculatorTools.MakeEvent() );
+    Go( &COMMON_CONTROL::Execute,            ACTIONS::showCalculatorTools.MakeEvent() );
     Go( &COMMON_CONTROL::ShowProjectManager, ACTIONS::showProjectManager.MakeEvent() );
 
     Go( &COMMON_CONTROL::ShowHelp,           ACTIONS::gettingStarted.MakeEvent() );

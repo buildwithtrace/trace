@@ -170,8 +170,8 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     m_DRCSeverities[ DRCE_DRILLED_HOLES_TOO_CLOSE ] = RPT_SEVERITY_WARNING;
 
     m_DRCSeverities[ DRCE_MISSING_COURTYARD ] = RPT_SEVERITY_IGNORE;
-    m_DRCSeverities[ DRCE_PTH_IN_COURTYARD ] = RPT_SEVERITY_IGNORE;
-    m_DRCSeverities[ DRCE_NPTH_IN_COURTYARD ] = RPT_SEVERITY_IGNORE;
+    m_DRCSeverities[ DRCE_PTH_IN_COURTYARD ] = RPT_SEVERITY_ERROR;
+    m_DRCSeverities[ DRCE_NPTH_IN_COURTYARD ] = RPT_SEVERITY_ERROR;
 
     m_DRCSeverities[ DRCE_DANGLING_TRACK ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_DANGLING_VIA ] = RPT_SEVERITY_WARNING;
@@ -187,6 +187,7 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     m_DRCSeverities[ DRCE_NET_CONFLICT ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_SCHEMATIC_PARITY ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_FOOTPRINT_FILTERS ] = RPT_SEVERITY_IGNORE;
+    m_DRCSeverities[ DRCE_SCHEMATIC_FIELDS_PARITY ] = RPT_SEVERITY_WARNING;
 
     m_DRCSeverities[ DRCE_SILK_CLEARANCE ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_SILK_MASK_CLEARANCE ] = RPT_SEVERITY_WARNING;
@@ -1444,7 +1445,7 @@ int BOARD_DESIGN_SETTINGS::GetCurrentDiffPairGap() const
     {
         return m_customDiffPair.m_Gap;
     }
-    else if( m_diffPairIndex == 0 )
+    else if( m_diffPairIndex <= 0 || m_diffPairIndex >= (int) m_DiffPairDimensionsList.size() )
     {
         if( m_NetSettings->GetDefaultNetclass()->HasDiffPairGap() )
             return m_NetSettings->GetDefaultNetclass()->GetDiffPairGap();
@@ -1464,7 +1465,7 @@ int BOARD_DESIGN_SETTINGS::GetCurrentDiffPairViaGap() const
     {
         return m_customDiffPair.m_ViaGap;
     }
-    else if( m_diffPairIndex == 0 )
+    else if( m_diffPairIndex <= 0 || m_diffPairIndex >= (int) m_DiffPairDimensionsList.size() )
     {
         if( m_NetSettings->GetDefaultNetclass()->HasDiffPairViaGap() )
             return m_NetSettings->GetDefaultNetclass()->GetDiffPairViaGap();

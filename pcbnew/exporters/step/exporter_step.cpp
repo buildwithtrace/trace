@@ -49,6 +49,7 @@
 #include <project_pcb.h>
 #include <wildcards_and_files_ext.h>
 
+#include <new>                        // std::bad_alloc
 #include <Message.hxx>                // OpenCascade messenger
 #include <Message_PrinterOStream.hxx> // OpenCascade output messenger
 #include <Standard_Failure.hxx>       // In open cascade
@@ -485,7 +486,8 @@ bool EXPORTER_STEP::buildFootprint3DShapes( FOOTPRINT* aFootprint, const VECTOR2
         return hasdata;
     }
 
-    if( ( aFootprint->GetAttributes() & FP_DNP ) && !m_params.m_IncludeDNP )
+    if( aFootprint->GetDNPForVariant( m_board ? m_board->GetCurrentVariant() : wxString() )
+            && !m_params.m_IncludeDNP )
     {
         return hasdata;
     }
@@ -544,30 +546,58 @@ bool EXPORTER_STEP::buildFootprint3DShapes( FOOTPRINT* aFootprint, const VECTOR2
         if( !fp_model.m_Show || fp_model.m_Filename.empty() )
             continue;
 
-        std::vector<wxString> searchedPaths;
+        std::vector<wxString>              searchedPaths;
         std::vector<const EMBEDDED_FILES*> embeddedFilesStack;
         embeddedFilesStack.push_back( aFootprint->GetEmbeddedFiles() );
         embeddedFilesStack.push_back( m_board->GetEmbeddedFiles() );
 
-        wxString mname = m_resolver->ResolvePath( fp_model.m_Filename, footprintBasePath,
-                                                  std::move( embeddedFilesStack ) );
+        wxString mainPath = m_resolver->ResolvePath( fp_model.m_Filename, footprintBasePath,
+                                                     embeddedFilesStack );
 
-        if( mname.empty() || !wxFileName::FileExists( mname ) )
+        if( mainPath.empty() || !wxFileName::FileExists( mainPath ) )
         {
             // the error path will return an empty name sometimes, at least report back the original filename
-            if( mname.empty() )
-                mname = fp_model.m_Filename;
+            if( mainPath.empty() )
+                mainPath = fp_model.m_Filename;
 
             m_reporter->Report( wxString::Format( _( "Could not add 3D model for %s.\n"
                                                      "File not found: %s\n" ),
-                                                  aFootprint->GetReference(),
-                                                  mname ),
+                                                  aFootprint->GetReference(), mainPath ),
                                 RPT_SEVERITY_WARNING );
             continue;
         }
 
-        std::string fname( mname.ToUTF8() );
-        std::string refName( aFootprint->GetReference().ToUTF8() );
+        wxString baseName =
+                fp_model.m_Filename.AfterLast( '/' ).AfterLast( '\\' ).BeforeLast( '.' );
+
+        std::vector<wxString> altFilenames;
+
+        // Add embedded files to alternative filenames
+        if( fp_model.m_Filename.StartsWith( FILEEXT::KiCadUriPrefix + "://" ) )
+        {
+            for( const EMBEDDED_FILES* filesPtr : embeddedFilesStack )
+            {
+                const auto& map = filesPtr->EmbeddedFileMap();
+
+                for( auto& [fname, file] : map )
+                {
+                    if( fname.BeforeLast( '.' ) == baseName )
+                    {
+                        wxFileName temp_file = filesPtr->GetTemporaryFileName( fname );
+
+                        if( !temp_file.IsOk() )
+                            continue;
+
+                        wxString altPath = temp_file.GetFullPath();
+
+                        if( mainPath == altPath )
+                            continue;
+
+                        altFilenames.emplace_back( altPath );
+                    }
+                }
+            }
+        }
 
         try
         {
@@ -578,10 +608,10 @@ bool EXPORTER_STEP::buildFootprint3DShapes( FOOTPRINT* aFootprint, const VECTOR2
             modelRot *= M_PI;
             modelRot /= 180.0;
 
-            if( m_pcbModel->AddComponent( fname, refName, bottomSide, newpos,
-                                          aFootprint->GetOrientation().AsRadians(),
-                                          fp_model.m_Offset, modelRot,
-                                          fp_model.m_Scale, m_params.m_SubstModels ) )
+            if( m_pcbModel->AddComponent(
+                        baseName, mainPath, altFilenames, aFootprint->GetReference(), bottomSide,
+                        newpos, aFootprint->GetOrientation().AsRadians(), fp_model.m_Offset,
+                        modelRot, fp_model.m_Scale, m_params.m_SubstModels ) )
             {
                 hasdata = true;
             }
@@ -658,6 +688,17 @@ bool EXPORTER_STEP::buildTrack3DShape( PCB_TRACK* aTrack, const VECTOR2D& aOrigi
         //    m_poly_holes[F_SilkS].Append( holePoly );
         //    m_poly_holes[B_SilkS].Append( holePoly );
         //}
+
+        // Cut via holes in soldermask when the via is not tented.
+        // This ensures the mask has a proper hole through the via drill, not just the annular ring opening.
+        if( m_params.m_ExportSoldermask )
+        {
+            if( via->IsOnLayer( F_Mask ) )
+                m_poly_holes[F_Mask].Append( holePoly );
+
+            if( via->IsOnLayer( B_Mask ) )
+                m_poly_holes[B_Mask].Append( holePoly );
+        }
 
         m_pcbModel->AddHole( *holeShape, m_platingThickness, top_layer, bot_layer, true, aOrigin,
                              !m_params.m_FillAllVias, m_params.m_CutViasInBody );
@@ -840,12 +881,13 @@ bool EXPORTER_STEP::buildTrack3DShape( PCB_TRACK* aTrack, const VECTOR2D& aOrigi
 }
 
 
-void EXPORTER_STEP::buildZones3DShape( VECTOR2D aOrigin )
+void EXPORTER_STEP::buildZones3DShape( VECTOR2D aOrigin, bool aSolderMaskOnly )
 {
     for( ZONE* zone : m_board->Zones() )
     {
         LSET layers = zone->GetLayerSet();
 
+        // Filter by net if a net filter is specified and zone is on copper layer(s)
         if( ( layers & LSET::AllCuMask() ).count() && !m_params.m_NetFilter.IsEmpty()
             && !zone->GetNetname().Matches( m_params.m_NetFilter ) )
         {
@@ -854,6 +896,16 @@ void EXPORTER_STEP::buildZones3DShape( VECTOR2D aOrigin )
 
         for( PCB_LAYER_ID layer : layers )
         {
+            bool isMaskLayer = ( layer == F_Mask || layer == B_Mask );
+
+            // If we're only processing soldermask zones, skip non-mask layers
+            if( aSolderMaskOnly && !isMaskLayer )
+                continue;
+
+            // If we're doing full zone export, skip mask layers if they'll be handled separately
+            if( !aSolderMaskOnly && isMaskLayer && !m_params.m_ExportZones )
+                continue;
+
             SHAPE_POLY_SET fill_shape;
             zone->TransformSolidAreasShapesToPolygon( layer, fill_shape );
             fill_shape.Unfracture();
@@ -1006,45 +1058,45 @@ void EXPORTER_STEP::initOutputVariant()
     // it can have some minor actions for the generator
     switch( m_params.m_Format )
     {
-        case EXPORTER_STEP_PARAMS::FORMAT::STEP:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_STEP );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::STEP:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_STEP );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::STEPZ:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_STEPZ );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::STEPZ:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_STEPZ );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::BREP:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_BREP );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::BREP:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_BREP );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::XAO:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_XAO );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::XAO:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_XAO );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::GLB:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_GLTF );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::GLB:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_GLTF );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::PLY:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_PLY );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::PLY:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_PLY );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::STL:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_STL );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::STL:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_STL );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::U3D:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_U3D );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::U3D:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_U3D );
+        break;
 
-        case EXPORTER_STEP_PARAMS::FORMAT::PDF:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_PDF );
-            break;
+    case EXPORTER_STEP_PARAMS::FORMAT::PDF:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_PDF );
+        break;
 
-        default:
-            m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_UNKNOWN );
-            break;
+    default:
+        m_pcbModel->SpecializeVariant( OUTPUT_FORMAT::FMT_OUT_UNKNOWN );
+        break;
     }
 }
 
@@ -1057,6 +1109,7 @@ bool EXPORTER_STEP::buildBoard3DShapes()
     SHAPE_POLY_SET pcbOutlines; // stores the board main outlines
 
     if( !m_board->GetBoardPolygonOutlines( pcbOutlines,
+                                           /* infer outline if necessary */ true,
                                            /* error handler */ nullptr,
                                            /* allows use arcs in outlines */ true ) )
     {
@@ -1088,6 +1141,7 @@ bool EXPORTER_STEP::buildBoard3DShapes()
     m_pcbModel->SetEnabledLayers( m_layersToExport );
     m_pcbModel->SetFuseShapes( m_params.m_FuseShapes );
     m_pcbModel->SetNetFilter( m_params.m_NetFilter );
+    m_pcbModel->SetExtraPadThickness( m_params.m_ExtraPadThickness );
 
     // Note: m_params.m_BoardOutlinesChainingEpsilon is used only to build the board outlines,
     // not to set OCC chaining epsilon (much smaller)
@@ -1111,6 +1165,11 @@ bool EXPORTER_STEP::buildBoard3DShapes()
 
     if( m_params.m_ExportZones )
         buildZones3DShape( origin );
+
+    // Process zones on soldermask layers even when copper zone export is disabled.
+    // This ensures mask openings defined by zones are properly exported.
+    if( m_params.m_ExportSoldermask && !m_params.m_ExportZones )
+        buildZones3DShape( origin, true );
 
     for( PCB_LAYER_ID pcblayer : m_layersToExport.Seq() )
     {
@@ -1275,11 +1334,34 @@ bool EXPORTER_STEP::Export()
                                 RPT_SEVERITY_ACTION );
         }
     }
+    catch( const std::bad_alloc& )
+    {
+        m_reporter->Report( wxString::Format( _( "\n** Out of memory while exporting %s file. **\n"
+                                                 "The board may have too many objects (e.g., vias, tracks, components) "
+                                                 "to process with available system memory.\n"
+                                                 "Try disabling 'Fuse Shapes' option, reducing board complexity, "
+                                                 "or freeing up system memory.\n" ),
+                                              m_params.GetFormatName() ),
+                            RPT_SEVERITY_ERROR );
+        return false;
+    }
     catch( const Standard_Failure& e )
     {
-        m_reporter->Report( e.GetMessageString(), RPT_SEVERITY_ERROR );
-        m_reporter->Report( wxString::Format( _( "\n"
-                                                 "** Error exporting %s file. Export aborted. **\n" ),
+        wxString errorMsg = e.GetMessageString();
+        m_reporter->Report( wxString::Format( _( "\nOpenCASCADE error: %s\n" ), errorMsg ),
+                            RPT_SEVERITY_ERROR );
+
+        // Check if this might be memory-related based on common OCC error patterns
+        if( errorMsg.Contains( "alloc" ) || errorMsg.Contains( "memory" ) ||
+            errorMsg.IsEmpty() )
+        {
+            m_reporter->Report( _( "This error may indicate insufficient memory. Consider disabling "
+                                   "'Fuse Shapes', reducing the number of vias/components, or freeing "
+                                   "system memory.\n" ),
+                                RPT_SEVERITY_INFO );
+        }
+
+        m_reporter->Report( wxString::Format( _( "** Error exporting %s file. Export aborted. **\n" ),
                                               m_params.GetFormatName() ),
                             RPT_SEVERITY_ERROR );
         return false;
@@ -1287,8 +1369,11 @@ bool EXPORTER_STEP::Export()
     #ifndef DEBUG
     catch( ... )
     {
-        m_reporter->Report( wxString::Format( _( "\n"
-                                                 "** Error exporting %s file. Export aborted. **\n" ),
+        m_reporter->Report( wxString::Format( _( "\n** Unexpected error while exporting %s file. **\n"
+                                                 "This may be caused by insufficient system memory, especially "
+                                                 "when exporting boards with many vias or components with 'Fuse Shapes' enabled.\n"
+                                                 "Try disabling 'Fuse Shapes', reducing board complexity, "
+                                                 "or freeing up system memory.\n" ),
                                               m_params.GetFormatName() ),
                             RPT_SEVERITY_ERROR );
         return false;

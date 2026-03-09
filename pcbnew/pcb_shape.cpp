@@ -365,6 +365,7 @@ void PCB_SHAPE::UpdateHatching() const
                     {
                         if( ( item->Type() == PCB_FIELD_T || item->Type() == PCB_SHAPE_T )
                                 && item->GetLayer() == layer
+                                && !( item->Type() == PCB_FIELD_T && !static_cast<PCB_FIELD*>(item)->IsVisible() )
                                 && item->GetBoundingBox().Intersects( bbox ) )
                         {
                             knockoutItem( item );
@@ -698,6 +699,12 @@ void PCB_SHAPE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_I
     ShapeGetMsgPanelInfo( aFrame, aList );
 
     aList.emplace_back( _( "Layer" ), GetLayerName() );
+
+    if( IsOnCopperLayer() )
+    {
+        if( GetNetCode() > 0 )  // Only graphics connected to a net have a netcode > 0
+            aList.emplace_back( _( "Net" ), GetNetname() );
+    }
 }
 
 
@@ -836,7 +843,8 @@ void PCB_SHAPE::TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID a
 
 
 void PCB_SHAPE::TransformShapeToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer,
-                                         int aClearance, int aError, ERROR_LOC aErrorLoc ) const
+                                         int aClearance, int aError, ERROR_LOC aErrorLoc,
+                                         KIGFX::RENDER_SETTINGS* aRenderSettings ) const
 {
     EDA_SHAPE::TransformShapeToPolygon( aBuffer, aClearance, aError, aErrorLoc, false, true );
 }

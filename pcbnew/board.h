@@ -31,6 +31,7 @@
 #include <embedded_files.h>
 #include <common.h> // Needed for stl hash extensions
 #include <convert_shape_list_to_polygon.h> // for OUTLINE_ERROR_HANDLER
+#include <geometry/shape_poly_set.h>
 #include <hash.h>
 #include <layer_ids.h>
 #include <lset.h>
@@ -62,7 +63,6 @@ class PCB_MARKER;
 class MSG_PANEL_ITEM;
 class NETLIST;
 class REPORTER;
-class SHAPE_POLY_SET;
 class CONNECTIVITY_DATA;
 class COMPONENT;
 class PROJECT;
@@ -285,12 +285,12 @@ class BOARD_LISTENER
 public:
     virtual ~BOARD_LISTENER() { }
     virtual void OnBoardItemAdded( BOARD& aBoard, BOARD_ITEM* aBoardItem ) { }
-    virtual void OnBoardItemsAdded( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItem ) { }
+    virtual void OnBoardItemsAdded( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItems ) { }
     virtual void OnBoardItemRemoved( BOARD& aBoard, BOARD_ITEM* aBoardItem ) { }
-    virtual void OnBoardItemsRemoved( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItem ) { }
+    virtual void OnBoardItemsRemoved( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItems ) { }
     virtual void OnBoardNetSettingsChanged( BOARD& aBoard ) { }
     virtual void OnBoardItemChanged( BOARD& aBoard, BOARD_ITEM* aBoardItem ) { }
-    virtual void OnBoardItemsChanged( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItem ) { }
+    virtual void OnBoardItemsChanged( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItems ) { }
     virtual void OnBoardHighlightNetChanged( BOARD& aBoard ) { }
     virtual void OnBoardRatsnestChanged( BOARD& aBoard ) { }
     virtual void OnBoardCompositeUpdate( BOARD& aBoard, std::vector<BOARD_ITEM*>& aAddedItems,
@@ -399,6 +399,31 @@ public:
 
     const std::map<wxString, wxString>& GetProperties() const { return m_properties; }
     void SetProperties( const std::map<wxString, wxString>& aProps ) { m_properties = aProps; }
+
+    // Variant system
+    wxString GetCurrentVariant() const { return m_currentVariant; }
+    void SetCurrentVariant( const wxString& aVariant );
+
+    const std::vector<wxString>& GetVariantNames() const { return m_variantNames; }
+    void SetVariantNames( const std::vector<wxString>& aNames ) { m_variantNames = aNames; }
+
+    bool HasVariant( const wxString& aVariantName ) const;
+    void AddVariant( const wxString& aVariantName );
+    void DeleteVariant( const wxString& aVariantName );
+    void RenameVariant( const wxString& aOldName, const wxString& aNewName );
+
+    wxString GetVariantDescription( const wxString& aVariantName ) const;
+    void SetVariantDescription( const wxString& aVariantName, const wxString& aDescription );
+
+    /**
+     * Return the variant names for UI display.
+     *
+     * This returns a list suitable for populating UI controls, with the default variant
+     * included and the names sorted using the SortVariantNames helper.
+     *
+     * @return List of variant names including the default entry.
+     */
+    wxArrayString GetVariantNamesForUI() const;
 
     void GetContextualTextVars( wxArrayString* aVars ) const;
     bool ResolveTextVar( wxString* token, int aDepth ) const;
@@ -753,6 +778,22 @@ public:
     BOARD_DESIGN_SETTINGS& GetDesignSettings() const;
     void                   SetDesignSettings( const BOARD_DESIGN_SETTINGS& aSettings );
 
+    /**
+     * Invalidate the clearance cache for a specific item.
+     *
+     * Called by items when properties that could affect clearance change.
+     *
+     * @param aUuid the UUID of the item to invalidate.
+     */
+    void InvalidateClearanceCache( const KIID& aUuid );
+
+    /**
+     * Initialize the clearance cache for all board items.
+     *
+     * Pre-populates the cache to avoid delays during first render.
+     */
+    void InitializeClearanceCache();
+
     BOARD_STACKUP GetStackupOrDefault() const;
 
     const PAGE_INFO& GetPageSettings() const                { return m_paper; }
@@ -784,6 +825,9 @@ public:
      * i.e. have valid vertices to build a closed polygon.
      *
      * @param aOutlines is the #SHAPE_POLY_SET to fill in with outlines/holes.
+     * @param aInferOutlineIfNecessary if the edges do not define a closed shape then we'll approximate the
+     *                                 bounding box outline based on the edges, or failing that, any other items
+     *                                 on the board
      * @param aErrorHandler is an optional DRC_ITEM error handler.
      * @param aAllowUseArcsInPolygons = an optional option to allow adding arcs in
      *  SHAPE_LINE_CHAIN polylines/polygons when building outlines from aShapeList
@@ -793,10 +837,9 @@ public:
      * drawn on edge cut layer inside the board main outline.
      * @return true if success, false if a contour is not valid
      */
-    bool GetBoardPolygonOutlines( SHAPE_POLY_SET& aOutlines,
+    bool GetBoardPolygonOutlines( SHAPE_POLY_SET& aOutlines, bool aInferOutlineIfNecessary,
                                   OUTLINE_ERROR_HANDLER* aErrorHandler = nullptr,
-                                  bool aAllowUseArcsInPolygons = false,
-                                  bool aIncludeNPTHAsOutlines = false );
+                                  bool aAllowUseArcsInPolygons = false, bool aIncludeNPTHAsOutlines = false );
 
     /**
      * @return a epsilon value that is the max distance between 2 points to see them
@@ -1380,6 +1423,31 @@ public:
         return m_itemByIdCache;
     }
 
+    /**
+     * Add an item to the item-by-id cache.
+     *
+     * This is called by FOOTPRINT::Add() when items are added to footprints that are already
+     * on the board, to keep the cache in sync.
+     */
+    void CacheItemById( BOARD_ITEM* aItem )
+    {
+        if( IsFootprintHolder() )
+            return;
+
+        m_itemByIdCache.insert( { aItem->m_Uuid, aItem } );
+    }
+
+    /**
+     * Remove an item from the item-by-id cache.
+     *
+     * This is called by FOOTPRINT::Remove() when items are removed from footprints that are
+     * already on the board, to keep the cache in sync.
+     */
+    void UncacheItemById( const KIID& aId )
+    {
+        m_itemByIdCache.erase( aId );
+    }
+
     // --------- Item order comparators ---------
 
     struct cmp_items
@@ -1405,6 +1473,16 @@ public:
     std::shared_ptr<DRC_RTREE>                            m_CopperItemRTreeCache;
     mutable std::unordered_map<const ZONE*, BOX2I>        m_ZoneBBoxCache;
     mutable std::optional<int>                            m_maxClearanceValue;
+
+    mutable std::unordered_map<const BOARD_ITEM*, wxString> m_ItemNetclassCache;
+
+    // Zone name lookup cache for DRC rule area functions like enclosedByArea/intersectsArea.
+    // Maps zone names to vectors of matching zones to avoid O(n) zone iteration per lookup.
+    mutable std::unordered_map<wxString, std::vector<ZONE*>> m_ZonesByNameCache;
+
+    // Deflated zone outline cache for DRC area checks. Caches the deflated outline for each zone
+    // to avoid repeated expensive deflation operations during collidesWithArea calls.
+    mutable std::unordered_map<const ZONE*, SHAPE_POLY_SET> m_DeflatedZoneOutlineCache;
 
     // ------------ DRC caches -------------
     std::vector<ZONE*>    m_DRCZones;
@@ -1473,6 +1551,11 @@ private:
     PCB_PLOT_PARAMS     m_plotOptions;
     PROJECT*            m_project;                  // project this board is a part of
     EDA_UNITS           m_userUnits;
+
+    // Variant system
+    wxString                        m_currentVariant;        // Currently active variant (empty = default)
+    std::vector<wxString>           m_variantNames;          // All variant names in the board
+    std::map<wxString, wxString>    m_variantDescriptions;   // Descriptions for each variant
 
     /**
      * All of the board design settings are stored as a JSON object inside the project file.  The

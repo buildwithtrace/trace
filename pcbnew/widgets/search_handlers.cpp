@@ -160,6 +160,8 @@ int FOOTPRINT_SEARCH_HANDLER::Search( const wxString& aQuery )
         {
             for( PCB_FIELD* field : fp->GetFields() )
             {
+                wxCHECK2( field, continue );
+
                 if( field->Matches( frp, nullptr ) )
                 {
                     found = true;
@@ -249,9 +251,16 @@ wxString ZONE_SEARCH_HANDLER::getResultCell( BOARD_ITEM* aItem, int aCol )
     {
         wxArrayString layers;
         BOARD*        board = m_frame->GetBoard();
+        // Make sure we don't show layers from Rule Areas that aren't actually on the board,
+        // since they have all copper areas by default.
+        LSET          dialogLayers = LSET::AllNonCuMask()
+                                     | LSET::AllCuMask( board->GetCopperLayerCount() );
 
-        for( PCB_LAYER_ID layer : zone->GetLayerSet().Seq() )
-            layers.Add( board->GetLayerName( layer ) );
+        for( PCB_LAYER_ID layer : dialogLayers.UIOrder() )
+        {
+            if( zone->IsOnLayer( layer ) )
+                layers.Add( board->GetLayerName( layer ) );
+        }
 
         return wxJoin( layers, ',' );
     }
@@ -715,8 +724,24 @@ void DRILL_SEARCH_HANDLER::Sort( int aCol, bool aAscending, std::vector<long>* a
 
     auto cmpPtr = [&]( BOARD_ITEM* pa, BOARD_ITEM* pb )
     {
-        const auto& a = m_drills[m_ptrToDrill[pa]].entry;
-        const auto& b = m_drills[m_ptrToDrill[pb]].entry;
+        auto itA = m_ptrToDrill.find( pa );
+        auto itB = m_ptrToDrill.find( pb );
+
+        bool validA = ( itA != m_ptrToDrill.end() && itA->second >= 0
+                        && itA->second < static_cast<int>( m_drills.size() ) );
+        bool validB = ( itB != m_ptrToDrill.end() && itB->second >= 0
+                        && itB->second < static_cast<int>( m_drills.size() ) );
+
+        if( !validA || !validB )
+        {
+            if( validA != validB )
+                return validA;
+
+            return pa < pb;
+        }
+
+        const auto& a = m_drills[itA->second].entry;
+        const auto& b = m_drills[itB->second].entry;
 
         int col = aCol < 0 ? 0 : aCol;
         DRILL_LINE_ITEM::COMPARE cmp( static_cast<DRILL_LINE_ITEM::COL_ID>( col ), aAscending );
@@ -836,24 +861,15 @@ wxString DRILL_SEARCH_HANDLER::cellText( const DRILL_LINE_ITEM& e, int col ) con
 
     switch( col )
     {
-    case 0:
-        return wxString::Format( "%d", e.m_Qty );
-    case 1:
-        return e.shape == PAD_DRILL_SHAPE::CIRCLE ? _( "Round" ) : _( "Slot" );
-    case 2:
-        return m_frame->MessageTextFromValue( e.xSize );
-    case 3:
-        return m_frame->MessageTextFromValue( e.ySize );
-    case 4:
-        return e.isPlated ? _( "PTH" ) : _( "NPTH" );
-    case 5:
-        return e.isPad ? _( "Pad" ) : _( "Via" );
-    case 6:
-        return ( e.startLayer == UNDEFINED_LAYER ) ? _( "N/A" ) : board->GetLayerName( e.startLayer );
-    case 7:
-        return ( e.stopLayer == UNDEFINED_LAYER ) ? _( "N/A" ) : board->GetLayerName( e.stopLayer );
-    default:
-        return wxEmptyString;
+    case 0:  return wxString::Format( "%d", e.m_Qty );
+    case 1:  return e.shape == PAD_DRILL_SHAPE::CIRCLE ? _( "Round" ) : _( "Slot" );
+    case 2:  return m_frame->MessageTextFromValue( e.xSize );
+    case 3:  return m_frame->MessageTextFromValue( e.ySize );
+    case 4:  return e.isPlated ? _( "PTH" ) : _( "NPTH" );
+    case 5:  return e.isPad ? _( "Pad" ) : _( "Via" );
+    case 6:  return ( e.startLayer == UNDEFINED_LAYER ) ? _( "N/A" ) : board->GetLayerName( e.startLayer );
+    case 7:  return ( e.stopLayer == UNDEFINED_LAYER ) ? _( "N/A" ) : board->GetLayerName( e.stopLayer );
+    default: return wxEmptyString;
     }
 }
 

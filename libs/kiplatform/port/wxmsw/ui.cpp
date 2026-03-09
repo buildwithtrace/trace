@@ -23,6 +23,7 @@
 #include <kiplatform/ui.h>
 
 #include <wx/cursor.h>
+#include <wx/dialog.h>
 #include <wx/nonownedwnd.h>
 #include <wx/window.h>
 #include <wx/msw/registry.h>
@@ -204,4 +205,15 @@ void KIPLATFORM::UI::InfiniteDragReleaseWindow()
 
 void KIPLATFORM::UI::SetFloatLevel( wxWindow* aWindow )
 {
+}
+
+void KIPLATFORM::UI::ReleaseChildWindow( wxNonOwnedWindow* aWindow )
+{
+    // Not needed on this platform
+}
+
+
+void KIPLATFORM::UI::AllowNetworkFileSystems( wxDialog* aDialog )
+{
+    // Not needed on Windows - file dialogs show network filesystems by default
 }

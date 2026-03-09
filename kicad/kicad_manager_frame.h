@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -80,10 +81,7 @@ public:
      */
     void HideTabsIfNeeded();
 
-    wxString GetCurrentFileName() const override
-    {
-        return GetProjectFileName();
-    }
+    wxString GetCurrentFileName() const override;
 
     /**
      * @brief Creates a project and imports a non-KiCad Schematic and PCB
@@ -126,6 +124,36 @@ public:
     void OnImportEasyEdaProFiles( wxCommandEvent& event );
 
     /**
+     *  Handle Account Sign In menu action.
+     */
+    void OnAccountSignIn( wxCommandEvent& event );
+
+    /**
+     *  Handle Account Sign Out menu action.
+     */
+    void OnAccountSignOut( wxCommandEvent& event );
+    
+    /**
+     *  Handle auth state changes (e.g., user signed in via browser callback).
+     */
+    void OnAuthStateChanged( wxCommandEvent& event );
+    
+    /**
+     * Handle auth polling timer events to detect when user signs in via browser callback.
+     */
+    void OnAuthPollTimer( wxTimerEvent& event );
+
+    /**
+     *  Open dialog to import PADS Logic schematic and PCB files.
+     */
+    void OnImportPadsProjectFiles( wxCommandEvent& event );
+
+    /**
+     *  Open dialog to import gEDA/gaf schematic and PCB files.
+     */
+    void OnImportGedaFiles( wxCommandEvent& event );
+
+    /**
      * Prints the current working directory name and the project name on the text panel.
      */
     void PrintPrjInfo();
@@ -149,7 +177,13 @@ public:
      * Closes the project, and saves it if aSave is true;
      */
     bool CloseProject( bool aSave );
-    void LoadProject( const wxFileName& aProjectFileName );
+
+    /**
+     * Loads a new project
+     * @param aProjectFileName is the path to the project to load
+     * @return true if the project was successfully loaded
+     */
+    bool LoadProject( const wxFileName& aProjectFileName );
 
     void OpenJobsFile( const wxFileName& aFileName, bool aCreate = false,
                        bool aResaveProjectPreferences = true );
@@ -162,6 +196,8 @@ public:
     void ShowChangedLanguage() override;
     void CommonSettingsChanged( int aFlags ) override;
     void ProjectChanged() override;
+
+    void PreloadAllLibraries();
 
     /**
      * Called by sending a event with id = ID_INIT_WATCHED_PATHS
@@ -227,17 +263,21 @@ private:
 
     wxString help_name() override;
 
-    void language_change( wxCommandEvent& event );
-
     void updatePcmButtonBadge();
 
 private:
+    enum
+    {
+        ID_AUTH_POLL_TIMER = wxID_HIGHEST + 100
+    };
+
     bool                  m_openSavedWindows;
+    bool                  m_restoredFromHistory;  ///< Set after restore to mark editors dirty
     int                   m_leftWinWidth;
     bool                  m_active_project;
     bool                  m_showHistoryPanel;
 
-    PROJECT_TREE_PANE*    m_leftWin;
+    PROJECT_TREE_PANE*    m_projectTreePane;
     LOCAL_HISTORY_PANE*   m_historyPane;
     wxAuiNotebook*        m_notebook;
     PANEL_KICAD_LAUNCHER* m_launcher;
@@ -247,6 +287,9 @@ private:
     BITMAP_BUTTON*                          m_pcmButton;
     int                                     m_pcmUpdateCount;
     std::unique_ptr<UPDATE_MANAGER>         m_updateManager;
+    
+    wxTimer               m_authPollTimer;       ///< Timer to poll for auth state changes
+    int                   m_lastKnownAuthState;  ///< Last known auth state for polling comparison
 };
 
 

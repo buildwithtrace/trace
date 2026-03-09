@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -47,7 +48,8 @@ extern std::string GetCurlLibVersion();
 
 // The include file version.h is always created even if the repo version cannot be
 // determined.  In this case KICAD_VERSION_FULL will default to the KICAD_VERSION
-// that is set in KiCadVersion.cmake.
+// that is set in KiCadVersion.cmake, and TRACE_VERSION_FULL will default to the
+// TRACE_VERSION that is set in TraceVersion.cmake.
 #define INCLUDE_KICAD_VERSION
 #include <kicad_build_version.h>
 #undef INCLUDE_KICAD_VERSION
@@ -86,6 +88,41 @@ bool IsNightlyVersion()
 wxString GetBuildVersion()
 {
     wxString msg = wxString::Format( wxT( "%s" ), wxT( KICAD_VERSION_FULL ) );
+    return msg;
+}
+
+
+wxString GetTraceBuildVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( TRACE_VERSION_FULL ) );
+    return msg;
+}
+
+
+wxString GetTraceBaseVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( TRACE_VERSION ) );
+    return msg;
+}
+
+
+wxString GetTraceSemanticVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( TRACE_SEMANTIC_VERSION ) );
+    return msg;
+}
+
+
+wxString GetTraceMajorMinorVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( TRACE_MAJOR_MINOR_VERSION ) );
+    return msg;
+}
+
+
+wxString GetTraceMajorMinorPatchVersion()
+{
+    wxString msg = wxString::Format( wxT( "%s" ), wxT( TRACE_MAJOR_MINOR_PATCH_VERSION ) );
     return msg;
 }
 
@@ -155,7 +192,7 @@ wxString GetVersionInfoData( const wxString& aTitle, bool aHtml, bool aBrief )
 
     wxString version;
     version << ( KIPLATFORM::APP::IsOperatingSystemUnsupported() ? wxString( wxS( "(UNSUPPORTED)" ) )
-                                                                 : GetBuildVersion() )
+                                                                 : GetTraceBuildVersion() )
 #ifdef DEBUG
             << ", debug"
 #else
@@ -169,7 +206,8 @@ wxString GetVersionInfoData( const wxString& aTitle, bool aHtml, bool aBrief )
     aMsg << eol << eol;
 
 
-    aMsg << "Version: " << version << eol << eol;
+    aMsg << "Version: " << version << eol;
+    aMsg << "Based on KiCad: " << GetBuildVersion() << eol << eol;
     aMsg << "Libraries:" << eol;
 
     aMsg << indent4 << wxGetLibraryVersionInfo().GetVersionString() << eol;

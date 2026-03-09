@@ -33,7 +33,8 @@
 CLI::SCH_EXPORT_NETLIST_COMMAND::SCH_EXPORT_NETLIST_COMMAND() : COMMAND( "netlist" )
 {
     m_argParser.add_description( UTF8STDSTR( _( "Export a netlist" ) ) );
-    addCommonArgs( true, true, false, false );
+    addCommonArgs( true, true, IO_TYPE::FILE, IO_TYPE::FILE );
+    addVariantsArg();
 
     m_argParser.add_argument( ARG_FORMAT )
             .default_value( std::string( "kicadsexpr" ) )
@@ -50,6 +51,7 @@ int CLI::SCH_EXPORT_NETLIST_COMMAND::doPerform( KIWAY& aKiway )
 
     netJob->m_filename = m_argInput;
     netJob->SetConfiguredOutputPath( m_argOutput );
+    netJob->m_variantNames = m_argVariantNames;
 
     if( !wxFile::Exists( netJob->m_filename ) )
     {

@@ -33,6 +33,7 @@
 #include <sch_symbol.h>
 #include <sch_sheet.h>
 #include <schematic.h>
+#include <string_utils.h>
 #include <template_fieldnames.h>
 #include <trace_helpers.h>
 
@@ -100,6 +101,18 @@ void SCH_SYMBOL_VARIANT::InitializeAttributes( const SCH_SYMBOL& aSymbol )
     m_DNP = aSymbol.GetDNP();
     m_ExcludedFromBOM = aSymbol.GetExcludedFromBOM();
     m_ExcludedFromSim = aSymbol.GetExcludedFromSim();
+    m_ExcludedFromBoard = aSymbol.GetExcludedFromBoard();
+    m_ExcludedFromPosFiles = aSymbol.GetExcludedFromPosFiles();
+}
+
+
+void SCH_SHEET_VARIANT::InitializeAttributes( const SCH_SHEET& aSheet )
+{
+    m_DNP = aSheet.GetDNP();
+    m_ExcludedFromBOM = aSheet.GetExcludedFromBOM();
+    m_ExcludedFromSim = aSheet.GetExcludedFromSim();
+    m_ExcludedFromBoard = aSheet.GetExcludedFromBoard();
+    m_ExcludedFromPosFiles = false;  // Sheets don't have position files exclusion
 }
 
 
@@ -291,11 +304,41 @@ bool SCH_SHEET_PATH::GetExcludedFromSim() const
 }
 
 
+bool SCH_SHEET_PATH::GetExcludedFromSim( const wxString& aVariantName ) const
+{
+    if( aVariantName.IsEmpty() )
+        return GetExcludedFromSim();
+
+    for( SCH_SHEET* sheet : m_sheets )
+    {
+        if( sheet->GetExcludedFromSim( this, aVariantName ) )
+            return true;
+    }
+
+    return false;
+}
+
+
 bool SCH_SHEET_PATH::GetExcludedFromBOM() const
 {
     for( SCH_SHEET* sheet : m_sheets )
     {
         if( sheet->GetExcludedFromBOM() )
+            return true;
+    }
+
+    return false;
+}
+
+
+bool SCH_SHEET_PATH::GetExcludedFromBOM( const wxString& aVariantName ) const
+{
+    if( aVariantName.IsEmpty() )
+        return GetExcludedFromBOM();
+
+    for( SCH_SHEET* sheet : m_sheets )
+    {
+        if( sheet->GetExcludedFromBOM( this, aVariantName ) )
             return true;
     }
 
@@ -315,11 +358,41 @@ bool SCH_SHEET_PATH::GetExcludedFromBoard() const
 }
 
 
+bool SCH_SHEET_PATH::GetExcludedFromBoard( const wxString& aVariantName ) const
+{
+    if( aVariantName.IsEmpty() )
+        return GetExcludedFromBoard();
+
+    for( SCH_SHEET* sheet : m_sheets )
+    {
+        if( sheet->GetExcludedFromBoard( this, aVariantName ) )
+            return true;
+    }
+
+    return false;
+}
+
+
 bool SCH_SHEET_PATH::GetDNP() const
 {
     for( SCH_SHEET* sheet : m_sheets )
     {
         if( sheet->GetDNP() )
+            return true;
+    }
+
+    return false;
+}
+
+
+bool SCH_SHEET_PATH::GetDNP( const wxString& aVariantName ) const
+{
+    if( aVariantName.IsEmpty() )
+        return GetDNP();
+
+    for( SCH_SHEET* sheet : m_sheets )
+    {
+        if( sheet->GetDNP( this, aVariantName ) )
             return true;
     }
 
@@ -369,7 +442,8 @@ KIID_PATH SCH_SHEET_PATH::Path() const
 
 
 wxString SCH_SHEET_PATH::PathHumanReadable( bool aUseShortRootName,
-                                            bool aStripTrailingSeparator ) const
+                                            bool aStripTrailingSeparator,
+                                            bool aEscapeSheetNames ) const
 {
     wxString s;
 
@@ -397,7 +471,14 @@ wxString SCH_SHEET_PATH::PathHumanReadable( bool aUseShortRootName,
 
     // Start at startIdx + 1 since we've already processed the root sheet.
     for( unsigned i = startIdx + 1; i < size(); i++ )
-        s << at( i )->GetField( FIELD_T::SHEET_NAME )->GetShownText( false ) << wxS( "/" );
+    {
+        wxString sheetName = at( i )->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
+
+        if( aEscapeSheetNames )
+            sheetName = EscapeString( sheetName, CTX_NETNAME );
+
+        s << sheetName << wxS( "/" );
+    }
 
     if( aStripTrailingSeparator && s.EndsWith( "/" ) )
         s = s.Left( s.length() - 1 );
@@ -621,7 +702,11 @@ wxString SCH_SHEET_PATH::GetPageNumber() const
     wxCHECK( sheet, wxEmptyString );
 
     KIID_PATH tmpPath = Path();
-    tmpPath.pop_back();
+
+    if( !tmpPath.empty() )
+        tmpPath.pop_back();
+    else
+        wxFAIL_MSG( wxS( "Sheet paths must have a least one valid sheet." ) );
 
     return sheet->getPageNumber( tmpPath );
 }
@@ -646,7 +731,14 @@ void SCH_SHEET_PATH::SetPageNumber( const wxString& aPageNumber )
 
     KIID_PATH tmpPath = Path();
 
-    tmpPath.pop_back();
+    if( !tmpPath.empty() )
+    {
+        tmpPath.pop_back();
+    }
+    else
+    {
+        wxCHECK_MSG( false, /* void */, wxS( "Sheet paths must have a least one valid sheet." ) );
+    }
 
     sheet->addInstance( tmpPath );
     sheet->setPageNumber( tmpPath, aPageNumber );
@@ -760,16 +852,29 @@ void SCH_SHEET_PATH::CheckForMissingSymbolInstances( const wxString& aProjectNam
                            "  Legacy format: Using reference '%s' from field, unit %d",
                            symbolInstance.m_Reference, symbolInstance.m_Unit );
             }
-            else
+            else if( !symbol->GetInstances().empty() )
             {
-                // When schematics are shared, we cannot know which instance the current symbol
-                // reference field and unit belong to.  In this case, we clear the reference
-                // annotation and set the unit to 1.
-                symbolInstance.m_Reference = UTIL::GetRefDesUnannotated( symbol->GetPrefix() );
+                // When a schematic is opened as a different project (e.g., a subsheet opened
+                // directly from File Browser), use the first available instance data.
+                // This provides better UX than showing unannotated references.
+                const SCH_SYMBOL_INSTANCE& firstInstance = symbol->GetInstances()[0];
+                symbolInstance.m_Reference = firstInstance.m_Reference;
+                symbolInstance.m_Unit = firstInstance.m_Unit;
 
                 wxLogTrace( traceSchSheetPaths,
-                           "  Shared schematic: Setting unannotated reference '%s'",
-                           symbolInstance.m_Reference );
+                           "  Using first available instance: ref=%s, unit=%d",
+                           symbolInstance.m_Reference, symbolInstance.m_Unit );
+            }
+            else
+            {
+                // Fall back to the symbol's reference field and unit if no instance data exists.
+                SCH_FIELD* refField = symbol->GetField( FIELD_T::REFERENCE );
+                symbolInstance.m_Reference = refField->GetText();
+                symbolInstance.m_Unit = symbol->GetUnit();
+
+                wxLogTrace( traceSchSheetPaths,
+                           "  No instance data: Using reference '%s' from field, unit %d",
+                           symbolInstance.m_Reference, symbolInstance.m_Unit );
             }
 
             symbolInstance.m_ProjectName = aProjectName;
@@ -1152,7 +1257,6 @@ void SCH_SHEET_LIST::AnnotatePowerSymbols()
 {
     // List of reference for power symbols
     SCH_REFERENCE_LIST references;
-    SCH_REFERENCE_LIST additionalreferences; // Todo: add as a parameter to this function
 
     // Map of locked symbols (not used, but needed by Annotate()
     SCH_MULTI_UNIT_REFERENCE_MAP lockedSymbols;

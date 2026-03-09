@@ -31,6 +31,8 @@
 #include <wx/filedlg.h>
 #include <wx/intl.h>
 #include <eda_doc.h>
+#include <kiplatform/ui.h>
+#include <kiway_mail.h>
 
 #include <wx/button.h>
 #include <wx/bmpbuttn.h>
@@ -330,13 +332,21 @@ wxPGWindowList PG_COLOR_EDITOR::CreateControls( wxPropertyGrid* aGrid, wxPGPrope
     editor->SetPosition( aPos );
     editor->SetSize( aSize );
 
+    // Capture property name instead of pointer to avoid dangling pointer if grid is rebuilt
+    wxString propName = colorProp->GetName();
+
     editor->Bind( COLOR_SWATCH_CHANGED,
                   [=]( wxCommandEvent& aEvt )
                   {
-                      wxVariant val;
-                      auto data = new COLOR4D_VARIANT_DATA( editor->GetSwatchColor() );
-                      val.SetData( data );
-                      aGrid->ChangePropertyValue( colorProp, val );
+                      wxPGProperty* prop = aGrid->GetPropertyByName( propName );
+
+                      if( prop )
+                      {
+                          wxVariant val;
+                          auto data = new COLOR4D_VARIANT_DATA( editor->GetSwatchColor() );
+                          val.SetData( data );
+                          aGrid->ChangePropertyValue( prop, val );
+                      }
                   } );
 
 #if wxCHECK_VERSION( 3, 3, 0 )
@@ -349,6 +359,11 @@ wxPGWindowList PG_COLOR_EDITOR::CreateControls( wxPropertyGrid* aGrid, wxPGPrope
                 [=]()
                 {
                     editor->GetNewSwatchColor();
+
+                    wxPGProperty* prop = aGrid->GetPropertyByName( propName );
+
+                    if( prop )
+                        aGrid->DrawItem( prop );
                 } );
     }
 
@@ -475,7 +490,9 @@ void PG_RATIO_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) 
 }
 
 
-PG_FPID_EDITOR::PG_FPID_EDITOR( EDA_DRAW_FRAME* aFrame ) : m_frame( aFrame )
+PG_FPID_EDITOR::PG_FPID_EDITOR( EDA_DRAW_FRAME* aFrame, const std::function<std::string()>& aNetlistCallback ) :
+        m_frame( aFrame ),
+        m_netlistCallback( aNetlistCallback )
 {
     m_editorName = BuildEditorName( aFrame );
 }
@@ -521,6 +538,15 @@ bool PG_FPID_EDITOR::OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wx
 
         if( KIWAY_PLAYER* frame = m_frame->Kiway().Player( FRAME_FOOTPRINT_CHOOSER, true, m_frame ) )
         {
+            // Create symbol netlist for footprint picker
+            std::string symbolNetlist = m_netlistCallback();
+
+            if( !symbolNetlist.empty() )
+            {
+                KIWAY_MAIL_EVENT event( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST, symbolNetlist );
+                frame->KiwayMailIn( event );
+            }
+
             if( frame->ShowModal( &fpid, m_frame ) )
                 aGrid->ChangePropertyValue( aProperty, fpid );
 
@@ -586,6 +612,8 @@ bool PG_URL_EDITOR::OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wxW
             wxFileDialog openFileDialog( m_frame, _( "Open file" ), wxS( "" ), wxS( "" ),
                                          _( "All Files" ) + wxS( " (*.*)|*.*" ),
                                          wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+            KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
 
             if( openFileDialog.ShowModal() == wxID_OK )
             {

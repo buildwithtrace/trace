@@ -31,10 +31,9 @@
 
 
 COMPONENT_CLASS_MANAGER::COMPONENT_CLASS_MANAGER( BOARD* board ) :
-        m_board( board ), m_hasCustomAssignmentConditions( false )
+        m_board( board )
 {
-    m_noneClass =
-            std::make_shared<COMPONENT_CLASS>( wxEmptyString, COMPONENT_CLASS::USAGE::STATIC );
+    m_noneClass = std::make_shared<COMPONENT_CLASS>( wxEmptyString, COMPONENT_CLASS::USAGE::STATIC );
 }
 
 
@@ -98,6 +97,38 @@ void COMPONENT_CLASS_MANAGER::FinishNetlistUpdate()
     // m_staticClassesCache now contains any static component classes that are unused from the
     // netlist update. Delete any effective component classes which refer to them in a static-only
     // context, or update their usage context.
+
+    // First, collect all component classes that will be deleted so we can clear footprint pointers
+    // before deletion. This prevents use-after-free when auto-save serializes footprints.
+    std::unordered_set<const COMPONENT_CLASS*> classesToDelete;
+
+    for( const wxString& className : m_staticClassNamesCache )
+    {
+        COMPONENT_CLASS* staticClass = m_constituentClasses[className].get();
+
+        if( staticClass->GetUsageContext() == COMPONENT_CLASS::USAGE::STATIC )
+        {
+            classesToDelete.insert( staticClass );
+
+            for( const auto& [combinedFullName, combinedCompClass] : m_effectiveClasses )
+            {
+                if( combinedCompClass->ContainsClassName( className ) )
+                    classesToDelete.insert( combinedCompClass.get() );
+            }
+        }
+    }
+
+    // Clear footprint static component class pointers that reference classes being deleted
+    if( !classesToDelete.empty() )
+    {
+        for( FOOTPRINT* footprint : m_board->Footprints() )
+        {
+            if( classesToDelete.count( footprint->GetStaticComponentClass() ) )
+                footprint->SetStaticComponentClass( nullptr );
+        }
+    }
+
+    // Now perform the actual deletions
     for( const wxString& className : m_staticClassNamesCache )
     {
         COMPONENT_CLASS* staticClass = m_constituentClasses[className].get();
@@ -105,15 +136,15 @@ void COMPONENT_CLASS_MANAGER::FinishNetlistUpdate()
         if( staticClass->GetUsageContext() == COMPONENT_CLASS::USAGE::STATIC )
         {
             // Any static-only classes can be deleted, along with effective classes which refer to them
-            std::unordered_set<wxString> classesToDelete;
+            std::unordered_set<wxString> effectiveClassesToDelete;
 
             for( const auto& [combinedFullName, combinedCompClass] : m_effectiveClasses )
             {
                 if( combinedCompClass->ContainsClassName( className ) )
-                    classesToDelete.insert( combinedFullName );
+                    effectiveClassesToDelete.insert( combinedFullName );
             }
 
-            for( const wxString& classNameToDelete : classesToDelete )
+            for( const wxString& classNameToDelete : effectiveClassesToDelete )
                 m_effectiveClasses.erase( classNameToDelete );
 
             m_constituentClasses.erase( className );
@@ -163,7 +194,6 @@ bool COMPONENT_CLASS_MANAGER::SyncDynamicComponentClassAssignments(
         const std::vector<COMPONENT_CLASS_ASSIGNMENT_DATA>& aAssignments,
         bool aGenerateSheetClasses, const std::unordered_set<wxString>& aNewSheetPaths )
 {
-    m_hasCustomAssignmentConditions = false;
     bool success = true;
 
     // Invalidate component class cache entries
@@ -182,12 +212,6 @@ bool COMPONENT_CLASS_MANAGER::SyncDynamicComponentClassAssignments(
 
     for( const COMPONENT_CLASS_ASSIGNMENT_DATA& assignment : aAssignments )
     {
-        if( assignment.GetConditions().contains(
-                    COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM ) )
-        {
-            m_hasCustomAssignmentConditions = true;
-        }
-
         std::shared_ptr<COMPONENT_CLASS_ASSIGNMENT_RULE> rule = CompileAssignmentRule( assignment );
 
         if( rule )
@@ -216,7 +240,7 @@ bool COMPONENT_CLASS_MANAGER::SyncDynamicComponentClassAssignments(
 
             COMPONENT_CLASS_ASSIGNMENT_DATA assignment;
             assignment.SetComponentClass( sheetName );
-            assignment.SetCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME,
+            assignment.AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME,
                                      sheetName, wxEmptyString );
 
             std::shared_ptr<COMPONENT_CLASS_ASSIGNMENT_RULE> rule =

@@ -21,6 +21,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <memory>
 #include <wx/ffile.h>
 #include <pgm_base.h>
 #include <kiface_base.h>
@@ -47,6 +48,7 @@
 #include <env_paths.h>
 #include <paths.h>
 #include <settings/settings_manager.h>
+#include <kiplatform/ui.h>
 #include <project_pcb.h>
 #include <project/project_file.h>
 #include <footprint_editor_settings.h>
@@ -132,6 +134,8 @@ FOOTPRINT* FOOTPRINT_EDIT_FRAME::ImportFootprint( const wxString& aName )
 
         if( lastFilterIndex >= 0 && lastFilterIndex < nWildcards )
             dlg.SetFilterIndex( lastFilterIndex );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return nullptr;
@@ -247,6 +251,8 @@ void FOOTPRINT_EDIT_FRAME::ExportFootprint( FOOTPRINT* aFootprint )
 
     wxFileDialog dlg( this, _( "Export Footprint" ), fn.GetPath(), fn.GetFullName(),
                       wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
@@ -476,9 +482,11 @@ wxString PCB_BASE_EDIT_FRAME::SelectLibrary( const wxString& aDialogTitle, const
 bool PCB_BASE_EDIT_FRAME::AddLibrary( const wxString& aDialogTitle, const wxString& aFilename,
                                       std::optional<LIBRARY_TABLE_SCOPE> aScope )
 {
-    bool                      isGlobal = false;
-    FILEDLG_HOOK_NEW_LIBRARY  tableChooser( isGlobal );
-    FILEDLG_HOOK_NEW_LIBRARY* fileDlgHook = &tableChooser;
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &Prj() );
+    LIBRARY_MANAGER&           manager = Pgm().GetLibraryManager();
+    bool                       isGlobal = false;
+    FILEDLG_HOOK_NEW_LIBRARY   tableChooser( isGlobal );
+    FILEDLG_HOOK_NEW_LIBRARY*  fileDlgHook = &tableChooser;
 
     if( aScope )
     {
@@ -497,11 +505,10 @@ bool PCB_BASE_EDIT_FRAME::AddLibrary( const wxString& aDialogTitle, const wxStri
         }
 
         if( fileDlgHook )
-        {
             isGlobal = fileDlgHook->GetUseGlobalTable();
-            aScope = isGlobal ? LIBRARY_TABLE_SCOPE::GLOBAL : LIBRARY_TABLE_SCOPE::PROJECT;
-        }
     }
+
+    aScope = isGlobal ? LIBRARY_TABLE_SCOPE::GLOBAL : LIBRARY_TABLE_SCOPE::PROJECT;
 
     wxString libPath = fn.GetFullPath();
     wxString libName = fn.GetName();
@@ -523,24 +530,27 @@ bool PCB_BASE_EDIT_FRAME::AddLibrary( const wxString& aDialogTitle, const wxStri
 
     // try to use path normalized to an environmental variable or project path
     wxString normalizedPath = NormalizePath( libPath, &Pgm().GetLocalEnvVariables(), &Prj() );
+    bool     success = true;
 
     try
     {
-        std::optional<LIBRARY_TABLE*> table = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::FOOTPRINT, *aScope );
-        wxCHECK( table, false );
+        std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::FOOTPRINT, aScope.value() );
+        wxCHECK( optTable, false );
+        LIBRARY_TABLE* table = optTable.value();
 
-        LIBRARY_TABLE_ROW& row = ( *table )->InsertRow();
+        LIBRARY_TABLE_ROW& row = table->InsertRow();
 
         row.SetNickname( libName );
         row.SetURI( normalizedPath );
         row.SetType( type );
 
-        ( *table )->Save().map_error(
-            []( const LIBRARY_ERROR& aError )
-            {
-                wxMessageBox( wxString::Format( _( "Error saving library table:\n\n%s" ), aError.message ),
-                              _( "File Save Error" ), wxOK | wxICON_ERROR );
-            } );
+        table->Save().map_error(
+                [&]( const LIBRARY_ERROR& aError )
+                {
+                    wxMessageBox( _( "Error saving library table:\n\n" ) + aError.message,
+                                  _( "File Save Error" ), wxOK | wxICON_ERROR );
+                    success = false;
+                } );
     }
     catch( const IO_ERROR& ioe )
     {
@@ -548,21 +558,26 @@ bool PCB_BASE_EDIT_FRAME::AddLibrary( const wxString& aDialogTitle, const wxStri
         return false;
     }
 
-    auto editor = (FOOTPRINT_EDIT_FRAME*) Kiway().Player( FRAME_FOOTPRINT_EDITOR, false );
-
-    if( editor )
+    if( success )
     {
-        LIB_ID libID( libName, wxEmptyString );
-        editor->SyncLibraryTree( true );
-        editor->FocusOnLibID( libID );
+        manager.ReloadTables( aScope.value(), { LIBRARY_TABLE_TYPE::FOOTPRINT } );
+        adapter->LoadOne( fn.GetName() );
+
+        // Don't use dynamic_cast; it will fail across compile units on MacOS
+        if( FOOTPRINT_EDIT_FRAME* editor = (FOOTPRINT_EDIT_FRAME*) Kiway().Player( FRAME_FOOTPRINT_EDITOR, false ) )
+        {
+            LIB_ID libID( libName, wxEmptyString );
+            editor->SyncLibraryTree( true );
+            editor->FocusOnLibID( libID );
+        }
+
+        auto viewer = (FOOTPRINT_VIEWER_FRAME*) Kiway().Player( FRAME_FOOTPRINT_VIEWER, false );
+
+        if( viewer )
+            viewer->ReCreateLibraryList();
     }
 
-    auto viewer = (FOOTPRINT_VIEWER_FRAME*) Kiway().Player( FRAME_FOOTPRINT_VIEWER, false );
-
-    if( viewer )
-        viewer->ReCreateLibraryList();
-
-    return true;
+    return success;
 }
 
 
@@ -658,9 +673,7 @@ void PCB_EDIT_FRAME::ExportFootprintsToLibrary( bool aStoreInNewLib, const wxStr
                 // Reset reference designator, group membership, and zone offset before saving
 
                 fpCopy->SetReference( "REF**" );
-
-                if( EDA_GROUP* parentGroup = fpCopy->GetParentGroup() )
-                    parentGroup->RemoveItem( fpCopy );
+                fpCopy->SetParentGroup( nullptr );
 
                 for( ZONE* zone : fpCopy->Zones() )
                     zone->Move( -fpCopy->GetPosition() );
@@ -1216,7 +1229,12 @@ FOOTPRINT* PCB_BASE_FRAME::CreateNewFootprint( wxString aFootprintName, const wx
             fpnames = adapter->GetFootprintNames( aLibName, true );
 
             if( !fpnames.empty() )
-                footprintAttrs = adapter->LoadFootprint( aLibName, fpnames.back(), false )->GetAttributes();
+            {
+                std::unique_ptr<FOOTPRINT> fp( adapter->LoadFootprint( aLibName, fpnames.back(), false ) );
+
+                if( fp )
+                    footprintAttrs = fp->GetAttributes();
+            }
         }
         catch( ... )
         {
@@ -1305,39 +1323,31 @@ void PCB_BASE_FRAME::GetLibraryItemsForListDialog( wxArrayString& aHeaders,
     aHeaders.Add( _( "Library" ) );
     aHeaders.Add( _( "Description" ) );
 
-    COMMON_SETTINGS*      cfg = Pgm().GetCommonSettings();
-    PROJECT_FILE&         project = Kiway().Prj().GetProjectFile();
+    COMMON_SETTINGS*           cfg = Pgm().GetCommonSettings();
+    PROJECT_FILE&              project = Kiway().Prj().GetProjectFile();
     FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &Prj() );
-    std::vector<wxString> nicknames = adapter->GetLibraryNames();
+    std::vector<wxString>      nicknames = adapter->GetLibraryNames();
+    std::vector<wxArrayString> unpinned;
 
     for( const wxString& nickname : nicknames )
     {
-        wxString description = adapter->GetLibraryDescription( nickname ).value_or( wxEmptyString );
+        wxArrayString item;
+        wxString      description = adapter->GetLibraryDescription( nickname ).value_or( wxEmptyString );
 
         if( alg::contains( project.m_PinnedFootprintLibs, nickname )
                 || alg::contains( cfg->m_Session.pinned_fp_libs, nickname ) )
         {
-            wxArrayString item;
-
             item.Add( LIB_TREE_MODEL_ADAPTER::GetPinningSymbol() + nickname );
             item.Add( description );
             aItemsToDisplay.push_back( item );
         }
-    }
-
-    // TODO this double loop isn't used on the symbol side, what is broken here?
-    for( const wxString& nickname : nicknames )
-    {
-        wxString description = adapter->GetLibraryDescription( nickname ).value_or( wxEmptyString );
-
-        if( !alg::contains( project.m_PinnedFootprintLibs, nickname )
-                && !alg::contains( cfg->m_Session.pinned_fp_libs, nickname ) )
+        else
         {
-            wxArrayString item;
-
             item.Add( nickname );
             item.Add( description );
-            aItemsToDisplay.push_back( item );
+            unpinned.push_back( item );
         }
     }
+
+    std::ranges::copy( unpinned, std::back_inserter( aItemsToDisplay ) );
 }

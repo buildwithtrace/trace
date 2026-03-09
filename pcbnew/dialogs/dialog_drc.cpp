@@ -119,6 +119,12 @@ DIALOG_DRC::DIALOG_DRC( PCB_EDIT_FRAME* aEditorFrame, wxWindow* aParent ) :
     m_fpWarningsTreeModel = new RC_TREE_MODEL( m_frame, m_footprintsDataView );
     m_footprintsDataView->AssociateModel( m_fpWarningsTreeModel );
 
+    // Prevent RTL locales from mirroring the text in the data views
+    m_markerDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_unconnectedDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_footprintsDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_ignoredList->SetLayoutDirection( wxLayout_LeftToRight );
+
     m_ignoredList->InsertColumn( 0, wxEmptyString, wxLIST_FORMAT_LEFT, DEFAULT_SINGLE_COL_WIDTH );
 
     if( m_currentBoard == g_lastDRCBoard )
@@ -149,6 +155,9 @@ DIALOG_DRC::DIALOG_DRC( PCB_EDIT_FRAME* aEditorFrame, wxWindow* aParent ) :
     m_unconnectedTitleTemplate = m_Notebook->GetPageText( 1 );
     m_footprintsTitleTemplate  = m_Notebook->GetPageText( 2 );
     m_ignoredTitleTemplate     = m_Notebook->GetPageText( 3 );
+
+    // DPI fix
+    bSizerViolationsBox->SetMinSize( FromDIP( bSizerViolationsBox->GetMinSize() ) );
 
     Layout(); // adding the units above expanded Clearance text, now resize.
 
@@ -1069,6 +1078,8 @@ void DIALOG_DRC::OnSaveReport( wxCommandEvent& aEvent )
                       FILEEXT::ReportFileWildcard() + wxS( "|" ) + FILEEXT::JsonFileWildcard(),
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() != wxID_OK )
         return;
 
@@ -1372,7 +1383,8 @@ void DIALOG_DRC::updateDisplayedCounts()
                      || ii == DRCE_EXTRA_FOOTPRINT
                      || ii == DRCE_NET_CONFLICT
                      || ii == DRCE_SCHEMATIC_PARITY
-                     || ii == DRCE_FOOTPRINT_FILTERS )
+                     || ii == DRCE_FOOTPRINT_FILTERS
+                     || ii == DRCE_SCHEMATIC_FIELDS_PARITY )
             {
                 if( m_showWarnings->GetValue() && severity == RPT_SEVERITY_WARNING )
                     footprintsOverflowed = true;

@@ -344,7 +344,7 @@ static const HARFBUZZ_CACHE_ENTRY& getHarfbuzzShape( FT_Face aFace, const wxStri
                                                     // contents
 
         hb_font_t* referencedFont = hb_ft_font_create_referenced( aFace );
-        hb_ft_font_set_funcs( referencedFont );
+
         hb_shape( referencedFont, buf, nullptr, 0 );
 
         unsigned int         glyphCount;
@@ -581,16 +581,16 @@ VECTOR2I OUTLINE_FONT::getTextAsGlyphsUnlocked( BOX2I* aBBox,
         cursor.y += ( pos.y_advance * GLYPH_SIZE_SCALER );
     }
 
-    int      ascender = abs( face->size->metrics.ascender * GLYPH_SIZE_SCALER );
-    int      descender = abs( face->size->metrics.descender * GLYPH_SIZE_SCALER );
-    VECTOR2I extents( cursor.x * scaleFactor.x, ( ascender + descender ) * abs( scaleFactor.y ) );
-
-    VECTOR2I cursorDisplacement( cursor.x * scaleFactor.x, -cursor.y * scaleFactor.y );
+    int ascender = abs( face->size->metrics.ascender * GLYPH_SIZE_SCALER );
+    int descender = abs( face->size->metrics.descender * GLYPH_SIZE_SCALER );
 
     if( aBBox )
-        aBBox->Merge( aPosition + extents );
+    {
+        aBBox->Merge( aPosition - VECTOR2I( 0, ascender * abs( scaleFactor.y ) ) );
+        aBBox->Merge( aPosition + VECTOR2I( cursor.x * scaleFactor.x, descender * abs( scaleFactor.y ) ) );
+    }
 
-    return VECTOR2I( aPosition.x + cursorDisplacement.x, aPosition.y + cursorDisplacement.y );
+    return VECTOR2I( aPosition.x + cursor.x * scaleFactor.x, aPosition.y - cursor.y * scaleFactor.y );
 }
 
 
@@ -615,9 +615,8 @@ void OUTLINE_FONT::RenderToOpenGLCanvas( KIGFX::OPENGL_GAL& aGal, const wxString
 
     std::lock_guard<std::mutex> guard( m_freeTypeMutex );
 
-    hb_font_t*           referencedFont = hb_ft_font_create_referenced( m_face );
+    hb_font_t* referencedFont = hb_ft_font_create_referenced( m_face );
 
-    hb_ft_font_set_funcs( referencedFont );
     hb_shape( referencedFont, buf, nullptr, 0 );
 
     const double mirror_factor = ( aIsMirrored ? 1 : -1 );

@@ -80,7 +80,7 @@
 #include <kiplatform/io.h>
 #include <kiplatform/ui.h>
 
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 
 #include <functional>
 #include <kiface_ids.h>
@@ -132,7 +132,9 @@ BEGIN_EVENT_TABLE( EDA_BASE_FRAME, wxFrame )
 
     EVT_SYS_COLOUR_CHANGED( EDA_BASE_FRAME::onSystemColorChange )
     EVT_ICONIZE( EDA_BASE_FRAME::onIconize )
-END_EVENT_TABLE()
+
+    EVT_MENU_RANGE( ID_LANGUAGE_CHOICE, ID_LANGUAGE_CHOICE_END, EDA_BASE_FRAME::OnLanguageSelectionEvent )
+    END_EVENT_TABLE()
 
 
 void EDA_BASE_FRAME::commonInit( FRAME_T aFrameType )
@@ -192,6 +194,31 @@ EDA_BASE_FRAME::EDA_BASE_FRAME( wxWindow* aParent, FRAME_T aFrameType, const wxS
 
     commonInit( aFrameType );
 
+    Bind( wxEVT_DPI_CHANGED,
+          [&]( wxDPIChangedEvent& aEvent )
+          {
+#ifdef __WXMSW__
+              // Workaround to update toolbar sizes on MSW
+              if( m_auimgr.GetManagedWindow() )
+              {
+                  wxAuiPaneInfoArray& panes = m_auimgr.GetAllPanes();
+
+                  for( size_t ii = 0; ii < panes.GetCount(); ii++ )
+                  {
+                      wxAuiPaneInfo& pinfo = panes.Item( ii );
+                      pinfo.best_size = pinfo.window->GetSize();
+
+                      // But we still shouldn't make it too small.
+                      pinfo.best_size.IncTo( pinfo.window->GetBestSize() );
+                      pinfo.best_size.IncTo( pinfo.min_size );
+                  }
+
+                  m_auimgr.Update();
+              }
+#endif
+
+              aEvent.Skip();
+          } );
 }
 
 
@@ -315,6 +342,18 @@ bool EDA_BASE_FRAME::ProcessEvent( wxEvent& aEvent )
 
         if( dlg )
             dlg->Raise();
+    }
+#endif
+
+#ifdef __WXMSW__
+    // When changing DPI to a lower value, somehow, called from wxNonOwnedWindow::HandleDPIChange,
+    // our sizers compute a min size that is larger than the old frame size. wx then sets this wrong size.
+    // This shouldn't be needed since the OS have already sent a size event.
+    // Avoid this wx behaviour by pretending we've processed the event even if we use Skip in handlers.
+    if( aEvent.GetEventType() == wxEVT_DPI_CHANGED )
+    {
+        wxFrame::ProcessEvent( aEvent );
+        return true;
     }
 #endif
 
@@ -547,8 +586,9 @@ void EDA_BASE_FRAME::RecreateToolbars()
     {
         if( !m_tbRight )
         {
-            m_tbRight = new ACTION_TOOLBAR( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                                KICAD_AUI_TB_STYLE | wxAUI_TB_VERTICAL );
+            m_tbRight =
+                    new ACTION_TOOLBAR( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                        KICAD_AUI_TB_STYLE | wxAUI_TB_VERTICAL | wxAUI_TB_TEXT | wxAUI_TB_OVERFLOW );
             m_tbRight->SetAuiManager( &m_auimgr );
         }
 
@@ -563,7 +603,7 @@ void EDA_BASE_FRAME::RecreateToolbars()
         if( !m_tbLeft )
         {
             m_tbLeft = new ACTION_TOOLBAR( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                                   KICAD_AUI_TB_STYLE | wxAUI_TB_VERTICAL );
+                                           KICAD_AUI_TB_STYLE | wxAUI_TB_VERTICAL | wxAUI_TB_TEXT | wxAUI_TB_OVERFLOW );
             m_tbLeft->SetAuiManager( &m_auimgr );
         }
 
@@ -578,7 +618,8 @@ void EDA_BASE_FRAME::RecreateToolbars()
         if( !m_tbTopMain )
         {
             m_tbTopMain = new ACTION_TOOLBAR( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                                KICAD_AUI_TB_STYLE | wxAUI_TB_HORZ_LAYOUT | wxAUI_TB_HORIZONTAL );
+                                              KICAD_AUI_TB_STYLE | wxAUI_TB_HORZ_LAYOUT | wxAUI_TB_HORIZONTAL
+                                                      | wxAUI_TB_TEXT | wxAUI_TB_OVERFLOW );
             m_tbTopMain->SetAuiManager( &m_auimgr );
         }
 
@@ -593,7 +634,8 @@ void EDA_BASE_FRAME::RecreateToolbars()
         if( !m_tbTopAux )
         {
             m_tbTopAux = new ACTION_TOOLBAR( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                                     KICAD_AUI_TB_STYLE | wxAUI_TB_HORZ_LAYOUT | wxAUI_TB_HORIZONTAL );
+                                             KICAD_AUI_TB_STYLE | wxAUI_TB_HORZ_LAYOUT | wxAUI_TB_HORIZONTAL
+                                                     | wxAUI_TB_TEXT | wxAUI_TB_OVERFLOW );
             m_tbTopAux->SetAuiManager( &m_auimgr );
         }
 
@@ -1134,7 +1176,21 @@ void EDA_BASE_FRAME::RestoreAuiLayout()
     if( !restored && !m_perspective.IsEmpty() )
         m_auimgr.LoadPerspective( m_perspective );
 #else
-    // Do nothing: Save/LoadPerspective() is broken on wx before 3.3
+    if( !m_perspective.IsEmpty() )
+    {
+        m_auimgr.LoadPerspective( m_perspective );
+
+        // Workaround for wx 3.2: LoadPerspective() hides all panes first, then shows only
+        // those in the saved string. If toolbar names changed or new toolbars were added,
+        // they'd stay hidden. Ensure all toolbars are visible after restore.
+        wxAuiPaneInfoArray& panes = m_auimgr.GetAllPanes();
+
+        for( size_t i = 0; i < panes.GetCount(); ++i )
+        {
+            if( panes.Item( i ).IsToolbar() )
+                panes.Item( i ).Show( true );
+        }
+    }
 #endif
 }
 
@@ -1206,8 +1262,7 @@ void EDA_BASE_FRAME::UpdateFileHistory( const wxString& FullFileName, FILE_HISTO
 }
 
 
-wxString EDA_BASE_FRAME::GetFileFromHistory( int cmdId, const wxString& type,
-                                             FILE_HISTORY* aFileHistory )
+wxString EDA_BASE_FRAME::GetFileFromHistory( int cmdId, const wxString& type, FILE_HISTORY* aFileHistory )
 {
     if( !aFileHistory )
         aFileHistory = m_fileHistory;
@@ -1217,22 +1272,23 @@ wxString EDA_BASE_FRAME::GetFileFromHistory( int cmdId, const wxString& type,
     int baseId = aFileHistory->GetBaseId();
 
     wxASSERT( cmdId >= baseId && cmdId < baseId + (int) aFileHistory->GetCount() );
+    int i = cmdId - baseId;
 
-    unsigned i = cmdId - baseId;
+    wxString fn = aFileHistory->GetHistoryFile( i );
 
-    if( i < aFileHistory->GetCount() )
+    if( !wxFileName::FileExists( fn ) )
     {
-        wxString fn = aFileHistory->GetHistoryFile( i );
+        KICAD_MESSAGE_DIALOG dlg( this, wxString::Format( _( "File '%s' was not found.\n" ), fn ), _( "Error" ),
+                                  wxYES_NO | wxYES_DEFAULT | wxICON_ERROR | wxCENTER );
 
-        if( wxFileName::FileExists( fn ) )
-        {
-            return fn;
-        }
-        else
-        {
-            DisplayErrorMessage( this, wxString::Format( _( "File '%s' was not found." ), fn ) );
+        dlg.SetExtendedMessage( _( "Do you want to remove it from list of recently opened files?" ) );
+        dlg.SetYesNoLabels( KICAD_MESSAGE_DIALOG::ButtonLabel( _( "Remove" ) ),
+                            KICAD_MESSAGE_DIALOG::ButtonLabel( _( "Keep" ) ) );
+
+        if( dlg.ShowModal() == wxID_YES )
             aFileHistory->RemoveFileFromHistory( i );
-        }
+
+        fn.Clear();
     }
 
     // Update the menubar to update the file history menu
@@ -1242,7 +1298,7 @@ wxString EDA_BASE_FRAME::GetFileFromHistory( int cmdId, const wxString& type,
         GetMenuBar()->Refresh();
     }
 
-    return wxEmptyString;
+    return fn;
 }
 
 
@@ -1311,11 +1367,13 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                     return new PANEL_MOUSE_SETTINGS( aParent );
                 }, _( "Mouse and Touchpad" ) );
 
+#ifdef __linux__
         book->AddLazyPage(
                 [] ( wxWindow* aParent ) -> wxWindow*
                 {
                     return new PANEL_SPACEMOUSE( aParent );
                 }, _( "SpaceMouse" ) );
+#endif
 
         book->AddPage( hotkeysPanel, _( "Hotkeys" ) );
 
@@ -1355,9 +1413,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SYM_EDIT_GRIDS ), _( "Grids" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SYM_EDIT_OPTIONS ), _( "Editing Options" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SYM_COLORS ), _( "Colors" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_SYM_TOOLBARS ), _( "Toolbars" ) );
+                book->AddLazySubPage( LAZY_CTOR( PANEL_SYM_TOOLBARS ), _( "Toolbars" ) );
 
                 if( GetFrameType() == FRAME_SCH )
                     expand.push_back( (int) book->GetPageCount() );
@@ -1367,10 +1423,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_GRIDS ), _( "Grids" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_EDIT_OPTIONS ), _( "Editing Options" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_COLORS ), _( "Colors" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_TOOLBARS ), _( "Toolbars" ) );
-
+                book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_TOOLBARS ), _( "Toolbars" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_FIELD_NAME_TEMPLATES ), _( "Field Name Templates" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_DATA_SOURCES ), _( "Data Sources" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_SCH_SIMULATOR ), _( "Simulator" ) );
@@ -1395,12 +1448,10 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                 book->AddLazySubPage( LAZY_CTOR( PANEL_FP_ORIGINS_AXES ), _( "Origins & Axes" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_FP_EDIT_OPTIONS ), _( "Editing Options" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_FP_COLORS ), _( "Colors" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_FP_TOOLBARS ), _( "Toolbars" ) );
-
+                book->AddLazySubPage( LAZY_CTOR( PANEL_FP_TOOLBARS ), _( "Toolbars" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_FP_DEFAULT_FIELDS ), _( "Footprint Defaults" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_FP_DEFAULT_GRAPHICS_VALUES ), _( "Graphics Defaults" ) );
+                book->AddLazySubPage( LAZY_CTOR( PANEL_FP_USER_LAYER_NAMES ), _( "User Layer Names" ) );
 
                 if( GetFrameType() ==  FRAME_PCB_EDITOR )
                     expand.push_back( (int) book->GetPageCount() );
@@ -1411,10 +1462,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                 book->AddLazySubPage( LAZY_CTOR( PANEL_PCB_ORIGINS_AXES ), _( "Origins & Axes" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_PCB_EDIT_OPTIONS ), _( "Editing Options" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_PCB_COLORS ), _( "Colors" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_PCB_TOOLBARS ), _( "Toolbars" ) );
-
+                book->AddLazySubPage( LAZY_CTOR( PANEL_PCB_TOOLBARS ), _( "Toolbars" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_PCB_ACTION_PLUGINS ), _( "Plugins" ) );
 
                 if( GetFrameType() == FRAME_PCB_DISPLAY3D )
@@ -1422,10 +1470,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
 
                 book->AddPage( new wxPanel( book ), _( "3D Viewer" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_3DV_DISPLAY_OPTIONS ), _( "General" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_3DV_TOOLBARS ), _( "Toolbars" ) );
-
+                book->AddLazySubPage( LAZY_CTOR( PANEL_3DV_TOOLBARS ), _( "Toolbars" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_3DV_OPENGL ), _( "Realtime Renderer" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_3DV_RAYTRACING ), _( "Raytracing Renderer" ) );
             }
@@ -1446,10 +1491,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                 book->AddPage( new wxPanel( book ), _( "Gerber Viewer" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_GBR_DISPLAY_OPTIONS ), _( "Display Options" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_GBR_COLORS ), _( "Colors" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_GBR_TOOLBARS ), _( "Toolbars" ) );
-
+                book->AddLazySubPage( LAZY_CTOR( PANEL_GBR_TOOLBARS ), _( "Toolbars" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_GBR_GRIDS ), _( "Grids" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_GBR_EXCELLON_OPTIONS ), _( "Excellon Options" ) );
             }
@@ -1471,9 +1513,7 @@ void EDA_BASE_FRAME::ShowPreferences( wxString aStartPage, wxString aStartParent
                 book->AddLazySubPage( LAZY_CTOR( PANEL_DS_DISPLAY_OPTIONS ), _( "Display Options" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_DS_GRIDS ), _( "Grids" ) );
                 book->AddLazySubPage( LAZY_CTOR( PANEL_DS_COLORS ), _( "Colors" ) );
-
-                if( ADVANCED_CFG::GetCfg().m_ConfigurableToolbars )
-                    book->AddLazySubPage( LAZY_CTOR( PANEL_DS_TOOLBARS ), _( "Toolbars" ) );
+                book->AddLazySubPage( LAZY_CTOR( PANEL_DS_TOOLBARS ), _( "Toolbars" ) );
 
                 book->AddLazyPage(
                         []( wxWindow* aParent ) -> wxWindow*
@@ -1724,7 +1764,7 @@ void EDA_BASE_FRAME::OnMaximize( wxMaximizeEvent& aEvent )
 
 wxSize EDA_BASE_FRAME::GetWindowSize()
 {
-#ifdef __WXGTK__
+#if defined( __WXGTK__ ) && !wxCHECK_VERSION( 3, 2, 9 )
     wxSize winSize = GetSize();
 
     // GTK includes the window decorations in the normal GetSize call,
@@ -1825,4 +1865,13 @@ void EDA_BASE_FRAME::AddMenuLanguageList( ACTION_MENU* aMasterMenu, TOOL_INTERAC
 
     // This must be done after the items are added
     aMasterMenu->Add( langsMenu );
+}
+
+
+void EDA_BASE_FRAME::OnLanguageSelectionEvent( wxCommandEvent& event )
+{
+    int id = event.GetId();
+
+    // tell all the KIWAY_PLAYERs about the language change.
+    Kiway().SetLanguage( id );
 }

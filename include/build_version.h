@@ -105,6 +105,46 @@ KICOMMON_API const std::tuple<int, int, int>& GetMajorMinorPatchTuple();
 KICOMMON_API bool IsNightlyVersion();
 
 /**
+ * Get the full Trace version string. This string contains platform-specific information
+ * added by the packagers. It is created by CMake in the TRACE_VERSION_FULL variable.
+ *
+ * @return the full version string
+ */
+KICOMMON_API wxString GetTraceBuildVersion();
+
+/**
+ * Get the Trace version string without the information added by the packagers.
+ * It is created by CMake in the TRACE_VERSION variable.
+ *
+ * @return the base version string
+ */
+KICOMMON_API wxString GetTraceBaseVersion();
+
+/**
+ * Get the semantic version string for Trace defined inside the TraceVersion.cmake file in
+ * the variable TRACE_SEMANTIC_VERSION.
+ *
+ * @return the semantic version string
+ */
+KICOMMON_API wxString GetTraceSemanticVersion();
+
+/**
+ * Get only the major and minor version in a string major.minor.
+ * This is extracted by CMake from the TRACE_SEMANTIC_VERSION variable.
+ *
+ * @return the major and minor version as a string
+ */
+KICOMMON_API wxString GetTraceMajorMinorVersion();
+
+/**
+ * Get the major, minor and patch version in a string major.minor.patch
+ * This is extracted by CMake from the TRACE_SEMANTIC_VERSION variable.
+ *
+ * @return the major.minor.patch version as a string
+ */
+KICOMMON_API wxString GetTraceMajorMinorPatchVersion();
+
+/**
  * A setter for OpenGL info when it's initialized.
  */
 KICOMMON_API void SetOpenGLInfo( const char* aRenderer, const char* aVendor, const char* aVersion );

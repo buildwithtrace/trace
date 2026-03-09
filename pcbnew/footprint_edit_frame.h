@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -92,6 +93,10 @@ public:
     void doCloseWindow() override;
     void CloseFootprintEditor( wxCommandEvent& Event );
     void OnExitKiCad( wxCommandEvent& aEvent );
+
+    void onSignIn( wxCommandEvent& event );
+    void onSignOut( wxCommandEvent& event );
+    void onAuthStateChanged( wxCommandEvent& event );
 
     /**
      * Switch the currently used canvas (Cairo / OpenGL).
@@ -281,7 +286,7 @@ public:
      * Synchronize the footprint library tree to the current state of the footprint library
      * table.
      */
-    void SyncLibraryTree( bool aProgress );
+    void SyncLibraryTree( [[maybe_unused]] bool aProgress );
 
     /**
      * Redisplay the library tree.  Used after changing modified states, descriptions, etc.
@@ -300,7 +305,7 @@ public:
 
     void FocusOnLibID( const LIB_ID& aLibID );
 
-    void KiwayMailIn( KIWAY_EXPRESS& mail ) override;
+    void KiwayMailIn( KIWAY_MAIL_EVENT& mail ) override;
 
     DECLARE_EVENT_TABLE()
 

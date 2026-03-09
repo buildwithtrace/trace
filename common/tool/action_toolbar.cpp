@@ -41,6 +41,7 @@
 #include <tool/tool_interactive.h>
 #include <tool/tool_manager.h>
 #include <tool/ui/toolbar_configuration.h>
+#include <tool/ui/toolbar_context_menu_registry.h>
 #include <widgets/bitmap_button.h>
 #include <widgets/wx_aui_art_providers.h>
 
@@ -105,8 +106,8 @@ void ACTION_GROUP::SetDefaultAction( const TOOL_ACTION& aDefault )
 }
 
 
-#define PALETTE_BORDER 4    // The border around the palette buttons on all sides
-#define BUTTON_BORDER  1    // The border on the sides of the buttons that touch other buttons
+#define PALETTE_BORDER FromDIP( 4 ) // The border around the palette buttons on all sides
+#define BUTTON_BORDER  FromDIP( 1 ) // The border on the sides of the buttons that touch other buttons
 
 
 ACTION_TOOLBAR_PALETTE::ACTION_TOOLBAR_PALETTE( wxWindow* aParent, bool aVertical ) :
@@ -129,27 +130,22 @@ ACTION_TOOLBAR_PALETTE::ACTION_TOOLBAR_PALETTE( wxWindow* aParent, bool aVertica
 
     m_panel->SetSizer( m_mainSizer );
 
-    Connect( wxEVT_CHAR_HOOK, wxCharEventHandler( ACTION_TOOLBAR_PALETTE::onCharHook ),
-             nullptr, this );
+    Connect( wxEVT_CHAR_HOOK, wxCharEventHandler( ACTION_TOOLBAR_PALETTE::onCharHook ), nullptr, this );
 }
 
 
 void ACTION_TOOLBAR_PALETTE::AddAction( const TOOL_ACTION& aAction )
 {
-    int            size = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
-    wxBitmapBundle normalBmp = KiBitmapBundle( aAction.GetIcon(), size );
-
-    int bmpWidth = normalBmp.GetPreferredBitmapSizeFor( this ).GetWidth();
-    int padding = ( m_buttonSize.GetWidth() - bmpWidth ) / 2;
-    wxSize bmSize( size, size );
-    bmSize *= KIPLATFORM::UI::GetContentScaleFactor( m_parent );
+    int            iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
+    wxBitmapBundle normalBmp = KiBitmapBundleDef( aAction.GetIcon(), iconSize );
+    int            paddingDip = ( ToDIP( m_buttonSize.GetWidth() ) - iconSize ) / 2;
 
     BITMAP_BUTTON* button = new BITMAP_BUTTON( m_panel, aAction.GetUIId() );
 
     button->SetIsToolbarButton();
     button->SetBitmap( normalBmp );
-    button->SetDisabledBitmap( KiDisabledBitmapBundle( aAction.GetIcon() ) );
-    button->SetPadding( padding );
+    button->SetDisabledBitmap( KiDisabledBitmapBundleDef( aAction.GetIcon(), iconSize ) );
+    button->SetPadding( paddingDip );
     button->SetToolTip( aAction.GetButtonTooltip() );
     button->AcceptDragInAsClick();
     button->SetBitmapCentered();
@@ -205,6 +201,7 @@ void ACTION_TOOLBAR_PALETTE::onCharHook( wxKeyEvent& aEvent )
 ACTION_TOOLBAR::ACTION_TOOLBAR( EDA_BASE_FRAME* parent, wxWindowID id, const wxPoint& pos, const wxSize& size,
                                 long style ) :
         wxAuiToolBar( parent, id, pos, size, style ),
+        m_parent( parent ),
         m_paletteTimer( nullptr ),
         m_auiManager( nullptr ),
         m_toolManager( parent->GetToolManager() ),
@@ -221,7 +218,36 @@ ACTION_TOOLBAR::ACTION_TOOLBAR( EDA_BASE_FRAME* parent, wxWindowID id, const wxP
     Connect( wxEVT_LEFT_UP, wxMouseEventHandler( ACTION_TOOLBAR::onMouseClick ), nullptr, this );
     Connect( m_paletteTimer->GetId(), wxEVT_TIMER, wxTimerEventHandler( ACTION_TOOLBAR::onTimerDone ), nullptr, this );
 
+    Bind( wxEVT_SIZE,
+          [&]( wxSizeEvent& aEvent )
+          {
+              CallAfter(
+                      [&]()
+                      {
+                          SetOverflowVisible( !GetToolBarFits() );
+                      } );
+
+              aEvent.Skip();
+          } );
+
     Bind( wxEVT_SYS_COLOUR_CHANGED, wxSysColourChangedEventHandler( ACTION_TOOLBAR::onThemeChanged ), this );
+
+    Bind( wxEVT_DPI_CHANGED,
+          [&]( wxDPIChangedEvent& aEvent )
+          {
+#ifdef __WXMSW__
+              // Update values which are normally only initialized in wxAuiToolBar::Create
+              // FromDIP is no-op on backends other than wxMSW
+              m_toolPacking = FromDIP( 2 );
+              m_toolBorderPadding = FromDIP( 3 );
+
+              wxSize margin_lt = FromDIP( wxSize( 5, 5 ) );
+              wxSize margin_rb = FromDIP( wxSize( 2, 2 ) );
+              SetMargins( margin_lt.x, margin_lt.y, margin_rb.x, margin_rb.y );
+#endif
+
+              aEvent.Skip();
+          } );
 }
 
 
@@ -245,6 +271,20 @@ ACTION_TOOLBAR::~ACTION_TOOLBAR()
     m_toolCancellable.clear();
     m_toolKinds.clear();
     m_toolActions.clear();
+}
+
+
+std::list<ACTION_TOOLBAR_CONTROL*> ACTION_TOOLBAR::GetCustomControlList( FRAME_T aContext )
+{
+    std::list<ACTION_TOOLBAR_CONTROL*> controls;
+
+    for( ACTION_TOOLBAR_CONTROL* control : GetAllCustomControls() )
+    {
+        if( control->SupportedFor( aContext ) )
+            controls.push_back( control );
+    }
+
+    return controls;
 }
 
 
@@ -318,6 +358,17 @@ void ACTION_TOOLBAR::ApplyConfiguration( const TOOLBAR_CONFIGURATION& aConfig )
                 group->SetDefaultAction( *defaultTool );
 
             AddGroup( std::move( group ) );
+
+            // Look up and attach context menu if one is registered for this group
+            auto menuFactory = TOOLBAR_CONTEXT_MENU_REGISTRY::GetGroupMenuFactory( groupName );
+
+            if( menuFactory && m_toolManager )
+            {
+                // Register the menu for each action in the group
+                for( const TOOL_ACTION* grpAction : tools )
+                    AddToolContextMenu( *grpAction, menuFactory( m_toolManager ) );
+            }
+
             break;
         }
 
@@ -349,6 +400,13 @@ void ACTION_TOOLBAR::ApplyConfiguration( const TOOLBAR_CONFIGURATION& aConfig )
             }
 
             Add( *action );
+
+            // Look up and attach context menu if one is registered for this action
+            auto factory = TOOLBAR_CONTEXT_MENU_REGISTRY::GetMenuFactory( item.m_ActionName );
+
+            if( factory && m_toolManager )
+                AddToolContextMenu( *action, factory( m_toolManager ) );
+
             break;
         }
         }
@@ -356,6 +414,17 @@ void ACTION_TOOLBAR::ApplyConfiguration( const TOOLBAR_CONFIGURATION& aConfig )
 
     // Apply the configuration
     KiRealize();
+}
+
+
+void ACTION_TOOLBAR::DoSetToolTipText( const wxString& aTip )
+{
+    // We use \t in short description to align accelerators in wxMenuItem
+    // But they should be converted when displaying tooltips
+    wxString tip = aTip;
+    tip.Replace( "\t", "  " );
+
+    wxAuiToolBar::DoSetToolTipText( tip );
 }
 
 
@@ -378,11 +447,11 @@ void ACTION_TOOLBAR::Add( const TOOL_ACTION& aAction, bool aIsToggleEntry, bool 
                   wxS( "aIsCancellable requires aIsToggleEntry" ) );
 
     int toolId = aAction.GetUIId();
+    int iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
 
     AddTool( toolId, wxEmptyString,
-             KiBitmapBundle( aAction.GetIcon(),
-                             Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size ),
-             KiDisabledBitmapBundle( aAction.GetIcon() ),
+             KiBitmapBundleDef( aAction.GetIcon(), iconSize ),
+             KiDisabledBitmapBundleDef( aAction.GetIcon(), iconSize ),
              aIsToggleEntry ? wxITEM_CHECK : wxITEM_NORMAL,
              aAction.GetButtonTooltip(), wxEmptyString, nullptr );
 
@@ -395,12 +464,12 @@ void ACTION_TOOLBAR::Add( const TOOL_ACTION& aAction, bool aIsToggleEntry, bool 
 void ACTION_TOOLBAR::AddButton( const TOOL_ACTION& aAction )
 {
     int toolId = aAction.GetUIId();
+    int iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
 
     AddTool( toolId, wxEmptyString,
-             KiBitmapBundle( aAction.GetIcon(),
-                             Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size ),
-             KiDisabledBitmapBundle( aAction.GetIcon() ), wxITEM_NORMAL,
-             aAction.GetButtonTooltip(), wxEmptyString, nullptr );
+             KiBitmapBundleDef( aAction.GetIcon(), iconSize ),
+             KiDisabledBitmapBundleDef( aAction.GetIcon(), iconSize ),
+             wxITEM_NORMAL, aAction.GetButtonTooltip(), wxEmptyString, nullptr );
 
     m_toolKinds[ toolId ] = false;
     m_toolActions[ toolId ] = &aAction;
@@ -429,8 +498,7 @@ void ACTION_TOOLBAR::Add( wxControl* aControl, const wxString& aLabel )
 }
 
 
-void ACTION_TOOLBAR::AddToolContextMenu( const TOOL_ACTION& aAction,
-                                         std::unique_ptr<ACTION_MENU> aMenu )
+void ACTION_TOOLBAR::AddToolContextMenu( const TOOL_ACTION& aAction, std::unique_ptr<ACTION_MENU> aMenu )
 {
     int toolId = aAction.GetUIId();
 
@@ -440,8 +508,9 @@ void ACTION_TOOLBAR::AddToolContextMenu( const TOOL_ACTION& aAction,
 
 void ACTION_TOOLBAR::AddGroup( std::unique_ptr<ACTION_GROUP> aGroup )
 {
-    int                groupId       = aGroup->GetUIId();
+    int                groupId = aGroup->GetUIId();
     const TOOL_ACTION* defaultAction = aGroup->GetDefaultAction();
+    int                iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
 
     wxASSERT( GetParent() );
     wxASSERT( defaultAction );
@@ -459,11 +528,9 @@ void ACTION_TOOLBAR::AddGroup( std::unique_ptr<ACTION_GROUP> aGroup )
 
     // Add the main toolbar item representing the group
     AddTool( groupId, wxEmptyString,
-             KiBitmapBundle( defaultAction->GetIcon(),
-                             Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size ),
-             KiDisabledBitmapBundle( defaultAction->GetIcon() ),
-             isToggleEntry ? wxITEM_CHECK : wxITEM_NORMAL,
-             wxEmptyString, wxEmptyString, nullptr );
+             KiBitmapBundleDef( defaultAction->GetIcon(), iconSize ),
+             KiDisabledBitmapBundleDef( defaultAction->GetIcon(), iconSize ),
+             isToggleEntry ? wxITEM_CHECK : wxITEM_NORMAL, wxEmptyString, wxEmptyString, nullptr );
 
     // Select the default action
     doSelectAction( m_actionGroups[ groupId ].get(), *defaultAction );
@@ -517,11 +584,12 @@ void ACTION_TOOLBAR::doSelectAction( ACTION_GROUP* aGroup, const TOOL_ACTION& aA
     if( !item )
         return;
 
+    int iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
+
     // Update the item information
     item->SetShortHelp( aAction.GetButtonTooltip() );
-    item->SetBitmap( KiBitmapBundle( aAction.GetIcon(),
-                                     Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size ) );
-    item->SetDisabledBitmap( KiDisabledBitmapBundle( aAction.GetIcon() ) );
+    item->SetBitmap( KiBitmapBundleDef( aAction.GetIcon(), iconSize ) );
+    item->SetDisabledBitmap( KiDisabledBitmapBundleDef( aAction.GetIcon(), iconSize ) );
 
     // Register a new handler with the new UI conditions
     if( m_toolManager )
@@ -600,21 +668,33 @@ void ACTION_TOOLBAR::ClearToolbar()
     m_toolKinds.clear();
     m_toolActions.clear();
 
+    for( int id : m_controlIDs )
+    {
+        m_parent->ClearToolbarControl( id );
+        DestroyTool( id );
+    }
+
+    m_controlIDs.clear();
+
     // Remove the actual tools from the toolbar
     Clear();
 }
 
 
-void ACTION_TOOLBAR::SetToolBitmap( const TOOL_ACTION& aAction, const wxBitmap& aBitmap )
+void ACTION_TOOLBAR::SetToolBitmap( const TOOL_ACTION& aAction, const wxBitmapBundle& aBitmap )
 {
     int toolId = aAction.GetUIId();
-    wxAuiToolBar::SetToolBitmap( toolId, aBitmap );
 
     // Set the disabled bitmap: we use the disabled bitmap version of aBitmap.
     wxAuiToolBarItem* tb_item = wxAuiToolBar::FindTool( toolId );
 
-    if( tb_item )
-        tb_item->SetDisabledBitmap( aBitmap.ConvertToDisabled( KIPLATFORM::UI::IsDarkTheme() ? 70 : 255 ) );
+    if( !tb_item )
+        return;
+
+    wxBitmap bm = aBitmap.GetBitmapFor( this );
+
+    tb_item->SetBitmap( aBitmap );
+    tb_item->SetDisabledBitmap( bm.ConvertToDisabled( KIPLATFORM::UI::IsDarkTheme() ? 70 : 255 ) );
 }
 
 
@@ -1031,13 +1111,14 @@ void ACTION_TOOLBAR::onThemeChanged( wxSysColourChangedEvent &aEvent )
 
 void ACTION_TOOLBAR::RefreshBitmaps()
 {
+    int iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
+
     for( const std::pair<int, const TOOL_ACTION*> pair : m_toolActions )
     {
         wxAuiToolBarItem* tool = FindTool( pair.first );
 
-        tool->SetBitmap( KiBitmapBundle( pair.second->GetIcon(),
-                                         Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size ) );
-        tool->SetDisabledBitmap( KiDisabledBitmapBundle( pair.second->GetIcon() ) );
+        tool->SetBitmap( KiBitmapBundleDef( pair.second->GetIcon(), iconSize ) );
+        tool->SetDisabledBitmap( KiDisabledBitmapBundleDef( pair.second->GetIcon(), iconSize ) );
     }
 
     Refresh();
@@ -1046,24 +1127,59 @@ void ACTION_TOOLBAR::RefreshBitmaps()
 /*
  * Common controls for the toolbar
  */
-ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::gridSelect( "control.GridSelector", _( "Grid Selector" ),
-                                                            _( "Grid Selection box" ) );
+ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::gridSelect( "control.GridSelector",
+                                                            _( "Grid selector" ),
+                                                            _( "Grid Selection box" ),
+                                                            { FRAME_SCH,
+                                                              FRAME_SCH_SYMBOL_EDITOR,
+                                                              FRAME_SCH_VIEWER,
+                                                              FRAME_PCB_EDITOR,
+                                                              FRAME_FOOTPRINT_EDITOR,
+                                                              FRAME_FOOTPRINT_VIEWER,
+                                                              FRAME_GERBER,
+                                                              FRAME_PL_EDITOR } );
 
-ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::zoomSelect( "control.ZoomSelector", _( "Zoom Selector" ),
-                                                            _( "Zoom Selection box" ) );
 
-ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::ipcScripting( "control.IPCPlugin", _( "IPC/Scripting plugins" ),
-                                                              _( "Region to hold the IPC/Scripting action buttons" ) );
+ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::zoomSelect( "control.ZoomSelector",
+                                                            _( "Zoom selector" ),
+                                                            _( "Zoom Selection box" ),
+                                                            { FRAME_SCH,
+                                                              FRAME_SCH_SYMBOL_EDITOR,
+                                                              FRAME_SCH_VIEWER,
+                                                              FRAME_PCB_EDITOR,
+                                                              FRAME_PCB_DISPLAY3D,
+                                                              FRAME_FOOTPRINT_EDITOR,
+                                                              FRAME_FOOTPRINT_VIEWER,
+                                                              FRAME_GERBER,
+                                                              FRAME_PL_EDITOR } );
 
-ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::layerSelector( "control.LayerSelector", _( "Layer selector" ),
-                                                               _( "Control to select the layer" ) );
+ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::ipcScripting( "control.IPCPlugin",
+                                                              _( "IPC/Scripting plugins" ),
+                                                              _( "Region to hold the IPC/Scripting action buttons" ),
+                                                              { FRAME_SCH,
+                                                                FRAME_PCB_EDITOR } );
 
-ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::unitSelector( "control.UnitSelector", _( "Symbol unit selector" ),
-                                                              _( "Displays the current unit" ) );
+ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::layerSelector( "control.LayerSelector",
+                                                               _( "Layer selector" ),
+                                                               _( "Control to select the layer" ),
+                                                               { FRAME_PCB_EDITOR,
+                                                                 FRAME_FOOTPRINT_EDITOR,
+                                                                 FRAME_FOOTPRINT_VIEWER,
+                                                                 FRAME_GERBER } );
+
+ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::unitSelector( "control.UnitSelector",
+                                                              _( "Symbol unit selector" ),
+                                                              _( "Displays the current unit" ),
+                                                              { FRAME_SCH_SYMBOL_EDITOR,
+                                                                FRAME_SCH_VIEWER } );
 
 ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::bodyStyleSelector( "control.BodyStyleSelector",
                                                                    _( "Symbol body style selector" ),
-                                                                   _( "Displays the current body style" ) );
+                                                                   _( "Displays the current body style" ),
+                                                                   { FRAME_SCH_SYMBOL_EDITOR,
+                                                                     FRAME_SCH_VIEWER } );
 
-ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::overrideLocks( "control.OverrideLocks", _( "Override locks" ),
-                                                               _( "Allow moving of locked items with the mouse" ) );
+ACTION_TOOLBAR_CONTROL ACTION_TOOLBAR_CONTROLS::overrideLocks( "control.OverrideLocks",
+                                                               _( "Override locks" ),
+                                                               _( "Allow moving of locked items with the mouse" ),
+                                                               { FRAME_PCB_EDITOR } );

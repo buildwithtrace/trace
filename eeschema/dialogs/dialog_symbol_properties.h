@@ -33,6 +33,7 @@
 class LIB_SYMBOL;
 class SCH_PIN_TABLE_DATA_MODEL;
 class SCH_EDIT_FRAME;
+class PANEL_EMBEDDED_FILES;
 
 
 // The dialog can be closed for several reasons.
@@ -78,7 +79,6 @@ private:
     void OnGridCellChanging( wxGridEvent& event );
     void OnUpdateUI( wxUpdateUIEvent& event ) override;
     void OnCancelButtonClick( wxCommandEvent& event ) override;
-    void OnInitDlg( wxInitDialogEvent& event ) override;
     void OnGridEditorShown( wxGridEvent& event ) override;
     void OnGridEditorHidden( wxGridEvent& event ) override;
     void OnUnitChoice( wxCommandEvent& event ) override;
@@ -108,6 +108,7 @@ private:
 
     FIELDS_GRID_TABLE*        m_fields;
     SCH_PIN_TABLE_DATA_MODEL* m_dataModel;
+    PANEL_EMBEDDED_FILES*     m_embeddedFiles;
 };
 
 #endif // DIALOG_SYMBOL_PROPERTIES_H

@@ -72,6 +72,7 @@ set( KICAD_CLI_SRCS
     cli/command_pcb_export_stats.cpp
     cli/command_pcb_export_svg.cpp
     cli/command_pcb_upgrade.cpp
+    cli/command_pcb_import.cpp
     cli/command_fp_export_svg.cpp
     cli/command_fp_upgrade.cpp
     cli/command_sch_upgrade.cpp
@@ -105,18 +106,18 @@ if( APPLE )
         MACOSX_PACKAGE_LOCATION Resources
         )
     set( MACOSX_BUNDLE_ICON_FILE kicad.icns )
-    set( MACOSX_BUNDLE_GUI_IDENTIFIER org.kicad.kicad )
-    set( MACOSX_BUNDLE_NAME kicad )
+    set( MACOSX_BUNDLE_GUI_IDENTIFIER org.trace.trace )
+    set( MACOSX_BUNDLE_NAME Trace )
 endif()
 
-add_executable( kicad WIN32 MACOSX_BUNDLE
+add_executable( trace WIN32 MACOSX_BUNDLE
     kicad.cpp
     ${KICAD_SRCS}
     ${KICAD_EXTRA_SRCS}
     ${KICAD_RESOURCES}
     )
 
-add_executable( kicad-cli WIN32
+add_executable( trace-cli WIN32
     kicad_cli.cpp
     ${KICAD_CLI_SRCS}
     ${KICAD_EXTRA_SRCS}
@@ -125,16 +126,16 @@ add_executable( kicad-cli WIN32
 
 if( MSVC )
    # The cli needs subsystem:console or else we can't link wmain/main
-   set_target_properties(kicad-cli PROPERTIES COMPILE_DEFINITIONS_DEBUG "_CONSOLE")
-   set_target_properties(kicad-cli PROPERTIES COMPILE_DEFINITIONS_RELWITHDEBINFO "_CONSOLE")
-   set_target_properties(kicad-cli PROPERTIES LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE")
-   set_target_properties(kicad-cli PROPERTIES LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:CONSOLE")
-   set_target_properties(kicad-cli PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE")
-   set_target_properties(kicad-cli PROPERTIES LINK_FLAGS_MINSIZEREL "/SUBSYSTEM:CONSOLE")
+   set_target_properties(trace-cli PROPERTIES COMPILE_DEFINITIONS_DEBUG "_CONSOLE")
+   set_target_properties(trace-cli PROPERTIES COMPILE_DEFINITIONS_RELWITHDEBINFO "_CONSOLE")
+   set_target_properties(trace-cli PROPERTIES LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE")
+   set_target_properties(trace-cli PROPERTIES LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:CONSOLE")
+   set_target_properties(trace-cli PROPERTIES LINK_FLAGS_RELEASE "/SUBSYSTEM:CONSOLE")
+   set_target_properties(trace-cli PROPERTIES LINK_FLAGS_MINSIZEREL "/SUBSYSTEM:CONSOLE")
 
    # Allow running from build dir
-   add_custom_command( TARGET kicad POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:kicad>"
+   add_custom_command( TARGET trace POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:trace>"
         )
 endif()
 
@@ -149,59 +150,63 @@ if( UNIX )
 endif()
 
 if( APPLE )
-    set_target_properties( kicad PROPERTIES
+    set_target_properties( trace PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/kicad/Info.plist
         )
-    target_link_libraries( kicad
+    target_link_libraries( trace
         nlohmann_json
         common
+        pads_common
         kicommon
         core
         ${wxWidgets_LIBRARIES}
         )
 
-    set_target_properties( kicad-cli PROPERTIES
+    set_target_properties( trace-cli PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${OSX_BUNDLE_BUILD_BIN_DIR}
         )
 
-    target_link_libraries( kicad-cli
+    target_link_libraries( trace-cli
         nlohmann_json
         common
+        pads_common
         ${wxWidgets_LIBRARIES}
         core
         )
 else()
-    target_link_libraries( kicad
+    target_link_libraries( trace
         nlohmann_json
         common
         gal
         common      #repeated due to a circular dependency between gal and common
+        pads_common
         kicommon
         core
         ${wxWidgets_LIBRARIES}
         )
 
-    target_link_libraries( kicad-cli
+    target_link_libraries( trace-cli
         nlohmann_json
         common
         gal
         common      #repeated due to a circular dependency between gal and common
+        pads_common
         kicommon
         core
         ${wxWidgets_LIBRARIES}
         )
 endif()
 
-target_link_libraries( kicad pcm )
-target_link_libraries( kicad-cli pcm )
+target_link_libraries( trace pcm )
+target_link_libraries( trace-cli pcm )
 
-install( TARGETS kicad
+install( TARGETS trace
     DESTINATION ${KICAD_BIN}
     COMPONENT binary
     )
 
 if( NOT APPLE )
-    install( TARGETS kicad-cli
+    install( TARGETS trace-cli
         DESTINATION ${KICAD_BIN}
         COMPONENT binary
         )
@@ -209,7 +214,7 @@ endif()
 
 if( KICAD_WIN32_INSTALL_PDBS )
     # Get the PDBs to copy over for MSVC
-    install(FILES $<TARGET_PDB_FILE:kicad> DESTINATION ${KICAD_BIN})
+    install(FILES $<TARGET_PDB_FILE:trace> DESTINATION ${KICAD_BIN})
 endif()
 
 if( APPLE )
@@ -221,16 +226,17 @@ if( APPLE )
 
     if( PYTHON_FRAMEWORK )
         set( PYTHON_FRAMEWORK_HELPER "1" )
+        set_target_properties( trace PROPERTIES BUILD_RPATH ${PYTHON_FRAMEWORK} )
+        set_target_properties( trace PROPERTIES INSTALL_RPATH
+                "@executable_path/../Frameworks;@executable_path/../Frameworks/Python.framework" )
+        if( TARGET trace-cli )
+            set_target_properties( trace-cli PROPERTIES BUILD_RPATH ${PYTHON_FRAMEWORK} )
+            set_target_properties( trace-cli PROPERTIES INSTALL_RPATH
+                    "@executable_path/../Frameworks;@executable_path/../Frameworks/Python.framework" )
+        endif()
     else()
         set( PYTHON_FRAMEWORK_HELPER "0" )
     endif()
-
-    set_target_properties( kicad PROPERTIES BUILD_RPATH ${PYTHON_FRAMEWORK} )
-    set_target_properties( kicad PROPERTIES INSTALL_RPATH
-            "@executable_path/../Frameworks;@executable_path/../Frameworks/Python.framework" )
-    set_target_properties( kicad-cli PROPERTIES BUILD_RPATH ${PYTHON_FRAMEWORK} )
-    set_target_properties( kicad-cli PROPERTIES INSTALL_RPATH
-            "@executable_path/../Frameworks;@executable_path/../Frameworks/Python.framework" )
 
     install( CODE "
         set( KICAD_CMAKE_MODULE_PATH \"${KICAD_CMAKE_MODULE_PATH}\" )
@@ -243,7 +249,7 @@ if( APPLE )
         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )
 
         # Install the main bundle
-        install_runtime_deps( "${OSX_BUNDLE_INSTALL_BIN_DIR}/kicad"
+        install_runtime_deps( "${OSX_BUNDLE_INSTALL_BIN_DIR}/trace"
             ""
             ""
             )

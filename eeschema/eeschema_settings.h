@@ -38,6 +38,7 @@ extern const wxAuiPaneInfo& defaultPropertiesPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultSchSelectionFilterPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultDesignBlocksPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow );
+extern const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow );
 
 
 
@@ -111,6 +112,7 @@ public:
         int  remote_symbol_panel_docked_width;
         int  remote_symbol_panel_float_width;
         int  remote_symbol_panel_float_height;
+        bool ai_chat_show;
     };
 
     struct REMOTE_SYMBOL_CONFIG
@@ -237,6 +239,7 @@ public:
     {
         bool automatic;
         bool recursive;
+        bool regroup_units;
         int scope;
         int options;
         int messages_filter;
@@ -255,6 +258,7 @@ public:
         int                        selection_mode;
         int                        sash_pos;
         bool                       sidebar_collapsed;
+        int                        variant_sash_pos;
     };
 
     struct PANEL_LIB_VIEW
@@ -284,6 +288,7 @@ public:
     {
         bool crossprobe;
         bool scroll_on_crossprobe;
+        bool show_all_errors;
     };
 
     struct DIALOG_CHANGE_SYMBOLS

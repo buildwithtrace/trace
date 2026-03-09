@@ -445,7 +445,8 @@ void SIM_MODEL::ReadDataFields( const std::vector<SCH_FIELD>* aFields, bool aRes
 }
 
 
-void SIM_MODEL::WriteFields( std::vector<SCH_FIELD>& aFields ) const
+void SIM_MODEL::WriteFields( std::vector<SCH_FIELD>& aFields, const SCH_SHEET_PATH* aSheetPath,
+                             const wxString& aVariantName ) const
 {
     // Remove duplicate fields: they are at the end of list
     for( size_t ii = aFields.size() - 1; ii > 0; ii-- )
@@ -465,17 +466,19 @@ void SIM_MODEL::WriteFields( std::vector<SCH_FIELD>& aFields ) const
             aFields.erase( aFields.begin() + ii );
     }
 
-    SetFieldValue( aFields, SIM_DEVICE_FIELD, m_serializer->GenerateDevice(), false );
-    SetFieldValue( aFields, SIM_DEVICE_SUBTYPE_FIELD, m_serializer->GenerateDeviceSubtype(),
-                   false );
+    SetFieldValue( aFields, SIM_DEVICE_FIELD, m_serializer->GenerateDevice(), false,
+                   aSheetPath, aVariantName );
+    SetFieldValue( aFields, SIM_DEVICE_SUBTYPE_FIELD, m_serializer->GenerateDeviceSubtype(), false,
+                   aSheetPath, aVariantName );
 
-    SetFieldValue( aFields, SIM_LEGACY_ENABLE_FIELD_V7, m_serializer->GenerateEnable(), false );
-    SetFieldValue( aFields, SIM_PINS_FIELD, m_serializer->GeneratePins(), false );
+    SetFieldValue( aFields, SIM_LEGACY_ENABLE_FIELD_V7, m_serializer->GenerateEnable(), false,
+                   aSheetPath, aVariantName );
+    SetFieldValue( aFields, SIM_PINS_FIELD, m_serializer->GeneratePins(), false, aSheetPath, aVariantName );
 
-    SetFieldValue( aFields, SIM_PARAMS_FIELD, m_serializer->GenerateParams(), false );
+    SetFieldValue( aFields, SIM_PARAMS_FIELD, m_serializer->GenerateParams(), false, aSheetPath, aVariantName );
 
     if( IsStoredInValue() )
-        SetFieldValue( aFields, SIM_VALUE_FIELD, m_serializer->GenerateValue(), false );
+        SetFieldValue( aFields, SIM_VALUE_FIELD, m_serializer->GenerateValue(), false, aSheetPath, aVariantName );
 }
 
 
@@ -1182,7 +1185,13 @@ bool SIM_MODEL::InferSimModel( T& aSymbol, std::vector<SCH_FIELD>* aFields, bool
     wxString              library = GetFieldValue( aFields, SIM_LIBRARY_FIELD, aResolve, aDepth );
     wxString              modelName = GetFieldValue( aFields, SIM_NAME_FIELD, aResolve, aDepth );
     wxString              value = GetFieldValue( aFields, SIM_VALUE_FIELD, aResolve, aDepth );
-    std::vector<SCH_PIN*> pins = aSymbol.GetPins();
+    std::vector<SCH_PIN*> pins;
+
+    if constexpr (std::is_same_v<T, SCH_SYMBOL>)
+        pins = static_cast<SCH_SYMBOL*>( &aSymbol )->GetPins( nullptr );
+    else if constexpr (std::is_same_v<T, LIB_SYMBOL>)
+        pins = static_cast<LIB_SYMBOL*>( &aSymbol )->GetGraphicalPins( 0, 0 );
+
 
     // ensure the pins are sorted by number (not guaranteed in the symbol)
     // because the inferred spice model pin assignment here and elsewhere depends on
@@ -1518,8 +1527,13 @@ void SIM_MODEL::MigrateSimModel( T& aSymbol, const PROJECT* aProject )
 
     wxString              prefix = aSymbol.GetPrefix();
     SCH_FIELD*            valueField = aSymbol.GetField( FIELD_T::VALUE );
-    std::vector<SCH_PIN*> sourcePins = aSymbol.GetPins();
     bool                  sourcePinsSorted = false;
+    std::vector<SCH_PIN*> sourcePins;
+
+    if constexpr (std::is_same_v<T, SCH_SYMBOL>)
+        sourcePins = static_cast<SCH_SYMBOL*>( &aSymbol )->GetPins( nullptr );
+    else if constexpr (std::is_same_v<T, LIB_SYMBOL>)
+        sourcePins = static_cast<LIB_SYMBOL*>( &aSymbol )->GetGraphicalPins( 0, 0 );
 
     auto lazySortSourcePins =
             [&sourcePins, &sourcePinsSorted]()
@@ -1690,7 +1704,20 @@ void SIM_MODEL::MigrateSimModel( T& aSymbol, const PROJECT* aProject )
         }
 
         if( EMBEDDED_FILES* symbolEmbeddedFiles = aSymbol.GetEmbeddedFiles() )
+        {
             embeddedFilesStack.push_back( symbolEmbeddedFiles );
+
+            if constexpr (std::is_same_v<T, SCH_SYMBOL>)
+            {
+                SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( &aSymbol );
+                symbol->GetLibSymbolRef()->AppendParentEmbeddedFiles( embeddedFilesStack );
+            }
+            else if constexpr (std::is_same_v<T, LIB_SYMBOL>)
+            {
+                LIB_SYMBOL* symbol = static_cast<LIB_SYMBOL*>( &aSymbol );
+                symbol->AppendParentEmbeddedFiles( embeddedFilesStack );
+            }
+        }
 
         libMgr.SetFilesStack( std::move( embeddedFilesStack ) );
 

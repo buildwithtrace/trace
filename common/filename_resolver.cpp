@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2015-2020 Cirilo Bernardo <cirilo.bernardo@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -836,7 +837,8 @@ bool FILENAME_RESOLVER::GetKicadPaths( std::list< wxString >& paths ) const
     if( !m_pgm )
         return false;
 
-    bool hasKisys3D = false;
+    bool hasTrace3D = false;
+    bool hasKicad3D = false;
 
 
     // iterate over the list of internally defined ENV VARs
@@ -848,7 +850,8 @@ bool FILENAME_RESOLVER::GetKicadPaths( std::list< wxString >& paths ) const
     {
         // filter out URLs, template directories, and known system paths
         if( mS->first == wxS( "KICAD_PTEMPLATES" )
-            || mS->first.Matches( wxS( "KICAD*_FOOTPRINT_DIR") ) )
+            || mS->first.Matches( wxS( "KICAD*_FOOTPRINT_DIR") )
+            || mS->first.Matches( wxS( "TRACE*_FOOTPRINT_DIR") ) )
         {
             ++mS;
             continue;
@@ -863,14 +866,20 @@ bool FILENAME_RESOLVER::GetKicadPaths( std::list< wxString >& paths ) const
         //also add the path without the ${} to act as legacy alias support for older files
         paths.push_back( mS->first );
 
+        if( mS->first.Matches( wxS("TRACE*_3DMODEL_DIR") ) )
+            hasTrace3D = true;
+
         if( mS->first.Matches( wxS("KICAD*_3DMODEL_DIR") ) )
-            hasKisys3D = true;
+            hasKicad3D = true;
 
         ++mS;
     }
 
-    if( !hasKisys3D )
-        paths.emplace_back( ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
+    if( !hasTrace3D )
+        paths.emplace_back( ENV_VAR::GetTraceVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
+
+    if( !hasKicad3D )
+        paths.emplace_back( ENV_VAR::GetKicadVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
 
     return true;
 }

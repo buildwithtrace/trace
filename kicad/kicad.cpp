@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2004-2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,6 +35,8 @@
 #include <wx/stdpaths.h>
 #include <wx/msgdlg.h>
 #include <wx/cmdline.h>
+#include <wx/file.h>
+#include <wx/utils.h>
 
 #include <env_vars.h>
 #include <file_history.h>
@@ -60,6 +63,11 @@
 
 #include <kiplatform/app.h>
 #include <kiplatform/environment.h>
+#include <auth/auth_manager.h>
+#include <amplitude_client.h>
+#include <chrono>
+
+static std::chrono::steady_clock::time_point s_appLaunchTime;
 
 #ifdef KICAD_IPC_API
 #include <api/api_server.h>
@@ -69,6 +77,11 @@
 #include <kiface_base.h>
 
 #include <libraries/library_manager.h>
+
+#if defined( __WXMSW__ )
+// Forward declaration for URL protocol registration
+void RegisterTraceProtocol( bool aSilent );
+#endif
 
 
 KIFACE_BASE& Kiface()
@@ -92,7 +105,7 @@ PGM_KICAD& PgmTop()
 
 bool PGM_KICAD::OnPgmInit()
 {
-    App().SetAppDisplayName( wxT( "KiCad" ) );
+    Pgm().App().SetAppDisplayName( wxT( "Trace" ) );
 
 #if defined(DEBUG)
     wxString absoluteArgv0 = wxStandardPaths::Get().GetExecutablePath();
@@ -103,6 +116,7 @@ bool PGM_KICAD::OnPgmInit()
         return false;
     }
 #endif
+
 
     // Initialize the git backend before trying to initialize individual programs
     SetGitBackend( new LIBGIT_BACKEND() );
@@ -121,7 +135,7 @@ bool PGM_KICAD::OnPgmInit()
         { wxCMD_LINE_NONE, nullptr, nullptr, nullptr, wxCMD_LINE_VAL_NONE, 0 }
     };
 
-    wxCmdLineParser parser( App().argc, App().argv );
+    wxCmdLineParser parser( Pgm().App().argc, Pgm().App().argv );
     parser.SetDesc( desc );
     parser.Parse( false );
 
@@ -186,6 +200,23 @@ bool PGM_KICAD::OnPgmInit()
     if( !InitPgm( false, skipPythonInit ) )
         return false;
 
+    // Set library environment variables at runtime using stock paths
+    // This ensures paths are correct regardless of where Trace is installed
+#ifdef _WIN32
+    wxString symbolPath = PATHS::GetStockSymbolsPath();
+    wxString footprintPath = PATHS::GetStockFootprintsPath();
+    wxString model3dPath = PATHS::GetStock3dmodelsPath();
+    
+    // Only set if the directories exist (they won't exist in dev builds)
+    if( wxDirExists( symbolPath ) )
+        wxSetEnv( "KICAD9_SYMBOL_DIR", symbolPath );
+    
+    if( wxDirExists( footprintPath ) )
+        wxSetEnv( "KICAD9_FOOTPRINT_DIR", footprintPath );
+    
+    if( wxDirExists( model3dPath ) )
+        wxSetEnv( "KICAD9_3DMODEL_DIR", model3dPath );
+#endif
 
     m_bm.InitSettings( new KICAD_SETTINGS );
     GetSettingsManager().RegisterSettings( PgmSettings() );
@@ -204,7 +235,7 @@ bool PGM_KICAD::OnPgmInit()
         {
             wxFileName fn( bases[i], wxEmptyString );
 
-            // Add KiCad template file path to search path list.
+            // Add Trace template file path to search path list.
             fn.AppendDir( wxT( "template" ) );
 
             // Only add path if exists and can be read by the user.
@@ -224,12 +255,39 @@ bool PGM_KICAD::OnPgmInit()
         // The default user search path is inside KIPLATFORM::ENV::GetDocumentsPath()
         m_bm.m_search.Insert( PATHS::GetUserTemplatesPath(), 0 );
 
-        // ...but the user can override that default with the KICAD_USER_TEMPLATE_DIR env var
-        ENV_VAR_MAP_CITER it = GetLocalEnvVariables().find( "KICAD_USER_TEMPLATE_DIR" );
+        // ...but the user can override that default with the TRACE_USER_TEMPLATE_DIR env var
+        ENV_VAR_MAP_CITER it = GetLocalEnvVariables().find( "TRACE_USER_TEMPLATE_DIR" );
 
         if( it != GetLocalEnvVariables().end() && it->second.GetValue() != wxEmptyString )
             m_bm.m_search.Insert( it->second.GetValue(), 0 );
     }
+
+    // Restore authentication session from keychain before creating any frames
+    // This ensures the Account menu shows the correct state in all windows
+    AUTH_MANAGER::Instance().TryRestoreSession();
+
+    // Initialize Amplitude analytics
+    AMPLITUDE_CLIENT::Instance().Init( AMPLITUDE_API_KEY );
+    if( AUTH_MANAGER::Instance().IsAuthenticated() )
+    {
+        AUTH_USER user = AUTH_MANAGER::Instance().GetCurrentUser();
+        AMPLITUDE_CLIENT::Instance().SetUserId( user.id.ToStdString() );
+        AMPLITUDE_CLIENT::Instance().SetUserProperties( {
+            { "email", user.email.ToStdString() }
+        } );
+        AMPLITUDE_CLIENT::Instance().IdentifyUser();
+    }
+    s_appLaunchTime = std::chrono::steady_clock::now();
+    AMPLITUDE_CLIENT::Instance().Track( "app_launched", {
+        { "authenticated", AUTH_MANAGER::Instance().IsAuthenticated() },
+#ifdef __WXMAC__
+        { "platform", "macos" },
+#elif defined( _WIN32 )
+        { "platform", "windows" },
+#else
+        { "platform", "linux" },
+#endif
+    } );
 
     wxFrame*      frame = nullptr;
     KIWAY_PLAYER* playerFrame = nullptr;
@@ -237,7 +295,7 @@ bool PGM_KICAD::OnPgmInit()
 
     if( appType == KICAD_MAIN_FRAME_T )
     {
-        managerFrame = new KICAD_MANAGER_FRAME( nullptr, wxT( "KiCad" ), wxDefaultPosition,
+        managerFrame = new KICAD_MANAGER_FRAME( nullptr, wxT( "Trace" ), wxDefaultPosition,
                                                 wxWindow::FromDIP( wxSize( 775, -1 ), NULL ) );
         frame = managerFrame;
 
@@ -258,10 +316,10 @@ bool PGM_KICAD::OnPgmInit()
         }
     }
 
-    App().SetTopWindow( frame );
+    Pgm().App().SetTopWindow( frame );
 
     if( playerFrame )
-        App().SetAppDisplayName( playerFrame->GetAboutTitle() );
+        Pgm().App().SetAppDisplayName( playerFrame->GetAboutTitle() );
 
     Kiway.SetTop( frame );
 
@@ -337,7 +395,12 @@ bool PGM_KICAD::OnPgmInit()
     {
         if( parser.GetParamCount() > 0 )
         {
-            wxFileName tmp = parser.GetParam( 0 );
+            wxString param0 = parser.GetParam( 0 );
+            
+            // Skip trace:// URLs - these are auth callbacks, not project files
+            if( !param0.StartsWith( wxT( "trace://" ) ) )
+            {
+                wxFileName tmp( param0 );
 
             if( tmp.GetExt() != FILEEXT::ProjectFileExtension && tmp.GetExt() != FILEEXT::LegacyProjectFileExtension )
             {
@@ -348,11 +411,18 @@ bool PGM_KICAD::OnPgmInit()
             else
             {
                 projToLoad = tmp.GetFullPath();
+                }
             }
         }
 
         // If no file was given as an argument, check that there was a file open.
-        if( projToLoad.IsEmpty() && settings->m_OpenProjects.size() && !parser.FoundSwitch( "new" ) )
+        // But skip loading previous projects if this is an auth callback instance
+        bool isAuthCallback = false;
+        wxString authCallbackUrl;
+        if( wxGetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), &authCallbackUrl ) )
+            isAuthCallback = true;
+            
+        if( projToLoad.IsEmpty() && settings->m_OpenProjects.size() && !parser.FoundSwitch( "new" ) && !isAuthCallback )
         {
             wxString last_pro = settings->m_OpenProjects.front();
             settings->m_OpenProjects.erase( settings->m_OpenProjects.begin() );
@@ -365,6 +435,8 @@ bool PGM_KICAD::OnPgmInit()
             }
         }
 
+        bool loaded = false;
+
         // Do not attempt to load a non-existent project file.
         if( !projToLoad.empty() )
         {
@@ -376,9 +448,12 @@ bool PGM_KICAD::OnPgmInit()
                 fn.MakeAbsolute();
 
                 if( appType == KICAD_MAIN_FRAME_T )
-                    managerFrame->LoadProject( fn );
+                    loaded = managerFrame->LoadProject( fn );
             }
         }
+
+        if( !loaded && appType == KICAD_MAIN_FRAME_T )
+            managerFrame->PreloadAllLibraries();
     }
 
     frame->Show( true );
@@ -400,6 +475,13 @@ int PGM_KICAD::OnPgmRun()
 
 void PGM_KICAD::OnPgmExit()
 {
+    double sessionMinutes = std::chrono::duration<double, std::ratio<60>>(
+        std::chrono::steady_clock::now() - s_appLaunchTime ).count();
+    AMPLITUDE_CLIENT::Instance().Track( "app_closed", {
+        { "session_duration_minutes", sessionMinutes }
+    });
+    AMPLITUDE_CLIENT::Destroy();
+
     // Abort and wait on any background jobs
     GetKiCadThreadPool().purge();
     GetKiCadThreadPool().wait();
@@ -430,7 +512,7 @@ void PGM_KICAD::MacOpenFile( const wxString& aFileName )
 {
 #if defined(__WXMAC__)
 
-    KICAD_MANAGER_FRAME* frame = (KICAD_MANAGER_FRAME*) App().GetTopWindow();
+    KICAD_MANAGER_FRAME* frame = (KICAD_MANAGER_FRAME*) Pgm().App().GetTopWindow();
 
     if( !aFileName.empty() && wxFileExists( aFileName ) )
         frame->LoadProject( wxFileName( aFileName ) );
@@ -480,6 +562,67 @@ struct APP_KICAD : public wxApp
 
     bool OnInit()           override
     {
+#if defined( __WXMSW__ )
+        // CRITICAL: Handle URL protocol registration FIRST, before any initialization
+        // This must be at the absolute start before any Python or platform init
+        if( this->argc >= 2 )
+        {
+            wxString arg1 = this->argv[1];
+            if( arg1 == wxT( "--register-protocol" ) )
+            {
+                RegisterTraceProtocol( false ); // With GUI dialogs
+                return false; // Exit immediately
+            }
+            else if( arg1 == wxT( "--register-protocol-silent" ) )
+            {
+                RegisterTraceProtocol( true );  // Silent for CMake install
+                return false; // Exit immediately
+            }
+        }
+
+        // CRITICAL: Clear Python environment variables BEFORE any initialization
+        // This prevents conflicts between system Python and vcpkg Python
+        wxSetEnv( wxT("PYTHONHOME"), wxEmptyString );
+        wxSetEnv( wxT("PYTHONPATH"), wxEmptyString );
+        
+        // Windows: Set library paths for AI/Python conversion
+        // Check if running from build or install directory and set paths accordingly
+        #if defined(TRACE_WIN_SYMBOL_PATH_BUILD) && defined(TRACE_WIN_SYMBOL_PATH_INSTALL)
+        {
+            wxFileName exePath( wxStandardPaths::Get().GetExecutablePath() );
+            wxString exeDir = exePath.GetPath();
+            
+            // Determine if running from build or install directory
+            // Build directory contains pattern like "build/msvc-win64-release/kicad/trace.exe"
+            // Install directory contains pattern like "build/install/msvc-win64-release/bin/trace.exe"
+            bool isInstallDir = exeDir.Contains( wxT("install") ) || 
+                               !exeDir.Contains( wxT("build") );
+            
+            wxString symbolPath, footprintPath, modelPath;
+            
+            if( isInstallDir )
+            {
+                // Running from install directory
+                symbolPath = wxT(TRACE_WIN_SYMBOL_PATH_INSTALL);
+                footprintPath = wxT(TRACE_WIN_FOOTPRINT_PATH_INSTALL);
+                modelPath = wxT(TRACE_WIN_3DMODEL_PATH_INSTALL);
+            }
+            else
+            {
+                // Running from build directory  
+                symbolPath = wxT(TRACE_WIN_SYMBOL_PATH_BUILD);
+                footprintPath = wxT(TRACE_WIN_FOOTPRINT_PATH_BUILD);
+                modelPath = wxT(TRACE_WIN_3DMODEL_PATH_BUILD);
+            }
+            
+            // Set environment variables for Python scripts to use
+            wxSetEnv( wxT("KICAD9_SYMBOL_DIR"), symbolPath );
+            wxSetEnv( wxT("KICAD9_FOOTPRINT_DIR"), footprintPath );
+            wxSetEnv( wxT("KICAD9_3DMODEL_DIR"), modelPath );
+        }
+        #endif
+#endif
+
 #ifdef NDEBUG
         // These checks generate extra assert noise
         wxSizerFlags::DisableConsistencyChecks();
@@ -502,16 +645,45 @@ struct APP_KICAD : public wxApp
         }
 #endif
 
+#if defined( __WXMSW__ )
+        // On Windows, check if we were launched with a trace:// URL (auth callback)
+        for( int i = 1; i < this->argc; ++i )
+        {
+            wxString arg = this->argv[i];
+            if( arg.StartsWith( wxT( "trace://" ) ) )
+            {
+                // This is an auth callback - handle it and notify any existing instance
+                // For now, just set a flag so we can handle it after init
+                wxSetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), arg );
+                break;
+            }
+        }
+#endif
+
         if( !program.OnPgmInit() )
         {
             program.OnPgmExit();
             return false;
         }
 
+#if defined( __WXMSW__ )
+        // Handle any pending auth callback
+        wxString authCallbackUrl;
+        if( wxGetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ), &authCallbackUrl ) )
+        {
+            wxUnsetEnv( wxT( "TRACE_AUTH_CALLBACK_URL" ) );
+            AUTH_MANAGER::Instance().HandleURLCallback( authCallbackUrl );
+            
+            // Auth callback instance should exit immediately after handling the callback
+            // This prevents duplicate windows and ensures the main instance detects the change
+            return false;  // Exit the callback instance
+        }
+#endif
+
         return true;
     }
 
-    int  OnExit()           override
+    int OnExit() override
     {
         program.OnPgmExit();
 
@@ -521,7 +693,8 @@ struct APP_KICAD : public wxApp
         return wxApp::OnExit();
     }
 
-    int OnRun()             override
+
+    int OnRun() override
     {
         try
         {
@@ -534,6 +707,13 @@ struct APP_KICAD : public wxApp
 
         return -1;
     }
+
+
+    void OnUnhandledException() override
+    {
+        Pgm().HandleException( std::current_exception(), true );
+    }
+
 
     int FilterEvent( wxEvent& aEvent ) override
     {
@@ -618,8 +798,117 @@ struct APP_KICAD : public wxApp
     {
         Pgm().MacOpenFile( aFileName );
     }
+    
+    /**
+     * Handle custom URL scheme callbacks (trace://auth).
+     * Used for OAuth authentication flow on macOS.
+     */
+    void MacOpenURL( const wxString& aURL ) override
+    {
+        wxLogDebug( wxT( "MacOpenURL called with: %s" ), aURL );
+        
+        if( aURL.StartsWith( wxT( "trace://auth" ) ) )
+        {
+            bool result = AUTH_MANAGER::Instance().HandleURLCallback( aURL );
+            wxLogDebug( wxT( "HandleURLCallback returned: %d" ), result );
+
+            if( result )
+            {
+                CallAfter( [this]()
+                {
+                    wxWindow* top = GetTopWindow();
+                    if( top )
+                    {
+                        top->Raise();
+                        if( auto* tlw = dynamic_cast<wxTopLevelWindow*>( top ) )
+                            tlw->RequestUserAttention();
+                    }
+                } );
+            }
+        }
+        else
+        {
+            // Any other trace:// URL -- just bring the app to the foreground
+            CallAfter( [this]()
+            {
+                wxWindow* top = GetTopWindow();
+                if( top )
+                    top->Raise();
+            } );
+        }
+    }
 #endif
 };
+
+
+#if defined( __WXMSW__ )
+#include <windows.h>
+
+/**
+ * Register the trace:// URL protocol for Windows authentication callbacks.
+ * Uses Windows Registry API directly - no elevation needed for HKEY_CURRENT_USER.
+ * 
+ * @param aSilent If true, suppress GUI dialogs (for automated installation)
+ */
+void RegisterTraceProtocol( bool aSilent )
+{
+    wxString exePath = wxStandardPaths::Get().GetExecutablePath();
+    wxString command = wxString::Format( wxT("\"%s\" \"%%1\""), exePath );
+    
+    HKEY hKey = NULL;
+    LONG result;
+    bool success = true;
+    
+    // Create trace protocol key
+    result = RegCreateKeyExW( HKEY_CURRENT_USER, L"SOFTWARE\\Classes\\trace", 
+                              0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL );
+    if( result == ERROR_SUCCESS )
+    {
+        const wchar_t* urlProtocol = L"URL:Trace Protocol";
+        RegSetValueExW( hKey, NULL, 0, REG_SZ, (const BYTE*)urlProtocol, 
+                       (wcslen(urlProtocol) + 1) * sizeof(wchar_t) );
+        RegSetValueExW( hKey, L"URL Protocol", 0, REG_SZ, (const BYTE*)L"", sizeof(wchar_t) );
+        RegCloseKey( hKey );
+    }
+    else
+    {
+        success = false;
+    }
+    
+    // Create shell\open\command key
+    result = RegCreateKeyExW( HKEY_CURRENT_USER, L"SOFTWARE\\Classes\\trace\\shell\\open\\command",
+                              0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL );
+    if( result == ERROR_SUCCESS )
+    {
+        std::wstring cmdWide = command.ToStdWstring();
+        RegSetValueExW( hKey, NULL, 0, REG_SZ, (const BYTE*)cmdWide.c_str(), 
+                       (cmdWide.length() + 1) * sizeof(wchar_t) );
+        RegCloseKey( hKey );
+    }
+    else
+    {
+        success = false;
+    }
+    
+    // Provide feedback only if not silent
+    if( !aSilent )
+    {
+        if( success )
+        {
+            wxMessageBox( wxT("Trace URL protocol registered successfully.\n")
+                         wxT("Authentication callbacks will now work properly."),
+                         wxT("Registration Complete"), wxOK | wxICON_INFORMATION );
+        }
+        else
+        {
+            wxMessageBox( wxT("Failed to register Trace URL protocol.\n")
+                         wxT("You may need to run as administrator."),
+                         wxT("Registration Failed"), wxOK | wxICON_WARNING );
+        }
+    }
+}
+#endif
+
 
 IMPLEMENT_APP( APP_KICAD )
 

@@ -24,8 +24,14 @@
 #include "project_git_utils.h"
 #include "git_backend.h"
 
+#include <wx/filename.h>
 #include <wx/string.h>
 #include <string_utils.h>
+
+#ifndef __WINDOWS__
+#include <climits>
+#include <cstdlib>
+#endif
 
 namespace KIGIT
 {
@@ -35,16 +41,19 @@ git_repository* PROJECT_GIT_UTILS::GetRepositoryForFile( const char* aFilename )
     return GetGitBackend()->GetRepositoryForFile( aFilename );
 }
 
+
 int PROJECT_GIT_UTILS::CreateBranch( git_repository* aRepo, const wxString& aBranchName )
 {
     return GetGitBackend()->CreateBranch( aRepo, aBranchName );
 }
 
+
 bool PROJECT_GIT_UTILS::RemoveVCS( git_repository*& aRepo, const wxString& aProjectPath,
-                                  bool aRemoveGitDir, wxString* aErrors )
+                                   bool aRemoveGitDir, wxString* aErrors )
 {
     return GetGitBackend()->RemoveVCS( aRepo, aProjectPath, aRemoveGitDir, aErrors );
 }
+
 
 wxString PROJECT_GIT_UTILS::GetCurrentHash( const wxString& aProjectFile, bool aShort )
 {
@@ -55,7 +64,7 @@ wxString PROJECT_GIT_UTILS::GetCurrentHash( const wxString& aProjectFile, bool a
     {
         git_reference* head = nullptr;
 
-    if( git_repository_head( &head, repo ) == 0 )
+        if( git_repository_head( &head, repo ) == 0 )
         {
             const git_oid* oid = git_reference_target( head );
 
@@ -74,6 +83,81 @@ wxString PROJECT_GIT_UTILS::GetCurrentHash( const wxString& aProjectFile, bool a
     }
 
     return result;
+}
+
+
+wxString PROJECT_GIT_UTILS::ComputeSymlinkPreservingWorkDir( const wxString& aUserProjectPath,
+                                                             const wxString& aCanonicalWorkDir )
+{
+#ifdef __WINDOWS__
+    return aCanonicalWorkDir;
+#else
+    if( aUserProjectPath.IsEmpty() || aCanonicalWorkDir.IsEmpty() )
+        return aCanonicalWorkDir;
+
+    char resolvedPath[PATH_MAX];
+
+    if( realpath( aUserProjectPath.mb_str(), resolvedPath ) == nullptr )
+        return aCanonicalWorkDir;
+
+    wxString canonicalUserPath = wxString::FromUTF8( resolvedPath );
+
+    if( !canonicalUserPath.EndsWith( wxFileName::GetPathSeparator() ) )
+        canonicalUserPath += wxFileName::GetPathSeparator();
+
+    wxString canonicalWorkDirNorm = aCanonicalWorkDir;
+
+    if( !canonicalWorkDirNorm.EndsWith( wxFileName::GetPathSeparator() ) )
+        canonicalWorkDirNorm += wxFileName::GetPathSeparator();
+
+    // The workdir could be at or above the project directory
+    if( canonicalUserPath.StartsWith( canonicalWorkDirNorm ) )
+    {
+        return aUserProjectPath.EndsWith( wxFileName::GetPathSeparator() )
+                   ? aUserProjectPath
+                   : aUserProjectPath + wxFileName::GetPathSeparator();
+    }
+
+    // The workdir is above the user path - find the portion that corresponds to the workdir
+    wxFileName userFn( aUserProjectPath );
+    wxFileName workDirFn( aCanonicalWorkDir );
+    wxArrayString workDirParts = workDirFn.GetDirs();
+    size_t workDirDepth = workDirParts.GetCount();
+
+    wxFileName canonicalUserFn( canonicalUserPath );
+    wxArrayString canonicalUserParts = canonicalUserFn.GetDirs();
+
+    if( canonicalUserParts.GetCount() < workDirDepth )
+        return aCanonicalWorkDir;
+
+    wxArrayString canonicalWorkDirParts = workDirFn.GetDirs();
+
+    for( size_t i = 0; i < workDirDepth; ++i )
+    {
+        if( canonicalUserParts[i] != canonicalWorkDirParts[i] )
+            return aCanonicalWorkDir;
+    }
+
+    wxArrayString userParts = userFn.GetDirs();
+
+    if( userParts.GetCount() < workDirDepth )
+        return aCanonicalWorkDir;
+
+    wxString result = userFn.GetVolume();
+
+    if( !result.IsEmpty() )
+        result += wxFileName::GetVolumeSeparator();
+
+    result += wxFileName::GetPathSeparator();
+
+    for( size_t i = 0; i < workDirDepth; ++i )
+    {
+        result += userParts[i];
+        result += wxFileName::GetPathSeparator();
+    }
+
+    return result;
+#endif
 }
 
 } // namespace KIGIT

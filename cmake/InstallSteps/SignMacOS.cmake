@@ -44,13 +44,13 @@ function( sign_kicad_bundle target signing_id use_secure_timestamp use_hardened_
     file( GLOB_RECURSE translations "${target}/Contents/SharedSupport/internat/*.mo" )
 
     # add all the files in Contents/MacOS/
-    # But we've gotta sign kicad-cli before signing kicad, at least on x86_64
+    # But we've gotta sign kicad-cli before signing trace, at least on x86_64
     set( kicad_bins "${target}/Contents/MacOS/dxf2idf"
             "${target}/Contents/MacOS/idf2vrml"
             "${target}/Contents/MacOS/idfcyl"
             "${target}/Contents/MacOS/idfrect"
             "${target}/Contents/MacOS/kicad-cli"
-            "${target}/Contents/MacOS/kicad")
+            "${target}/Contents/MacOS/trace")
 
     set( sign_list ${sign_list} ${framework_dylibs} ${plugins} ${translations} ${kicad_bins} ) # do i need to quote this differently?
 

@@ -2,6 +2,7 @@
 * This program source code file is part of KiCad, a free EDA CAD application.
 *
 * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
 *
 * This program is free software; you can redistribute it and/or
 * modify it under the terms of the GNU General Public License
@@ -119,6 +120,7 @@ const wxAuiPaneInfo& defaultSchSelectionFilterPaneInfo( wxWindow* aWindow )
             .TopDockable( false )
             .BottomDockable( false )
             .CloseButton( true )
+            // Fixed-size pane; -1 for MinSize height is required
             .MinSize( aWindow->FromDIP( wxSize( 180, -1 ) ) )
             .BestSize( aWindow->FromDIP( wxSize( 180, -1 ) ) )
             .Show( true );
@@ -166,6 +168,28 @@ const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow )
             .FloatingSize( aWindow->FromDIP( wxSize( 800, 600 ) ) )
             .FloatingPosition( aWindow->FromDIP( wxPoint( 80, 220 ) ) )
             .Show( false );
+
+    return paneInfo;
+}
+
+
+const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow )
+{
+    static wxAuiPaneInfo paneInfo;
+
+    paneInfo.Name( wxS( "AIChat" ) )
+            .Caption( _( "AI Agent" ) )
+            .CaptionVisible( false )
+            .PaneBorder( false )
+            .Right().Layer( 3 ).Position( 0 )
+            .TopDockable( false )
+            .BottomDockable( false )
+            .CloseButton( false )
+            .MinSize( aWindow->FromDIP( wxSize( 300, 200 ) ) )
+            .BestSize( aWindow->FromDIP( wxSize( 350, 500 ) ) )
+            .FloatingSize( aWindow->FromDIP( wxSize( 400, 600 ) ) )
+            .FloatingPosition( aWindow->FromDIP( wxPoint( 100, 100 ) ) )
+            .Show( true );
 
     return paneInfo;
 }
@@ -300,6 +324,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<int>( "aui.remote_symbol_panel_float_height",
             &m_AuiPanels.remote_symbol_panel_float_height, -1 ) );
+
+    m_params.emplace_back( new PARAM<bool>( "aui.ai_chat_show",
+            &m_AuiPanels.ai_chat_show, true ) );
 
     m_params.emplace_back( new PARAM<bool>( "aui.schematic_hierarchy_float",
             &m_AuiPanels.schematic_hierarchy_float, false ) );
@@ -478,6 +505,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<bool>( "annotation.recursive",
             &m_AnnotatePanel.recursive, true ) );
 
+    m_params.emplace_back( new PARAM<bool>( "annotation.regroup_units",
+            &m_AnnotatePanel.regroup_units, false ) );
+
     m_params.emplace_back( new PARAM<int>( "annotation.scope",
             &m_AnnotatePanel.scope, 0, 0, 2 ) );
 
@@ -574,6 +604,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<int>( "field_editor.sash_pos",
             &m_FieldEditorPanel.sash_pos, 400 ) );
 
+    m_params.emplace_back( new PARAM<int>( "field_editor.variant_sash_pos",
+            &m_FieldEditorPanel.variant_sash_pos, 500 ) );
+
     m_params.emplace_back( new PARAM<bool>( "field_editor.sidebar_collapsed",
             &m_FieldEditorPanel.sidebar_collapsed, false ) );
 
@@ -641,6 +674,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "ERC.scroll_on_crossprobe",
             &m_ERCDialog.scroll_on_crossprobe, true ) );
+
+    m_params.emplace_back( new PARAM<bool>( "ERC.show_all_errors",
+            &m_ERCDialog.show_all_errors, false ) );
 
     m_params.emplace_back( new PARAM<bool>( "change_symbols.update_references",
             &m_ChangeSymbols.updateReferences, false ) );

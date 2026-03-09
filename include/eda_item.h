@@ -110,7 +110,7 @@ public:
     inline KICAD_T Type() const { return m_structType; }
 
     EDA_ITEM* GetParent() const { return m_parent; }
-    virtual void SetParent( EDA_ITEM* aParent )   { m_parent = aParent; }
+    virtual void SetParent( EDA_ITEM* aParent );
 
     virtual void SetParentGroup( EDA_GROUP* aGroup ) { m_group = aGroup; }
     virtual EDA_GROUP* GetParentGroup() const { return m_group; }
@@ -129,7 +129,12 @@ public:
     inline bool IsBrightened() const { return m_flags & BRIGHTENED; }
 
     inline bool IsRollover() const { return m_isRollover; }
-    inline void SetIsRollover( bool aIsRollover ) { m_isRollover = aIsRollover; }
+    inline VECTOR2I GetRolloverPos() const { return m_rolloverPos; }
+    inline void SetIsRollover( bool aIsRollover, const VECTOR2I& aMousePos )
+    {
+        m_isRollover = aIsRollover;
+        m_rolloverPos = aMousePos;
+    }
 
     inline void SetSelected() { SetFlags( SELECTED ); }
     inline void SetBrightened() { SetFlags( BRIGHTENED ); }
@@ -527,8 +532,10 @@ protected:
     EDA_ITEM_FLAGS m_flags;
     EDA_ITEM*      m_parent;        ///< Owner.
     EDA_GROUP*     m_group;         ///< The group this item belongs to, if any.  No ownership implied.
-    bool           m_forceVisible;
-    bool           m_isRollover;
+
+    VECTOR2I m_rolloverPos;
+    bool     m_isRollover;
+    bool     m_forceVisible;
 };
 
 

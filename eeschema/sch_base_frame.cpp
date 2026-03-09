@@ -60,6 +60,7 @@
 #include <view/view_controls.h>
 #include <widgets/kistatusbar.h>
 #include <wx/choicdlg.h>
+#include <wx/evtloop.h>
 #include <wx/fswatcher.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
@@ -653,14 +654,13 @@ void SCH_BASE_FRAME::handleIconizeEvent( wxIconizeEvent& aEvent )
 void SCH_BASE_FRAME::GetLibraryItemsForListDialog( wxArrayString& aHeaders,
                                                    std::vector<wxArrayString>& aItemsToDisplay )
 {
-    COMMON_SETTINGS*      cfg = Pgm().GetCommonSettings();
-    PROJECT_FILE&         project = Prj().GetProjectFile();
-    SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-    std::vector<wxString> libNicknames = adapter->GetLibraryNames();
-
     aHeaders.Add( _( "Library" ) );
     aHeaders.Add( _( "Description" ) );
 
+    COMMON_SETTINGS*           cfg = Pgm().GetCommonSettings();
+    PROJECT_FILE&              project = Prj().GetProjectFile();
+    SYMBOL_LIBRARY_ADAPTER*    adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
+    std::vector<wxString>      libNicknames = adapter->GetLibraryNames();
     std::vector<wxArrayString> unpinned;
 
     for( const wxString& nickname : libNicknames )
@@ -810,6 +810,11 @@ void SCH_BASE_FRAME::setSymWatcher( const LIB_ID* aID )
     wxLog::EnableLogging( false );
     m_watcherLastModified = m_watcherFileName.GetModificationTime();
     wxLog::EnableLogging( true );
+
+    // File system watcher requires an active event loop. If we're being called during
+    // library enumeration before the main event loop is running, skip watcher creation.
+    if( !wxEventLoopBase::GetActive() )
+        return;
 
     Bind( wxEVT_FSWATCHER, &SCH_BASE_FRAME::OnSymChange, this );
     m_watcher = std::make_unique<wxFileSystemWatcher>();

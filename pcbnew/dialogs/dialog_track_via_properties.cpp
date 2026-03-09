@@ -130,6 +130,7 @@ DIALOG_TRACK_VIA_PROPERTIES::DIALOG_TRACK_VIA_PROPERTIES( PCB_BASE_EDIT_FRAME* a
 
     wxFont infoFont = KIUI::GetSmallInfoFont( this );
     m_techLayersLabel->SetFont( infoFont );
+    m_postMachineSectionLabel->SetFont( infoFont );
 
     m_frame->Bind( EDA_EVT_UNITS_CHANGED, &DIALOG_TRACK_VIA_PROPERTIES::onUnitsChanged, this );
     m_netSelector->Bind( FILTERED_ITEM_SELECTED, &DIALOG_TRACK_VIA_PROPERTIES::onNetSelector, this );
@@ -202,10 +203,10 @@ bool DIALOG_TRACK_VIA_PROPERTIES::TransferDataToWindow()
                 switch( via->Padstack().UnconnectedLayerMode() )
                 {
                 default:
-                case PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL:                    return 0;
-                case PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END: return 1;
-                case PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL:                  return 2;
-                case PADSTACK::UNCONNECTED_LAYER_MODE::START_END_ONLY:              return 3;
+                case UNCONNECTED_LAYER_MODE::KEEP_ALL:                    return 0;
+                case UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END: return 1;
+                case UNCONNECTED_LAYER_MODE::REMOVE_ALL:                  return 2;
+                case UNCONNECTED_LAYER_MODE::START_END_ONLY:              return 3;
                 }
             };
 
@@ -1180,20 +1181,16 @@ bool DIALOG_TRACK_VIA_PROPERTIES::TransferDataFromWindow()
                 switch( m_annularRingsCtrl->GetSelection() )
                 {
                 case 0:
-                    via->Padstack().SetUnconnectedLayerMode(
-                            PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL );
+                    via->Padstack().SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::KEEP_ALL );
                     break;
                 case 1:
-                    via->Padstack().SetUnconnectedLayerMode(
-                            PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END );
+                    via->Padstack().SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END );
                     break;
                 case 2:
-                    via->Padstack().SetUnconnectedLayerMode(
-                            PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL );
+                    via->Padstack().SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::REMOVE_ALL );
                     break;
                 case 3:
-                    via->Padstack().SetUnconnectedLayerMode(
-                            PADSTACK::UNCONNECTED_LAYER_MODE::START_END_ONLY );
+                    via->Padstack().SetUnconnectedLayerMode( UNCONNECTED_LAYER_MODE::START_END_ONLY );
                     break;
                 default:
                     break;

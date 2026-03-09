@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2019-2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -567,6 +568,13 @@ TOOL_ACTION ACTIONS::editTable( TOOL_ACTION_ARGS()
         .DefaultHotkey( MD_CTRL + 'E' )
         .FriendlyName( _( "Edit Table..." ) )
         .Icon( BITMAPS::table_edit ) );
+
+TOOL_ACTION ACTIONS::exportTableCSV( TOOL_ACTION_ARGS()
+        .Name( "common.TableEditor.exportTableCSV" )
+        .Scope( AS_GLOBAL )
+        .MenuText( _( "Export Table to CSV..." ) )
+        .Tooltip( _( "Export table contents to CSV file with resolved text variables" ) )
+        .Icon( BITMAPS::export_file ) );
 
 TOOL_ACTION ACTIONS::activatePointEditor( TOOL_ACTION_ARGS()
         .Name( "common.Control.activatePointEditor" )
@@ -1380,8 +1388,8 @@ TOOL_ACTION ACTIONS::showDesignBlockLibTable( TOOL_ACTION_ARGS()
 TOOL_ACTION ACTIONS::gettingStarted( TOOL_ACTION_ARGS()
         .Name( "common.SuiteControl.gettingStarted" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Getting Started with KiCad" ) )
-        .Tooltip( _( "Open \"Getting Started in KiCad\" guide for beginners" ) )
+        .FriendlyName( _( "Getting Started with Trace" ) )
+        .Tooltip( _( "Open \"Getting Started in Trace\" guide for beginners" ) )
         .Icon( BITMAPS::help ) );
 
 TOOL_ACTION ACTIONS::help( TOOL_ACTION_ARGS()
@@ -1394,7 +1402,7 @@ TOOL_ACTION ACTIONS::help( TOOL_ACTION_ARGS()
 TOOL_ACTION ACTIONS::about( TOOL_ACTION_ARGS()
         .Name( "common.SuiteControl.about" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "About KiCad" ) )
+        .FriendlyName( _( "About Trace" ) )
         .UIId( wxID_ABOUT )
         .Icon( BITMAPS::about ) );
 

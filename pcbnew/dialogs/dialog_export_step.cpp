@@ -30,6 +30,7 @@
 #include <wx/process.h>
 #include <wx/string.h>
 #include <wx/filedlg.h>
+#include <kiplatform/ui.h>
 
 #include <pgm_base.h>
 #include <board.h>
@@ -274,6 +275,8 @@ void DIALOG_EXPORT_STEP::onBrowseClicked( wxCommandEvent& aEvent )
 
     wxFileDialog dlg( this, _( "3D Model Output File" ), fn.GetPath(), fn.GetFullName(), filter, wxFD_SAVE );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
@@ -380,7 +383,7 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         // Arc to segment approximation error (not critical here: we do not use the outline shape):
         int maxError = pcbIUScale.mmToIU( 0.05 );
 
-        if( !BuildBoardPolygonOutlines( m_editFrame->GetBoard(), outline, maxError, chainingEpsilon ) )
+        if( !BuildBoardPolygonOutlines( m_editFrame->GetBoard(), outline, maxError, chainingEpsilon, false ) )
         {
             DisplayErrorMessage( this, wxString::Format( _( "Board outline is missing or not closed using "
                                                             "%.3f mm tolerance.\n"
@@ -587,15 +590,15 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         // ensure the main format on the job is populated
         switch( m_job->m_3dparams.m_Format )
         {
-        case EXPORTER_STEP_PARAMS::FORMAT::STEP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STEP; break;
+        case EXPORTER_STEP_PARAMS::FORMAT::STEP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STEP;  break;
         case EXPORTER_STEP_PARAMS::FORMAT::STEPZ: m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STEPZ; break;
-        case EXPORTER_STEP_PARAMS::FORMAT::GLB:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::GLB;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::XAO:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::XAO;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::BREP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::BREP; break;
-        case EXPORTER_STEP_PARAMS::FORMAT::PLY:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PLY;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::STL:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STL;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::U3D:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::U3D;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::PDF:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PDF;  break;
+        case EXPORTER_STEP_PARAMS::FORMAT::GLB:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::GLB;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::XAO:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::XAO;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::BREP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::BREP;  break;
+        case EXPORTER_STEP_PARAMS::FORMAT::PLY:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PLY;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::STL:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STL;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::U3D:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::U3D;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::PDF:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PDF;   break;
         }
 
         m_job->m_3dparams.m_UseDrillOrigin = false;

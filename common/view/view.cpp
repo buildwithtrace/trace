@@ -344,7 +344,8 @@ void VIEW::Remove( VIEW_ITEM* aItem )
 
     if( aItem && aItem->m_viewPrivData )
     {
-        wxCHECK_MSG( aItem->m_viewPrivData->m_view == this, /*void*/, aItem->GetClass() );
+        wxCHECK_MSG( aItem->m_viewPrivData->m_view == nullptr || aItem->m_viewPrivData->m_view == this, /*void*/,
+                     aItem->GetClass() );
 
         std::vector<VIEW_ITEM*>::iterator item = m_allItems->end();
         int                               cachedIndex = aItem->m_viewPrivData->m_cachedIndex;
@@ -1144,6 +1145,16 @@ void VIEW::Clear()
 {
     BOX2I r;
     r.SetMaximum();
+
+    // Invalidate viewPrivData for all items before clearing. This ensures that items
+    // which persist outside the view (like selection groups) won't have stale references
+    // to this view, which could cause issues if they're later removed and re-added.
+    for( VIEW_ITEM* item : *m_allItems )
+    {
+        if( item && item->m_viewPrivData )
+            item->m_viewPrivData->m_view = nullptr;
+    }
+
     m_allItems->clear();
 
     for( auto& [_, layer] : m_layers )

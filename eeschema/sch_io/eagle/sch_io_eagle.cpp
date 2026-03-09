@@ -35,6 +35,7 @@
 #include <wx/xml/xml.h>
 
 #include <font/fontconfig.h>
+#include <reporter.h>
 #include <io/eagle/eagle_parser.h>
 #include <lib_id.h>
 #include <progress_reporter.h>
@@ -351,8 +352,8 @@ SCH_SHEET* SCH_IO_EAGLE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC
 {
     wxASSERT( !aFileName || aSchematic != nullptr );
 
-    // Show the font substitution warnings
-    fontconfig::FONTCONFIG::SetReporter( &WXLOG_REPORTER::GetInstance() );
+    // Collect the font substitution warnings (RAII - automatically reset on scope exit)
+    FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
 
     m_filename = aFileName;
     m_schematic = aSchematic;
@@ -406,7 +407,7 @@ SCH_SHEET* SCH_IO_EAGLE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC
         m_rootSheet = new SCH_SHEET( aSchematic );
         const_cast<KIID&>( m_rootSheet->m_Uuid ) = niluuid;
         m_rootSheet->SetFileName( newFilename.GetFullPath() );
-        aSchematic->SetRoot( m_rootSheet );
+        aSchematic->SetTopLevelSheets( { m_rootSheet } );
     }
 
     if( !m_rootSheet->GetScreen() )
@@ -456,10 +457,26 @@ SCH_SHEET* SCH_IO_EAGLE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC
     // Load drawing
     loadDrawing( m_eagleDoc->drawing );
 
+    if( !aAppendToMe )
+    {
+        std::vector<SCH_SHEET*> topLevelSheets;
+
+        for( SCH_SHEET* sheet : aSchematic->GetTopLevelSheets() )
+        {
+            if( sheet && !sheet->IsVirtualRootSheet() )
+                topLevelSheets.push_back( sheet );
+        }
+
+        if( !topLevelSheets.empty() )
+            aSchematic->SetTopLevelSheets( topLevelSheets );
+
+        m_rootSheet = &aSchematic->Root();
+    }
+
     m_pi->SaveLibrary( getLibFileName().GetFullPath() );
 
     SCH_SCREENS allSheets( m_rootSheet );
-    allSheets.UpdateSymbolLinks(); // Update all symbol library links for all sheets.
+    allSheets.UpdateSymbolLinks( &LOAD_INFO_REPORTER::GetInstance() ); // Update all symbol library links for all sheets.
 
     return m_rootSheet;
 }
@@ -538,8 +555,8 @@ long long SCH_IO_EAGLE::getLibraryTimestamp( const wxString& aLibraryPath ) cons
 
 void SCH_IO_EAGLE::ensureLoadedLibrary( const wxString& aLibraryPath )
 {
-    // Suppress font substitution warnings
-    fontconfig::FONTCONFIG::SetReporter( nullptr );
+    // Suppress font substitution warnings (RAII - automatically restored on scope exit)
+    FONTCONFIG_REPORTER_SCOPE fontconfigScope( nullptr );
 
     if( m_eagleLibs.find( m_libName ) != m_eagleLibs.end() )
     {
@@ -784,13 +801,19 @@ void SCH_IO_EAGLE::loadSchematic( const ESCHEMATIC& aSchematic )
 
     // Calculate the already placed items bounding box and the page size to determine
     // placement for the new symbols
-    VECTOR2I pageSizeIU = m_rootSheet->GetScreen()->GetPageSettings().GetSizeIU( schIUScale.IU_PER_MILS );
-    BOX2I    sheetBbox  = getSheetBbox( m_rootSheet );
-    VECTOR2I newCmpPosition( sheetBbox.GetLeft(), sheetBbox.GetBottom() );
-    int      maxY = sheetBbox.GetY();
+    SCH_SHEET* schematicRoot = &m_schematic->Root();
 
-    SCH_SHEET_PATH sheetpath;
-    m_rootSheet->LocatePathOfScreen( m_rootSheet->GetScreen(), &sheetpath );
+    struct MISSING_UNIT_PLACEMENT
+    {
+        VECTOR2I       pageSizeIU;
+        BOX2I          sheetBbox;
+        VECTOR2I       newCmpPosition;
+        int            maxY;
+        SCH_SHEET_PATH sheetpath;
+        SCH_SCREEN*    screen;
+    };
+
+    std::map<SCH_SCREEN*, MISSING_UNIT_PLACEMENT> placements;
 
     for( auto& cmp : m_missingCmps )
     {
@@ -806,24 +829,59 @@ void SCH_IO_EAGLE::loadSchematic( const ESCHEMATIC& aSchematic )
             const wxString reference = origSymbol->GetField( FIELD_T::REFERENCE )->GetText();
             std::unique_ptr<SCH_SYMBOL> symbol( (SCH_SYMBOL*) origSymbol->Duplicate( IGNORE_PARENT_GROUP ) );
 
-            symbol->SetUnitSelection( &sheetpath, unit );
+            SCH_SCREEN* targetScreen = cmp.second.screen;
+
+            if( !targetScreen )
+            {
+                SCH_SHEET* fallbackSheet = m_schematic->GetTopLevelSheet( 0 );
+
+                if( fallbackSheet )
+                    targetScreen = fallbackSheet->GetScreen();
+                else
+                    targetScreen = schematicRoot->GetScreen();
+            }
+
+            auto placementIt = placements.find( targetScreen );
+
+            if( placementIt == placements.end() )
+            {
+                MISSING_UNIT_PLACEMENT placement;
+                placement.screen = targetScreen;
+                placement.pageSizeIU = targetScreen->GetPageSettings().GetSizeIU( schIUScale.IU_PER_MILS );
+                schematicRoot->LocatePathOfScreen( targetScreen, &placement.sheetpath );
+
+                SCH_SHEET* targetSheet = placement.sheetpath.Last();
+
+                if( targetSheet )
+                    placement.sheetBbox = getSheetBbox( targetSheet );
+
+                placement.newCmpPosition = VECTOR2I( placement.sheetBbox.GetLeft(),
+                                                     placement.sheetBbox.GetBottom() );
+                placement.maxY = placement.sheetBbox.GetY();
+                placementIt = placements.emplace( targetScreen, placement ).first;
+            }
+
+            MISSING_UNIT_PLACEMENT& placement = placementIt->second;
+
+            symbol->SetUnitSelection( &placement.sheetpath, unit );
             symbol->SetUnit( unit );
             symbol->SetOrientation( 0 );
-            symbol->AddHierarchicalReference( sheetpath.Path(), reference, unit );
+            symbol->AddHierarchicalReference( placement.sheetpath.Path(), reference, unit );
 
             // Calculate the placement position
             BOX2I cmpBbox = symbol->GetBoundingBox();
-            int   posY    = newCmpPosition.y + cmpBbox.GetHeight();
-            symbol->SetPosition( VECTOR2I( newCmpPosition.x, posY ) );
-            newCmpPosition.x += cmpBbox.GetWidth();
-            maxY = std::max( maxY, posY );
+            int   posY    = placement.newCmpPosition.y + cmpBbox.GetHeight();
+            symbol->SetPosition( VECTOR2I( placement.newCmpPosition.x, posY ) );
+            placement.newCmpPosition.x += cmpBbox.GetWidth();
+            placement.maxY = std::max( placement.maxY, posY );
 
-            if( newCmpPosition.x >= pageSizeIU.x )            // reached the page boundary?
-                newCmpPosition = VECTOR2I( sheetBbox.GetLeft(), maxY ); // then start a new row
+            if( placement.newCmpPosition.x >= placement.pageSizeIU.x )            // reached the page boundary?
+                placement.newCmpPosition = VECTOR2I( placement.sheetBbox.GetLeft(),
+                                                     placement.maxY ); // then start a new row
 
             // Add the global net labels to recreate the implicit connections
-            addImplicitConnections( symbol.get(), m_rootSheet->GetScreen(), false );
-            m_rootSheet->GetScreen()->Append( symbol.release() );
+            addImplicitConnections( symbol.get(), placement.screen, false );
+            placement.screen->Append( symbol.release() );
         }
     }
 
@@ -852,7 +910,7 @@ void SCH_IO_EAGLE::loadSheet( const std::unique_ptr<ESHEET>& aSheet )
         else
             sheet->SetName( filename );
 
-        ReplaceIllegalFileNameChars( &filename );
+        ReplaceIllegalFileNameChars( filename );
         replace( filename.begin(), filename.end(), ' ', '_' );
 
         fn.SetName( filename );
@@ -3372,7 +3430,7 @@ void SCH_IO_EAGLE::addImplicitConnections( SCH_SYMBOL* aSymbol, SCH_SCREEN* aScr
 
     int                   unit      = aSymbol->GetUnit();
     const wxString        reference = aSymbol->GetField( FIELD_T::REFERENCE )->GetText();
-    std::vector<SCH_PIN*> pins      = aSymbol->GetLibSymbolRef()->GetPins();
+    std::vector<SCH_PIN*> pins      = aSymbol->GetLibSymbolRef()->GetGraphicalPins( 0, 0 );
     std::set<int>         missingUnits;
 
     // Search all units for pins creating implicit connections
@@ -3434,6 +3492,7 @@ void SCH_IO_EAGLE::addImplicitConnections( SCH_SYMBOL* aSymbol, SCH_SCREEN* aScr
         {
             EAGLE_MISSING_CMP& entry = m_missingCmps[reference];
             entry.cmp                = aSymbol;
+            entry.screen             = aScreen;
             entry.units.emplace( unit, false );
         }
         else
@@ -3446,6 +3505,7 @@ void SCH_IO_EAGLE::addImplicitConnections( SCH_SYMBOL* aSymbol, SCH_SCREEN* aScr
         {
             EAGLE_MISSING_CMP& entry = m_missingCmps[reference];
             entry.cmp                = aSymbol;
+            entry.screen             = aScreen;
 
             // Add units that haven't already been processed.
             for( int i : missingUnits )

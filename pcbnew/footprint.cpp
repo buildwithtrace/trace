@@ -25,10 +25,12 @@
  */
 #include <magic_enum.hpp>
 
+#include <algorithm>
 #include <unordered_set>
 
 #include <wx/log.h>
 #include <wx/debug.h>
+#include <wx/tokenzr.h>
 
 #include <bitmaps.h>
 #include <board.h>
@@ -165,6 +167,10 @@ FOOTPRINT::FOOTPRINT( const FOOTPRINT& aFootprint ) :
                                                        : nullptr;
 
     m_embedFonts       = aFootprint.m_embedFonts;
+    m_variants         = aFootprint.m_variants;
+
+    m_componentClassCacheProxy->SetStaticComponentClass(
+            aFootprint.m_componentClassCacheProxy->GetStaticComponentClass() );
 
     std::map<EDA_ITEM*, EDA_ITEM*> ptrMap;
 
@@ -251,7 +257,8 @@ FOOTPRINT::FOOTPRINT( const FOOTPRINT& aFootprint ) :
 
 
 FOOTPRINT::FOOTPRINT( FOOTPRINT&& aFootprint ) :
-    BOARD_ITEM_CONTAINER( aFootprint )
+    BOARD_ITEM_CONTAINER( aFootprint ),
+    m_componentClassCacheProxy( std::make_unique<COMPONENT_CLASS_CACHE_PROXY>( this ) )
 {
     *this = std::move( aFootprint );
 }
@@ -566,6 +573,25 @@ bool FOOTPRINT::Deserialize( const google::protobuf::Any &aContainer )
             Remove( field );
     }
 
+    // If this footprint is on a board, uncache all items before clearing
+    if( BOARD* board = GetBoard() )
+    {
+        for( PAD* pad : m_pads )
+            board->UncacheItemById( pad->m_Uuid );
+
+        for( BOARD_ITEM* item : m_drawings )
+            board->UncacheItemById( item->m_Uuid );
+
+        for( ZONE* zone : m_zones )
+            board->UncacheItemById( zone->m_Uuid );
+
+        for( PCB_GROUP* group : m_groups )
+            board->UncacheItemById( group->m_Uuid );
+
+        for( PCB_POINT* point : m_points )
+            board->UncacheItemById( point->m_Uuid );
+    }
+
     Pads().clear();
     GraphicalItems().clear();
     Zones().clear();
@@ -800,6 +826,7 @@ FOOTPRINT& FOOTPRINT::operator=( FOOTPRINT&& aOther )
     m_lastEditTime  = aOther.m_lastEditTime;
     m_link          = aOther.m_link;
     m_path          = aOther.m_path;
+    m_variants      = std::move( aOther.m_variants );
 
     m_cachedBoundingBox              = aOther.m_cachedBoundingBox;
     m_boundingBoxCacheTimeStamp      = aOther.m_boundingBoxCacheTimeStamp;
@@ -816,6 +843,28 @@ FOOTPRINT& FOOTPRINT::operator=( FOOTPRINT&& aOther )
     m_netTiePadGroups                = aOther.m_netTiePadGroups;
     m_duplicatePadNumbersAreJumpers  = aOther.m_duplicatePadNumbersAreJumpers;
     m_jumperPadGroups                = aOther.m_jumperPadGroups;
+
+    // If this footprint is on a board, uncache all items before deleting them
+    if( BOARD* board = GetBoard() )
+    {
+        for( PCB_FIELD* field : m_fields )
+            board->UncacheItemById( field->m_Uuid );
+
+        for( PAD* pad : m_pads )
+            board->UncacheItemById( pad->m_Uuid );
+
+        for( ZONE* zone : m_zones )
+            board->UncacheItemById( zone->m_Uuid );
+
+        for( BOARD_ITEM* item : m_drawings )
+            board->UncacheItemById( item->m_Uuid );
+
+        for( PCB_GROUP* group : m_groups )
+            board->UncacheItemById( group->m_Uuid );
+
+        for( PCB_POINT* point : m_points )
+            board->UncacheItemById( point->m_Uuid );
+    }
 
     // Move the fields
     for( PCB_FIELD* field : m_fields )
@@ -884,7 +933,7 @@ FOOTPRINT& FOOTPRINT::operator=( FOOTPRINT&& aOther )
     for( PCB_POINT* point : m_points )
         delete point;
 
-    m_groups.clear();
+    m_points.clear();
 
     for( PCB_POINT* point : aOther.Points() )
         Add( point );
@@ -900,6 +949,9 @@ FOOTPRINT& FOOTPRINT::operator=( FOOTPRINT&& aOther )
     m_privateLayers    = aOther.m_privateLayers;
 
     m_initial_comments = aOther.m_initial_comments;
+
+    m_componentClassCacheProxy->SetStaticComponentClass(
+            aOther.m_componentClassCacheProxy->GetStaticComponentClass() );
 
     // Clear the other item's containers since this is a move
     aOther.m_fields.clear();
@@ -938,10 +990,38 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
     m_solderPasteMarginRatio         = aOther.m_solderPasteMarginRatio;
     m_zoneConnection                 = aOther.m_zoneConnection;
     m_netTiePadGroups                = aOther.m_netTiePadGroups;
+    m_duplicatePadNumbersAreJumpers  = aOther.m_duplicatePadNumbersAreJumpers;
+    m_jumperPadGroups                = aOther.m_jumperPadGroups;
+    m_variants                       = aOther.m_variants;
+
+    // If this footprint is on a board, uncache all items before deleting them
+    if( BOARD* board = GetBoard() )
+    {
+        for( PCB_FIELD* field : m_fields )
+            board->UncacheItemById( field->m_Uuid );
+
+        for( PAD* pad : m_pads )
+            board->UncacheItemById( pad->m_Uuid );
+
+        for( ZONE* zone : m_zones )
+            board->UncacheItemById( zone->m_Uuid );
+
+        for( BOARD_ITEM* item : m_drawings )
+            board->UncacheItemById( item->m_Uuid );
+
+        for( PCB_GROUP* group : m_groups )
+            board->UncacheItemById( group->m_Uuid );
+
+        for( PCB_POINT* point : m_points )
+            board->UncacheItemById( point->m_Uuid );
+    }
 
     std::map<EDA_ITEM*, EDA_ITEM*> ptrMap;
 
     // Copy fields
+    for( PCB_FIELD* field : m_fields )
+        delete field;
+
     m_fields.clear();
 
     for( PCB_FIELD* field : aOther.m_fields )
@@ -952,6 +1032,9 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
     }
 
     // Copy pads
+    for( PAD* pad : m_pads )
+        delete pad;
+
     m_pads.clear();
 
     for( PAD* pad : aOther.Pads() )
@@ -962,6 +1045,9 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
     }
 
     // Copy zones
+    for( ZONE* zone : m_zones )
+        delete zone;
+
     m_zones.clear();
 
     for( ZONE* zone : aOther.Zones() )
@@ -978,6 +1064,9 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
     }
 
     // Copy drawings
+    for( BOARD_ITEM* item : m_drawings )
+        delete item;
+
     m_drawings.clear();
 
     for( BOARD_ITEM* item : aOther.GraphicalItems() )
@@ -988,6 +1077,9 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
     }
 
     // Copy groups
+    for( PCB_GROUP* group : m_groups )
+        delete group;
+
     m_groups.clear();
 
     for( PCB_GROUP* group : aOther.Groups() )
@@ -1001,7 +1093,10 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
         Add( newGroup );
     }
 
-    // Copy drawings
+    // Copy points
+    for( PCB_POINT* point : m_points )
+        delete point;
+
     m_points.clear();
 
     for( PCB_POINT* point : aOther.Points() )
@@ -1019,6 +1114,9 @@ FOOTPRINT& FOOTPRINT::operator=( const FOOTPRINT& aOther )
 
     m_initial_comments = aOther.m_initial_comments ?
                             new wxArrayString( *aOther.m_initial_comments ) : nullptr;
+
+    m_componentClassCacheProxy->SetStaticComponentClass(
+            aOther.m_componentClassCacheProxy->GetStaticComponentClass() );
 
     EMBEDDED_FILES::operator=( aOther );
 
@@ -1124,7 +1222,7 @@ bool FOOTPRINT::ResolveTextVar( wxString* token, int aDepth ) const
     }
     else if( PCB_FIELD* field = GetField( *token ) )
     {
-        *token = field->GetText();
+        *token = field->GetShownText( false, aDepth + 1 );
         return true;
     }
 
@@ -1132,6 +1230,184 @@ bool FOOTPRINT::ResolveTextVar( wxString* token, int aDepth ) const
         return true;
 
     return false;
+}
+
+
+// ============================================================================
+// Variant Support Implementation
+// ============================================================================
+
+const FOOTPRINT_VARIANT* FOOTPRINT::GetVariant( const wxString& aVariantName ) const
+{
+    auto it = m_variants.find( aVariantName );
+
+    return it != m_variants.end() ? &it->second : nullptr;
+}
+
+
+FOOTPRINT_VARIANT* FOOTPRINT::GetVariant( const wxString& aVariantName )
+{
+    auto it = m_variants.find( aVariantName );
+
+    return it != m_variants.end() ? &it->second : nullptr;
+}
+
+
+void FOOTPRINT::SetVariant( const FOOTPRINT_VARIANT& aVariant )
+{
+    if( aVariant.GetName().IsEmpty()
+        || aVariant.GetName().CmpNoCase( GetDefaultVariantName() ) == 0 )
+    {
+        return;
+    }
+
+    auto it = m_variants.find( aVariant.GetName() );
+
+    if( it != m_variants.end() )
+    {
+        FOOTPRINT_VARIANT updated = aVariant;
+        updated.SetName( it->first );
+        it->second = std::move( updated );
+        return;
+    }
+
+    m_variants.emplace( aVariant.GetName(), aVariant );
+}
+
+
+FOOTPRINT_VARIANT* FOOTPRINT::AddVariant( const wxString& aVariantName )
+{
+    if( aVariantName.IsEmpty()
+        || aVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+    {
+        wxASSERT_MSG( false, wxT( "Variant name cannot be empty or default." ) );
+        return nullptr;
+    }
+
+    auto it = m_variants.find( aVariantName );
+
+    if( it != m_variants.end() )
+        return &it->second;
+
+    FOOTPRINT_VARIANT variant( aVariantName );
+    variant.SetDNP( IsDNP() );
+    variant.SetExcludedFromBOM( IsExcludedFromBOM() );
+    variant.SetExcludedFromPosFiles( IsExcludedFromPosFiles() );
+
+    auto inserted = m_variants.emplace( aVariantName, std::move( variant ) );
+    return &inserted.first->second;
+}
+
+
+void FOOTPRINT::DeleteVariant( const wxString& aVariantName )
+{
+    m_variants.erase( aVariantName );
+}
+
+
+void FOOTPRINT::RenameVariant( const wxString& aOldName, const wxString& aNewName )
+{
+    if( aNewName.IsEmpty()
+        || aNewName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+    {
+        return;
+    }
+
+    auto it = m_variants.find( aOldName );
+
+    if( it == m_variants.end() )
+        return;
+
+    auto existingIt = m_variants.find( aNewName );
+
+    if( existingIt != m_variants.end() && existingIt != it )
+        return;
+
+    if( it->first == aNewName )
+        return;
+
+    FOOTPRINT_VARIANT variant = it->second;
+    variant.SetName( aNewName );
+    m_variants.erase( it );
+    m_variants.emplace( aNewName, std::move( variant ) );
+}
+
+
+bool FOOTPRINT::HasVariant( const wxString& aVariantName ) const
+{
+    return m_variants.find( aVariantName ) != m_variants.end();
+}
+
+
+bool FOOTPRINT::GetDNPForVariant( const wxString& aVariantName ) const
+{
+    // Empty variant name means default
+    if( aVariantName.IsEmpty()
+        || aVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+        return IsDNP();
+
+    const FOOTPRINT_VARIANT* variant = GetVariant( aVariantName );
+
+    if( variant )
+        return variant->GetDNP();
+
+    // Fall back to default if variant doesn't exist
+    return IsDNP();
+}
+
+
+bool FOOTPRINT::GetExcludedFromBOMForVariant( const wxString& aVariantName ) const
+{
+    // Empty variant name means default
+    if( aVariantName.IsEmpty()
+        || aVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+        return IsExcludedFromBOM();
+
+    const FOOTPRINT_VARIANT* variant = GetVariant( aVariantName );
+
+    if( variant )
+        return variant->GetExcludedFromBOM();
+
+    // Fall back to default if variant doesn't exist
+    return IsExcludedFromBOM();
+}
+
+
+bool FOOTPRINT::GetExcludedFromPosFilesForVariant( const wxString& aVariantName ) const
+{
+    // Empty variant name means default
+    if( aVariantName.IsEmpty()
+        || aVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+        return IsExcludedFromPosFiles();
+
+    const FOOTPRINT_VARIANT* variant = GetVariant( aVariantName );
+
+    if( variant )
+        return variant->GetExcludedFromPosFiles();
+
+    // Fall back to default if variant doesn't exist
+    return IsExcludedFromPosFiles();
+}
+
+
+wxString FOOTPRINT::GetFieldValueForVariant( const wxString& aVariantName,
+                                              const wxString& aFieldName ) const
+{
+    // Check variant-specific override first
+    if( !aVariantName.IsEmpty()
+        && aVariantName.CmpNoCase( GetDefaultVariantName() ) != 0 )
+    {
+        const FOOTPRINT_VARIANT* variant = GetVariant( aVariantName );
+
+        if( variant && variant->HasFieldValue( aFieldName ) )
+            return variant->GetFieldValue( aFieldName );
+    }
+
+    // Fall back to default field value
+    if( const PCB_FIELD* field = GetField( aFieldName ) )
+        return field->GetText();
+
+    return wxString();
 }
 
 
@@ -1219,6 +1495,10 @@ void FOOTPRINT::Add( BOARD_ITEM* aBoardItem, ADD_MODE aMode, bool aSkipConnectiv
 
     aBoardItem->ClearEditFlags();
     aBoardItem->SetParent( this );
+
+    // If this footprint is on a board, update the board's item-by-id cache
+    if( BOARD* board = GetBoard() )
+        board->CacheItemById( aBoardItem );
 
     InvalidateGeometryCaches();
 }
@@ -1319,6 +1599,10 @@ void FOOTPRINT::Remove( BOARD_ITEM* aBoardItem, REMOVE_MODE aMode )
     }
     }
 
+    // If this footprint is on a board, update the board's item-by-id cache
+    if( BOARD* board = GetBoard() )
+        board->UncacheItemById( aBoardItem->m_Uuid );
+
     aBoardItem->SetFlags( STRUCT_DELETED );
 
     InvalidateGeometryCaches();
@@ -1401,6 +1685,26 @@ wxString FOOTPRINT::GetTypeName() const
 }
 
 
+std::vector<SEARCH_TERM> FOOTPRINT::GetSearchTerms()
+{
+    std::vector<SEARCH_TERM> terms;
+
+    terms.emplace_back( SEARCH_TERM( GetLibNickname(), 4 ) );
+    terms.emplace_back( SEARCH_TERM( GetName(), 8 ) );
+    terms.emplace_back( SEARCH_TERM( GetLIB_ID().Format(), 16 ) );
+
+    wxStringTokenizer keywordTokenizer( GetKeywords(), wxS( " \t\r\n" ), wxTOKEN_STRTOK );
+
+    while( keywordTokenizer.HasMoreTokens() )
+        terms.emplace_back( SEARCH_TERM( keywordTokenizer.GetNextToken(), 4 ) );
+
+    terms.emplace_back( SEARCH_TERM( GetKeywords(), 1 ) );
+    terms.emplace_back( SEARCH_TERM( GetLibDescription(), 1 ) );
+
+    return terms;
+}
+
+
 BOX2I FOOTPRINT::GetFpPadsLocalBbox() const
 {
     BOX2I bbox;
@@ -1447,17 +1751,21 @@ const BOX2I FOOTPRINT::GetBoundingBox( bool aIncludeText ) const
 {
     const BOARD* board = GetBoard();
 
-    if( board )
     {
-        if( aIncludeText )
+        std::lock_guard<std::mutex> lock( m_bboxCacheMutex );
+
+        if( board )
         {
-            if( m_boundingBoxCacheTimeStamp >= board->GetTimeStamp() )
-                return m_cachedBoundingBox;
-        }
-        else
-        {
-            if( m_textExcludedBBoxCacheTimeStamp >= board->GetTimeStamp() )
-                return m_cachedTextExcludedBBox;
+            if( aIncludeText )
+            {
+                if( m_boundingBoxCacheTimeStamp >= board->GetTimeStamp() )
+                    return m_cachedBoundingBox;
+            }
+            else
+            {
+                if( m_textExcludedBBoxCacheTimeStamp >= board->GetTimeStamp() )
+                    return m_cachedTextExcludedBBox;
+            }
         }
     }
 
@@ -1574,6 +1882,8 @@ const BOX2I FOOTPRINT::GetBoundingBox( bool aIncludeText ) const
 
     if( board )
     {
+        std::lock_guard<std::mutex> lock( m_bboxCacheMutex );
+
         if( aIncludeText || noDrawItems )
         {
             m_boundingBoxCacheTimeStamp = board->GetTimeStamp();
@@ -2476,6 +2786,10 @@ double FOOTPRINT::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
 
         return LOD_HIDE;
     }
+
+    // Only show anchors if the layer the footprint is on is visible
+    if( aLayer == LAYER_ANCHOR && !aView->IsLayerVisible( m_layer ) )
+        return LOD_HIDE;
 
     int layer = ( m_layer == F_Cu ) ? LAYER_FOOTPRINTS_FR :
                 ( m_layer == B_Cu ) ? LAYER_FOOTPRINTS_BK : LAYER_ANCHOR;
@@ -4245,7 +4559,7 @@ void FOOTPRINT::TransformFPShapesToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_I
         {
             PCB_TEXT* text = static_cast<PCB_TEXT*>( item );
 
-            if( aLayer != UNDEFINED_LAYER && text->GetLayer() == aLayer )
+            if( aLayer == UNDEFINED_LAYER || text->GetLayer() == aLayer )
                 text->TransformTextToPolySet( aBuffer, aClearance, aError, aErrorLoc );
         }
 
@@ -4253,7 +4567,7 @@ void FOOTPRINT::TransformFPShapesToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_I
         {
             PCB_TEXTBOX* textbox = static_cast<PCB_TEXTBOX*>( item );
 
-            if( aLayer != UNDEFINED_LAYER && textbox->GetLayer() == aLayer )
+            if( aLayer == UNDEFINED_LAYER || textbox->GetLayer() == aLayer )
             {
                 // border
                 if( textbox->IsBorderEnabled() )
@@ -4268,7 +4582,7 @@ void FOOTPRINT::TransformFPShapesToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_I
         {
             const PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( item );
 
-            if( aLayer != UNDEFINED_LAYER && shape->GetLayer() == aLayer )
+            if( aLayer == UNDEFINED_LAYER || shape->GetLayer() == aLayer )
                 shape->TransformShapeToPolySet( aBuffer, aLayer, 0, aError, aErrorLoc );
         }
 
@@ -4276,7 +4590,7 @@ void FOOTPRINT::TransformFPShapesToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_I
         {
             const PCB_BARCODE* barcode = static_cast<PCB_BARCODE*>( item );
 
-            if( aLayer != UNDEFINED_LAYER && barcode->GetLayer() == aLayer )
+            if( aLayer == UNDEFINED_LAYER || barcode->GetLayer() == aLayer )
                 barcode->TransformShapeToPolySet( aBuffer, aLayer, 0, aError, aErrorLoc );
         }
     }
@@ -4285,7 +4599,7 @@ void FOOTPRINT::TransformFPShapesToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_I
     {
         for( const PCB_FIELD* field : m_fields )
         {
-            if( field->GetLayer() == aLayer && field->IsVisible() )
+            if( ( aLayer == UNDEFINED_LAYER || field->GetLayer() == aLayer ) && field->IsVisible() )
                 field->TransformTextToPolySet( aBuffer, aClearance, aError, aErrorLoc );
         }
     }
@@ -4402,6 +4716,28 @@ void FOOTPRINT::SetStackupLayers( LSET aLayers )
 
     if( m_stackupMode == FOOTPRINT_STACKUP::CUSTOM_LAYERS )
         m_stackupLayers = std::move( aLayers );
+}
+
+
+void FOOTPRINT::FixUpPadsForBoard( BOARD* aBoard )
+{
+    if( !aBoard )
+        return;
+
+    if( GetStackupMode() != FOOTPRINT_STACKUP::EXPAND_INNER_LAYERS )
+        return;
+
+    const LSET boardCopper = LSET::AllCuMask( aBoard->GetCopperLayerCount() );
+
+    for( PAD* pad : Pads() )
+    {
+        if( pad->GetAttribute() == PAD_ATTRIB::PTH )
+        {
+            LSET padLayers = pad->GetLayerSet();
+            padLayers |= boardCopper;
+            pad->SetLayerSet( padLayers );
+        }
+    }
 }
 
 

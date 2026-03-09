@@ -274,6 +274,8 @@ wxString AddHotkeyName( const wxString& aText, int aHotKey, HOTKEY_ACTION_TYPE a
     // On OSX, the modifier equivalent to the Ctrl key of PCs
     // is the Cmd key, but in code we should use Ctrl as prefix in menus
     msg.Replace( MODIFIER_CMD_MAC, MODIFIER_CTRL_BASE );
+    // wxWidgets' wxAcceleratorEntry::ParseAccel expects "Alt", not "Option"
+    msg.Replace( wxT( "Option+" ), wxT( "Alt+" ) );
 #endif
 
     return msg;

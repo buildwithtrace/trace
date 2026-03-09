@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2015 Mark Roszko <mark.roszko@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -139,6 +140,12 @@ KICAD_CURL_EASY::KICAD_CURL_EASY() :
     curl_easy_setopt( m_CURL, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS );
 #endif
 
+    // Set connection timeout to prevent long freezes when network is unreachable.
+    // Without this, CURL can wait up to 5 minutes for DNS resolution or connection
+    // establishment, which causes the UI to freeze on macOS when behind a proxy with
+    // restricted internet access.
+    curl_easy_setopt( m_CURL, CURLOPT_CONNECTTIMEOUT, 30L );
+
 #ifdef _WIN32
     long sslOpts = CURLSSLOPT_NATIVE_CA;
 
@@ -164,7 +171,7 @@ KICAD_CURL_EASY::KICAD_CURL_EASY() :
         curl_easy_setopt( m_CURL, CURLOPT_VERBOSE, 1L );
     }
 
-    wxString application( wxS( "KiCad" ) );
+    wxString application( wxS( "Trace" ) );
     wxString version( GetBuildVersion() );
     wxString platform = wxS( "(" ) + wxGetOsDescription() + wxS( ";" ) + GetPlatformGetBitnessName();
 
@@ -180,7 +187,7 @@ KICAD_CURL_EASY::KICAD_CURL_EASY() :
 
     platform << wxS( ")" );
 
-    wxString user_agent = wxS( "KiCad/" ) + version + wxS( " " ) + platform + wxS( " " ) + application;
+    wxString user_agent = wxS( "Trace/" ) + version + wxS( " " ) + platform + wxS( " " ) + application;
 
     user_agent << wxS( "/" ) << GetBuildDate();
     setOption<const char*>( CURLOPT_USERAGENT, user_agent.ToStdString().c_str() );
@@ -342,6 +349,12 @@ bool KICAD_CURL_EASY::SetOutputStream( const std::ostream* aOutput )
     curl_easy_setopt( m_CURL, CURLOPT_WRITEFUNCTION, stream_write_callback );
     curl_easy_setopt( m_CURL, CURLOPT_WRITEDATA, reinterpret_cast<const void*>( aOutput ) );
     return true;
+}
+
+
+bool KICAD_CURL_EASY::SetConnectTimeout( long aTimeoutSecs )
+{
+    return setOption( CURLOPT_CONNECTTIMEOUT, aTimeoutSecs ) == CURLE_OK;
 }
 
 

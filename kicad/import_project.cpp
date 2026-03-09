@@ -34,7 +34,9 @@
 
 #include <confirm.h>
 #include <kidialog.h>
+#include <kiplatform/ui.h>
 #include <wildcards_and_files_ext.h>
+#include <io/pads/pads_common.h>
 
 #include <sch_io/sch_io_mgr.h>
 #include <pcb_io/pcb_io_mgr.h>
@@ -55,8 +57,22 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
 
     wxFileDialog inputdlg( this, aWindowTitle, default_dir, wxEmptyString, aFilesWildcard, style );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &inputdlg );
+
     if( inputdlg.ShowModal() == wxID_CANCEL )
         return;
+
+    wxString inputPath = inputdlg.GetPath();
+    bool     isPadsProject = ( aSchFileType == SCH_IO_MGR::SCH_PADS
+                               && aPcbFileType == PCB_IO_MGR::PADS );
+
+    if( isPadsProject
+        && PADS_COMMON::DetectPadsFileType( inputPath ) == PADS_COMMON::PADS_FILE_TYPE::UNKNOWN )
+    {
+        DisplayErrorMessage( this,
+                             _( "The selected file does not appear to be a PADS ASCII schematic or PCB." ) );
+        return;
+    }
 
     // OK, we got a new project to open.  Time to close any existing project before we go on
     // to collect info about where to put the new one, etc.  Otherwise the workflow is kind of
@@ -68,7 +84,7 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
     std::vector<wxString> pcbFileExts( aPcbFileExtensions.begin(), aPcbFileExtensions.end() );
 
     IMPORT_PROJ_HELPER importProj( this, schFileExts, pcbFileExts );
-    importProj.m_InputFile = inputdlg.GetPath();
+    importProj.m_InputFile = inputPath;
 
     // Don't use wxFileDialog here.  On GTK builds, the default path is returned unless a
     // file is actually selected.
@@ -120,8 +136,8 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
                     msg = _( "Error creating new directory. Please try a different path. The "
                              "project cannot be imported." );
 
-                    wxMessageDialog dirErrorDlg( this, msg, _( "Error" ),
-                                                 wxOK_DEFAULT | wxICON_ERROR );
+                    KICAD_MESSAGE_DIALOG dirErrorDlg( this, msg, _( "Error" ),
+                                                      wxOK_DEFAULT | wxICON_ERROR );
                     dirErrorDlg.ShowModal();
                     return;
                 }
@@ -134,7 +150,10 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
     CreateNewProject( importProj.m_TargetProj.GetFullPath(), false /* Don't create stub files */ );
     LoadProject( importProj.m_TargetProj );
 
-    importProj.ImportFiles( aSchFileType, aPcbFileType );
+    if( isPadsProject )
+        importProj.ImportPadsFiles();
+    else
+        importProj.ImportFiles( aSchFileType, aPcbFileType );
 
     ReCreateTreePrj();
     m_active_project = true;
@@ -175,4 +194,20 @@ void KICAD_MANAGER_FRAME::OnImportEasyEdaProFiles( wxCommandEvent& event )
 {
     ImportNonKiCadProject( _( "Import EasyEDA Pro Project" ), FILEEXT::EasyEdaProFileWildcard(), { "INPUT" },
                            { "INPUT" }, SCH_IO_MGR::SCH_EASYEDAPRO, PCB_IO_MGR::EASYEDAPRO );
+}
+
+
+void KICAD_MANAGER_FRAME::OnImportPadsProjectFiles( wxCommandEvent& event )
+{
+    ImportNonKiCadProject( _( "Import PADS Project Files" ), FILEEXT::PADSProjectFilesWildcard(),
+                           { "asc", "txt" }, { "asc", "txt" }, SCH_IO_MGR::SCH_PADS,
+                           PCB_IO_MGR::PADS );
+}
+
+
+void KICAD_MANAGER_FRAME::OnImportGedaFiles( wxCommandEvent& event )
+{
+    ImportNonKiCadProject( _( "Import gEDA / Lepton EDA Project Files" ),
+                           FILEEXT::GedaProjectFilesWildcard(), { "prj", "sch" }, { "pcb" },
+                           SCH_IO_MGR::SCH_GEDA, PCB_IO_MGR::GEDA_PCB );
 }

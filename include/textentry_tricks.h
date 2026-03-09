@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,7 +35,7 @@
  */
 struct TEXTENTRY_TRICKS
 {
-    static void OnCharHook( wxTextEntry* aTextEntry, wxKeyEvent& aEvent );
+    static void OnCharHook( wxTextEntry* aTextEntry, wxKeyEvent& aEvent, wxWindow* focus );
 
 protected:
     static bool isCtrl( int aChar, const wxKeyEvent& e );

@@ -1055,6 +1055,13 @@ void SCH_IO_LTSPICE_PARSER::CreateFields( LTSPICE_SCHEMATIC::LT_SYMBOL& aLTSymbo
         else if( symbolName.StartsWith( wxS( "BI" ) ) )
             setupBehavioral( wxS( "I" ), wxS( "=" ) );
     }
+    else if( prefix == wxS( "T" ) )
+    {
+        aSymbol->SetValueFieldText( wxS( "${Sim.Params}" ) );
+
+        addField( wxS( "Sim.Device" ), wxS( "TLINE" ) );
+        addField( wxS( "Sim.Params" ), value );
+    }
     else if( prefix == wxS( "V" ) || symbolName == wxS( "I" ) )
     {
         addField( wxS( "Sim.Device" ), wxS( "SPICE" ) );
@@ -1097,23 +1104,28 @@ void SCH_IO_LTSPICE_PARSER::CreateFields( LTSPICE_SCHEMATIC::LT_SYMBOL& aLTSymbo
             libFile = m_includes[value];
 
         if( !libFile.IsEmpty() )
+        {
             addField( wxS( "Sim.Library" ), libFile );
-
-        if( type == wxS( "X" ) )
-            addField( wxS( "Sim.Device" ), wxS( "SUBCKT" ) );
-        else
-            addField( wxS( "Sim.Device" ), wxS( "SPICE" ) );
+            addField( wxS( "Sim.Name" ), symbolName );
+        }
 
         wxString spiceLine = aLTSymbol.SymAttributes[wxS( "SPICELINE" )];
 
-        if( !spiceLine.IsEmpty() )
+        if( type == wxS( "X" ) )
         {
-            // TODO: append value
-            addField( wxS( "Sim.Params" ), spiceLine );
+            addField( wxS( "Sim.Device" ), wxS( "SUBCKT" ) );
+
+            if( !spiceLine.IsEmpty() )
+                addField( wxS( "Sim.Params" ), spiceLine );
         }
         else
         {
-            addField( wxS( "Sim.Params" ), "model=\"" + value + "\"" );
+            addField( wxS( "Sim.Device" ), wxS( "SPICE" ) );
+
+            if( !spiceLine.IsEmpty() )
+                addField( wxS( "Sim.Params" ), spiceLine );
+            else
+                addField( wxS( "Sim.Params" ), "model=\"" + value + "\"" );
         }
     }
 

@@ -77,12 +77,9 @@ public:
     int GetSchTextSize() const { return GetTextWidth(); }
     void SetSchTextSize( int aSize ) { SetTextSize( VECTOR2I( aSize, aSize ) ); }
 
-    bool IsHypertext() const override
-    {
-        return HasHyperlink();
-    }
-
-    void DoHypertextAction( EDA_DRAW_FRAME* aFrame ) const override;
+    bool HasHypertext() const override;
+    bool HasHoveredHypertext() const override;
+    void DoHypertextAction( EDA_DRAW_FRAME* aFrame, const VECTOR2I& aMousePos ) const override;
 
     void SetExcludedFromSim( bool aExclude, const SCH_SHEET_PATH* aInstance = nullptr,
                              const wxString& aVariantName = wxEmptyString ) override
@@ -156,6 +153,8 @@ public:
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
     bool HitTest( const BOX2I& aRect, bool aContained, int aAccuracy = 0 ) const override;
     bool HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const override;
+
+    VECTOR2I GetOffsetToMatchSCH_FIELD( SCH_RENDER_SETTINGS* aRenderSettings ) const;
 
     void Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts,
                int aUnit, int aBodyStyle, const VECTOR2I& aOffset, bool aDimmed ) override;

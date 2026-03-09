@@ -60,6 +60,7 @@
 #include <wx/zstream.h>
 #include <progress_reporter.h>
 #include <magic_enum.hpp>
+#include <thread_pool.h>
 
 
 constexpr double BOLD_FACTOR = 1.75;    // CSS font-weight-normal is 400; bold is 700
@@ -159,6 +160,18 @@ PCB_LAYER_ID ALTIUM_PCB::GetKicadLayer( ALTIUM_LAYER aAltiumLayer ) const
         return override->second;
     }
 
+    if( aAltiumLayer >= ALTIUM_LAYER::V7_MECHANICAL_17 && aAltiumLayer <= ALTIUM_LAYER::V7_MECHANICAL_LAST )
+    {
+        // Layer "Mechanical 17" would correspond to altiumOrd 16
+        int altiumOrd = static_cast<int>( aAltiumLayer ) - static_cast<int>( ALTIUM_LAYER::V7_MECHANICAL_1 );
+
+        if( ( altiumOrd + 1 ) > MAX_USER_DEFINED_LAYERS )
+            return UNDEFINED_LAYER;
+
+        // Convert to KiCad User_* layers
+        return static_cast<PCB_LAYER_ID>( static_cast<int>( User_1 ) + altiumOrd * 2 );
+    }
+
     switch( aAltiumLayer )
     {
     case ALTIUM_LAYER::UNKNOWN:           return UNDEFINED_LAYER;
@@ -223,7 +236,7 @@ PCB_LAYER_ID ALTIUM_PCB::GetKicadLayer( ALTIUM_LAYER aAltiumLayer ) const
     case ALTIUM_LAYER::DRILL_GUIDE:       return Dwgs_User;
     case ALTIUM_LAYER::KEEP_OUT_LAYER:    return Margin;
 
-    case ALTIUM_LAYER::MECHANICAL_1:      return User_1; //Edge_Cuts;
+    case ALTIUM_LAYER::MECHANICAL_1:      return User_1;
     case ALTIUM_LAYER::MECHANICAL_2:      return User_2;
     case ALTIUM_LAYER::MECHANICAL_3:      return User_3;
     case ALTIUM_LAYER::MECHANICAL_4:      return User_4;
@@ -233,12 +246,12 @@ PCB_LAYER_ID ALTIUM_PCB::GetKicadLayer( ALTIUM_LAYER aAltiumLayer ) const
     case ALTIUM_LAYER::MECHANICAL_8:      return User_8;
     case ALTIUM_LAYER::MECHANICAL_9:      return User_9;
     case ALTIUM_LAYER::MECHANICAL_10:     return User_10;
-    case ALTIUM_LAYER::MECHANICAL_11:     return User_11; //Eco1 is used for unknown elements
-    case ALTIUM_LAYER::MECHANICAL_12:     return F_Fab;
-    case ALTIUM_LAYER::MECHANICAL_13:     return B_Fab; // Don't use courtyard layers for other purposes
-    case ALTIUM_LAYER::MECHANICAL_14:     return User_12;
-    case ALTIUM_LAYER::MECHANICAL_15:     return User_13;
-    case ALTIUM_LAYER::MECHANICAL_16:     return User_14;
+    case ALTIUM_LAYER::MECHANICAL_11:     return User_11;
+    case ALTIUM_LAYER::MECHANICAL_12:     return User_12;
+    case ALTIUM_LAYER::MECHANICAL_13:     return User_13;
+    case ALTIUM_LAYER::MECHANICAL_14:     return User_14;
+    case ALTIUM_LAYER::MECHANICAL_15:     return User_15;
+    case ALTIUM_LAYER::MECHANICAL_16:     return User_16;
 
     case ALTIUM_LAYER::DRILL_DRAWING:     return Dwgs_User;
     case ALTIUM_LAYER::MULTI_LAYER:       return UNDEFINED_LAYER;
@@ -685,13 +698,21 @@ FOOTPRINT* ALTIUM_PCB::ParseFootprint( ALTIUM_PCB_COMPOUND_FILE& altiumLibFile,
 {
     std::unique_ptr<FOOTPRINT> footprint = std::make_unique<FOOTPRINT>( m_board );
 
-    // TODO: what should we do with those layers?
-    m_layermap.emplace( ALTIUM_LAYER::MECHANICAL_14, Eco2_User );
-    m_layermap.emplace( ALTIUM_LAYER::MECHANICAL_15, Eco2_User );
-    m_layermap.emplace( ALTIUM_LAYER::MECHANICAL_16, Eco2_User );
-
     m_unicodeStrings.clear();
     m_extendedPrimitiveInformationMaps.clear();
+
+    const std::vector<std::string>  libStreamName{ "Library", "Data" };
+    const CFB::COMPOUND_FILE_ENTRY* libStream = altiumLibFile.FindStream( libStreamName );
+
+    if( libStream == nullptr )
+    {
+        THROW_IO_ERROR( wxString::Format( _( "File not found: '%s'." ), FormatPath( libStreamName ) ) );
+    }
+
+    ALTIUM_BINARY_PARSER libParser( altiumLibFile, libStream );
+    ALIBRARY      libData( libParser );
+
+    HelperFillMechanicalLayerAssignments( libData.stackup );
 
     // TODO: WideStrings are stored as parameterMap in the case of footprints, not as binary
     //    std::string                     unicodeStringsStreamName = aFootprintName.ToStdString() + "\\WideStrings";
@@ -1090,35 +1111,77 @@ void ALTIUM_PCB::ParseBoard6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcb
         ++it;
     }
 
+    HelperFillMechanicalLayerAssignments( elem.stackup );
     remapUnsureLayers( elem.stackup );
 
     // Set name of all non-cu layers
-    for( size_t altiumLayerId = static_cast<size_t>( ALTIUM_LAYER::TOP_OVERLAY );
-         altiumLayerId <= static_cast<size_t>( ALTIUM_LAYER::BOTTOM_SOLDER ); altiumLayerId++ )
+    for( const ABOARD6_LAYER_STACKUP& layer : elem.stackup )
     {
-        // array starts with 0, but stackup with 1
-        ABOARD6_LAYER_STACKUP& layer = elem.stackup.at( altiumLayerId - 1 );
+        ALTIUM_LAYER alayer = static_cast<ALTIUM_LAYER>( layer.layerId );
 
-        ALTIUM_LAYER alayer = static_cast<ALTIUM_LAYER>( altiumLayerId );
-        PCB_LAYER_ID klayer = GetKicadLayer( alayer );
-
-        m_board->SetLayerName( klayer, layer.name );
-    }
-
-    for( size_t altiumLayerId = static_cast<size_t>( ALTIUM_LAYER::MECHANICAL_1 );
-         altiumLayerId <= static_cast<size_t>( ALTIUM_LAYER::MECHANICAL_16 ); altiumLayerId++ )
-    {
-        // array starts with 0, but stackup with 1
-        ABOARD6_LAYER_STACKUP& layer = elem.stackup.at( altiumLayerId - 1 );
-
-        ALTIUM_LAYER alayer = static_cast<ALTIUM_LAYER>( altiumLayerId );
-        PCB_LAYER_ID klayer = GetKicadLayer( alayer );
-
-        m_board->SetLayerName( klayer, layer.name );
+        if( ( alayer >= ALTIUM_LAYER::TOP_OVERLAY && alayer <= ALTIUM_LAYER::BOTTOM_SOLDER )
+            || ( alayer >= ALTIUM_LAYER::MECHANICAL_1 && alayer <= ALTIUM_LAYER::MECHANICAL_16 )
+            || ( alayer >= ALTIUM_LAYER::V7_MECHANICAL_17 && alayer <= ALTIUM_LAYER::V7_MECHANICAL_LAST ) )
+        {
+            PCB_LAYER_ID klayer = GetKicadLayer( alayer );
+            m_board->SetLayerName( klayer, layer.name );
+        }
     }
 
     HelperCreateBoardOutline( elem.board_vertices );
     m_board->GetDesignSettings().SetBoardThickness( stackup.BuildBoardThicknessFromStackup() );
+}
+
+
+// Helper to detect if a layer name indicates a courtyard layer
+static bool IsLayerNameCourtyard( const wxString& aName )
+{
+    wxString nameLower = aName.Lower();
+    return nameLower.Contains( wxT( "courtyard" ) ) || nameLower.Contains( wxT( "court yard" ) )
+           || nameLower.Contains( wxT( "crtyd" ) );
+}
+
+
+// Helper to detect if a layer name indicates an assembly layer
+static bool IsLayerNameAssembly( const wxString& aName )
+{
+    wxString nameLower = aName.Lower();
+    return nameLower.Contains( wxT( "assembly" ) ) || nameLower.Contains( wxT( "assy" ) );
+}
+
+
+// Helper to detect if a layer name indicates a top-side layer
+static bool IsLayerNameTopSide( const wxString& aName )
+{
+    bool isTop = false;
+
+    auto check = [&isTop]( bool aTopCond, bool aBotCond )
+    {
+        if( aTopCond && aBotCond )
+            return false;
+
+        if( !aTopCond && !aBotCond )
+            return false;
+
+        isTop = aTopCond;
+        return true;
+    };
+
+    wxString lower = aName.Lower();
+
+    if( check( lower.StartsWith( "top" ), lower.StartsWith( "bot" ) ) )
+        return isTop;
+
+    if( check( lower.EndsWith( "_t" ), lower.EndsWith( "_b" ) ) )
+        return isTop;
+
+    if( check( lower.EndsWith( ".t" ), lower.EndsWith( ".b" ) ) )
+        return isTop;
+
+    if( check( lower.Contains( "top" ), lower.Contains( "bot" ) ) )
+        return isTop;
+
+    return true; // Unknown
 }
 
 
@@ -1138,6 +1201,10 @@ void ALTIUM_PCB::remapUnsureLayers( std::vector<ABOARD6_LAYER_STACKUP>& aStackup
     ALTIUM_LAYER           layer_num;
     INPUT_LAYER_DESC       iLdesc;
 
+    // Track which courtyard layers we've mapped to avoid duplicates
+    bool frontCourtyardMapped = false;
+    bool backCourtyardMapped = false;
+
     auto next =
             [&]( size_t ii ) -> size_t
             {
@@ -1153,13 +1220,15 @@ void ALTIUM_PCB::remapUnsureLayers( std::vector<ABOARD6_LAYER_STACKUP>& aStackup
     for( size_t ii = 0; ii < aStackup.size(); ii = next( ii ) )
     {
         curLayer = aStackup[ii];
-        layer_num = static_cast<ALTIUM_LAYER>( ii + 1 );
+        layer_num = static_cast<ALTIUM_LAYER>( curLayer.layerId );
+
+        if( m_layermap.find( layer_num ) != m_layermap.end() )
+            continue;
 
         if( ii >= m_board->GetCopperLayerCount() && layer_num != ALTIUM_LAYER::BOTTOM_LAYER
-            && !( layer_num >= ALTIUM_LAYER::TOP_OVERLAY
-                   && layer_num <= ALTIUM_LAYER::BOTTOM_SOLDER )
-            && !( layer_num >= ALTIUM_LAYER::MECHANICAL_1
-                   && layer_num <= ALTIUM_LAYER::MECHANICAL_16 ) )
+            && !( layer_num >= ALTIUM_LAYER::TOP_OVERLAY && layer_num <= ALTIUM_LAYER::BOTTOM_SOLDER )
+            && !( layer_num >= ALTIUM_LAYER::MECHANICAL_1 && layer_num <= ALTIUM_LAYER::MECHANICAL_16 )
+            && !( layer_num >= ALTIUM_LAYER::V7_MECHANICAL_17 && layer_num <= ALTIUM_LAYER::V7_MECHANICAL_LAST ) )
         {
             if( layer_num < ALTIUM_LAYER::BOTTOM_LAYER )
                 continue;
@@ -1168,7 +1237,46 @@ void ALTIUM_PCB::remapUnsureLayers( std::vector<ABOARD6_LAYER_STACKUP>& aStackup
         }
         else
         {
-            iLdesc.AutoMapLayer = GetKicadLayer( layer_num );
+            // Check if the layer name indicates a courtyard layer
+            if( IsLayerNameCourtyard( curLayer.name ) )
+            {
+                bool isTopSide = IsLayerNameTopSide( curLayer.name );
+
+                if( isTopSide && !frontCourtyardMapped )
+                {
+                    iLdesc.AutoMapLayer = F_CrtYd;
+                    frontCourtyardMapped = true;
+                }
+                else if( !isTopSide && !backCourtyardMapped )
+                {
+                    iLdesc.AutoMapLayer = B_CrtYd;
+                    backCourtyardMapped = true;
+                }
+                else if( !frontCourtyardMapped )
+                {
+                    iLdesc.AutoMapLayer = F_CrtYd;
+                    frontCourtyardMapped = true;
+                }
+                else if( !backCourtyardMapped )
+                {
+                    iLdesc.AutoMapLayer = B_CrtYd;
+                    backCourtyardMapped = true;
+                }
+                else
+                {
+                    iLdesc.AutoMapLayer = GetKicadLayer( layer_num );
+                }
+            }
+            // Check if the layer name indicates an assembly layer (map to Fab)
+            else if( IsLayerNameAssembly( curLayer.name ) )
+            {
+                bool isTopSide = IsLayerNameTopSide( curLayer.name );
+                iLdesc.AutoMapLayer = isTopSide ? F_Fab : B_Fab;
+            }
+            else
+            {
+                iLdesc.AutoMapLayer = GetKicadLayer( layer_num );
+            }
         }
 
         iLdesc.Name            = curLayer.name;
@@ -1185,13 +1293,21 @@ void ALTIUM_PCB::remapUnsureLayers( std::vector<ABOARD6_LAYER_STACKUP>& aStackup
 
     // Callback:
     std::map<wxString, PCB_LAYER_ID> reMappedLayers = m_layerMappingHandler( inputLayers );
-    m_layermap.clear();
 
     for( std::pair<wxString, PCB_LAYER_ID> layerPair : reMappedLayers )
     {
         if( layerPair.second == PCB_LAYER_ID::UNDEFINED_LAYER )
         {
-            wxFAIL_MSG( wxT( "Unexpected Layer ID" ) );
+            // Layer mapping handler returned UNDEFINED_LAYER - skip this layer
+            // This can happen for layers that don't have a KiCad equivalent
+            if( m_reporter )
+            {
+                m_reporter->Report( wxString::Format( _( "Layer '%s' could not be mapped and "
+                                                         "will be skipped." ),
+                                                      layerPair.first ),
+                                    RPT_SEVERITY_WARNING );
+            }
+
             continue;
         }
 
@@ -1202,6 +1318,68 @@ void ALTIUM_PCB::remapUnsureLayers( std::vector<ABOARD6_LAYER_STACKUP>& aStackup
 
     m_board->SetEnabledLayers( enabledLayers );
     m_board->SetVisibleLayers( enabledLayers );
+}
+
+
+void ALTIUM_PCB::HelperFillMechanicalLayerAssignments( const std::vector<ABOARD6_LAYER_STACKUP>& aStackup )
+{
+    for( const ABOARD6_LAYER_STACKUP& layer : aStackup )
+    {
+        ALTIUM_LAYER alayer = static_cast<ALTIUM_LAYER>( layer.layerId );
+
+        if( ( alayer >= ALTIUM_LAYER::MECHANICAL_1 && alayer <= ALTIUM_LAYER::MECHANICAL_16 )
+            || ( alayer >= ALTIUM_LAYER::V7_MECHANICAL_17 && alayer <= ALTIUM_LAYER::V7_MECHANICAL_LAST ) )
+        {
+            if( !layer.mechenabled )
+            {
+                m_layermap.emplace( alayer, UNDEFINED_LAYER ); // Disabled layer, do not import
+                continue;
+            }
+
+            PCB_LAYER_ID target = UNDEFINED_LAYER;
+
+            switch( layer.mechkind )
+            {
+            case ALTIUM_MECHKIND::ASSEMBLY_TOP: target = F_Fab; break;
+            case ALTIUM_MECHKIND::ASSEMBLY_BOT: target = B_Fab; break;
+
+            case ALTIUM_MECHKIND::COURTYARD_TOP: target = F_CrtYd; break;
+            case ALTIUM_MECHKIND::COURTYARD_BOT: target = B_CrtYd; break;
+
+            case ALTIUM_MECHKIND::GLUE_POINTS_TOP: target = F_Adhes; break;
+            case ALTIUM_MECHKIND::GLUE_POINTS_BOT: target = B_Adhes; break;
+
+            case ALTIUM_MECHKIND::ASSEMBLY_NOTES: target = Cmts_User; break;
+            case ALTIUM_MECHKIND::FAB_NOTES: target = Cmts_User; break;
+
+            case ALTIUM_MECHKIND::DIMENSIONS: target = Dwgs_User; break;
+
+            case ALTIUM_MECHKIND::DIMENSIONS_TOP: target = F_Fab; break;
+            case ALTIUM_MECHKIND::DIMENSIONS_BOT: target = B_Fab; break;
+
+            case ALTIUM_MECHKIND::VALUE_TOP: target = F_Fab; break;
+            case ALTIUM_MECHKIND::VALUE_BOT: target = B_Fab; break;
+
+            case ALTIUM_MECHKIND::DESIGNATOR_TOP: target = F_Fab; break;
+            case ALTIUM_MECHKIND::DESIGNATOR_BOT: target = B_Fab; break;
+
+            case ALTIUM_MECHKIND::COMPONENT_OUTLINE_TOP: target = F_Fab; break;
+            case ALTIUM_MECHKIND::COMPONENT_OUTLINE_BOT: target = B_Fab; break;
+
+            case ALTIUM_MECHKIND::COMPONENT_CENTER_TOP: target = F_Fab; break;
+            case ALTIUM_MECHKIND::COMPONENT_CENTER_BOT: target = B_Fab; break;
+
+            case ALTIUM_MECHKIND::BOARD: target = Edge_Cuts; break;
+            case ALTIUM_MECHKIND::BOARD_SHAPE: target = Edge_Cuts; break;
+            case ALTIUM_MECHKIND::V_CUT: target = Edge_Cuts; break;
+
+            default: break;
+            }
+
+            if( target != UNDEFINED_LAYER )
+                m_layermap.emplace( alayer, target );
+        }
+    }
 }
 
 
@@ -1291,6 +1469,21 @@ void ALTIUM_PCB::ParseClasses6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumP
     if( reader.GetRemainingBytes() != 0 )
         THROW_IO_ERROR( wxT( "Classes6 stream is not fully parsed" ) );
 
+    // Now that all netclasses and pattern assignments are set up, resolve the pattern
+    // assignments to direct netclass assignments on each net.
+    std::shared_ptr<NET_SETTINGS> netSettings = m_board->GetDesignSettings().m_NetSettings;
+
+    for( NETINFO_ITEM* net : m_board->GetNetInfo() )
+    {
+        if( net->GetNetCode() > 0 )
+        {
+            std::shared_ptr<NETCLASS> netclass = netSettings->GetEffectiveNetClass( net->GetNetname() );
+
+            if( netclass )
+                net->SetNetClass( netclass );
+        }
+    }
+
     m_board->m_LegacyNetclassesLoaded = true;
 }
 
@@ -1318,7 +1511,18 @@ void ALTIUM_PCB::ParseComponents6Data( const ALTIUM_PCB_COMPOUND_FILE& aAltiumPc
         // here to prevent overly-long LIB_IDs because KiCad doesn't store the full path to the
         // footprint library in the design file, only in a library table.
         wxFileName libName( elem.sourcefootprintlibrary, wxPATH_WIN );
-        LIB_ID fpID = AltiumToKiCadLibID( libName.GetName(), elem.pattern );
+
+        // The pattern field may also contain a path when Altium stores it with a full library path.
+        // Extract just the footprint name portion to avoid creating invalid filenames.
+        wxString fpName = elem.pattern;
+
+        if( fpName.Contains( wxT( "\\" ) ) || fpName.Contains( wxT( "/" ) ) )
+        {
+            wxFileName fpPath( fpName, wxPATH_WIN );
+            fpName = fpPath.GetFullName();
+        }
+
+        LIB_ID fpID = AltiumToKiCadLibID( libName.GetName(), fpName );
 
         footprint->SetFPID( fpID );
 
@@ -1482,6 +1686,9 @@ void ALTIUM_PCB::ParseComponentsBodies6Data( const ALTIUM_PCB_COMPOUND_FILE&    
     if( m_progressReporter )
         m_progressReporter->Report( _( "Loading component 3D models..." ) );
 
+    thread_pool&           tp = GetKiCadThreadPool();
+    BS::multi_future<void> embeddedFutures;
+
     ALTIUM_BINARY_PARSER reader( aAltiumPcbFile, aEntry );
 
     while( reader.GetRemainingBytes() >= 4 /* TODO: use Header section of file */ )
@@ -1537,8 +1744,13 @@ void ALTIUM_PCB::ParseComponentsBodies6Data( const ALTIUM_PCB_COMPOUND_FILE&    
         file->decompressedData.resize( decompressedStream.GetSize() );
         decompressedStream.CopyTo( file->decompressedData.data(), file->decompressedData.size() );
 
-        EMBEDDED_FILES::CompressAndEncode( *file );
         footprint->GetEmbeddedFiles()->AddFile( file );
+
+        embeddedFutures.push_back( tp.submit_task(
+                [file]()
+                {
+                    EMBEDDED_FILES::CompressAndEncode( *file );
+                } ) );
 
         FP_3DMODEL modelSettings;
 
@@ -1581,6 +1793,8 @@ void ALTIUM_PCB::ParseComponentsBodies6Data( const ALTIUM_PCB_COMPOUND_FILE&    
 
         footprint->Models().push_back( modelSettings );
     }
+
+    embeddedFutures.wait();
 
     if( reader.GetRemainingBytes() != 0 )
         THROW_IO_ERROR( wxT( "ComponentsBodies6 stream is not fully parsed" ) );
@@ -2468,6 +2682,39 @@ void ALTIUM_PCB::ConvertShapeBasedRegions6ToBoardItem( const AREGION6& aElem )
 
         zone->SetBorderDisplayStyle( ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE,
                                      ZONE::GetDefaultHatchPitch(), true );
+
+        m_board->Add( zone.release(), ADD_MODE::APPEND );
+    }
+    else if( aElem.is_teardrop )
+    {
+        SHAPE_LINE_CHAIN linechain;
+        HelperShapeLineChainFromAltiumVertices( linechain, aElem.outline );
+
+        if( linechain.PointCount() < 3 )
+        {
+            // Polygons with less than 3 points are not supported in KiCad.
+            return;
+        }
+
+        std::unique_ptr<ZONE> zone = std::make_unique<ZONE>( m_board );
+
+        zone->SetPosition( aElem.outline.at( 0 ).position );
+        zone->Outline()->AddOutline( linechain );
+
+        HelperSetZoneLayers( *zone, aElem.layer );
+        zone->SetNetCode( GetNetCode( aElem.net ) );
+        zone->SetTeardropAreaType( TEARDROP_TYPE::TD_UNSPECIFIED );
+        zone->SetHatchStyle( ZONE_BORDER_DISPLAY_STYLE::INVISIBLE_BORDER );
+
+        SHAPE_POLY_SET fill;
+        fill.Append( linechain );
+        fill.Fracture();
+
+        for( PCB_LAYER_ID klayer : GetKicadLayersToIterate( aElem.layer ) )
+            zone->SetFilledPolysList( klayer, fill );
+
+        zone->SetIsFilled( true );
+        zone->SetNeedRefill( false );
 
         m_board->Add( zone.release(), ADD_MODE::APPEND );
     }

@@ -24,8 +24,10 @@
 #ifndef __TOPO_MATCH_H
 #define __TOPO_MATCH_H
 
+#include <atomic>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <optional>
 
 #include <wx/string.h>
@@ -41,6 +43,13 @@ namespace TMATCH
 
 class PIN;
 class CONNECTION_GRAPH;
+
+struct ISOMORPHISM_PARAMS
+{
+    std::atomic<bool>* m_cancelled = nullptr;
+    std::atomic<int>*  m_matchedComponents = nullptr;
+    std::atomic<int>*  m_totalComponents = nullptr;
+};
 
 struct TOPOLOGY_MISMATCH_REASON
 {
@@ -71,6 +80,22 @@ public:
 private:
     void sortPinsByName();
 
+    /**
+     * Check if a suffix looks like a channel identifier.
+     *
+     * Channel identifiers contain no letters, only digits and separator symbols
+     * (dots, underscores, hyphens, etc.).
+     */
+    static bool isChannelSuffix( const wxString& aSuffix );
+
+    /**
+     * Check if two prefixes share a common starting sequence.
+     *
+     * The remaining parts after the common prefix must be valid channel suffixes
+     * (no letters). This handles multi-channel designs where components have
+     * hierarchical reference designators like TRIM_1.1 and TRIM_2.1.
+     */
+    static bool prefixesShareCommonBase( const wxString& aPrefixA, const wxString& aPrefixB );
 
     std::optional<VECTOR2I> m_raOffset;
     wxString          m_reference;
@@ -142,14 +167,17 @@ public:
         m_refIndex = other.m_refIndex;
     }
 
-    const std::map<COMPONENT*, COMPONENT*>& GetMatchingComponentPairs() const { return m_locked; }
+    const std::unordered_map<COMPONENT*, COMPONENT*>& GetMatchingComponentPairs() const
+    {
+        return m_locked;
+    }
 
 private:
     COMPONENT*                       m_ref;
     int                              m_currentMatch = -1;
     int                              m_nloops;
     std::vector<COMPONENT*>          m_matches;
-    std::map<COMPONENT*, COMPONENT*> m_locked;
+    std::unordered_map<COMPONENT*, COMPONENT*> m_locked;
     int m_refIndex;
 };
 
@@ -166,25 +194,32 @@ public:
     void   BuildConnectivity();
     void   AddFootprint( FOOTPRINT* aFp, const VECTOR2I& aOffset );
     bool   FindIsomorphism( CONNECTION_GRAPH* target, COMPONENT_MATCHES& result,
-                            std::vector<TOPOLOGY_MISMATCH_REASON>& aFailureDetails );
+                            std::vector<TOPOLOGY_MISMATCH_REASON>& aFailureDetails,
+                            const ISOMORPHISM_PARAMS& aParams = {} );
     static std::unique_ptr<CONNECTION_GRAPH> BuildFromFootprintSet( const std::set<FOOTPRINT*>& aFps );
     std::vector<COMPONENT*> &Components() { return m_components; }
 
 private:
-    void sortByPinCount()
-    {
-        std::sort( m_components.begin(), m_components.end(),
-                   []( COMPONENT* a, COMPONENT* b )
-                   {
-                       return a->GetPinCount() > b->GetPinCount();
-                   } );
-    }
+    /**
+     * Many times components are electrically/topologically identical, e.g. a bunch of decoupling capacitors
+     * connected to the same power supply and ground. However, the user doesn't want them to be picked randomly,
+     * so we implement a number of strategies to break ties between components.
+     */
+    void breakTie( COMPONENT* aRef, std::vector<COMPONENT*>& aMatches ) const;
+    /**
+     * The most useful tie breaker is based on symbol/sheet instances, since multiple channels in a design
+     * are very often multiple instances of the same sheet.
+     */
+    bool breakTieBySymbolUuid( COMPONENT* aRef, std::vector<COMPONENT*>& aMatches ) const;
+
+    void sortByPinCount();
 
 
-    std::vector<COMPONENT*> findMatchingComponents( CONNECTION_GRAPH* aRefGraph,
-                                                    COMPONENT*             ref,
-                                                    const BACKTRACK_STAGE& partialMatches,
-                                                    std::vector<TOPOLOGY_MISMATCH_REASON>& aFailureDetails );
+    std::vector<COMPONENT*> findMatchingComponents( COMPONENT*                     ref,
+                                                    const std::vector<COMPONENT*>& aStructuralMatches,
+                                                    const BACKTRACK_STAGE&         partialMatches,
+                                                    std::vector<TOPOLOGY_MISMATCH_REASON>& aFailureDetails,
+                                                    const std::atomic<bool>* aCancelled = nullptr );
 
     std::vector<COMPONENT*> m_components;
 

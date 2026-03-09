@@ -4,6 +4,7 @@
  * Copyright (C) 2019 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -46,6 +47,7 @@
 #include <wx/filedlg.h>
 #include <wx/log.h>
 #include <project_sch.h>
+#include <kiplatform/ui.h>
 #include <string_utils.h>
 #include "symbol_saveas_type.h"
 #include <widgets/symbol_library_save_as_filedlg_hook.h>
@@ -80,7 +82,7 @@ void SYMBOL_EDIT_FRAME::UpdateTitle()
         title = _( "[no symbol loaded]" );
     }
 
-    title += wxT( " \u2014 " ) + _( "Symbol Editor" );
+    title += wxT( " \u2014 " ) + _( "Trace Symbol Editor" );
     SetTitle( title );
 }
 
@@ -1078,6 +1080,8 @@ void SYMBOL_EDIT_FRAME::ExportSymbol()
     wxFileDialog dlg( this, _( "Export Symbol" ), m_mruPath, fn.GetFullName(),
                       FILEEXT::KiCadSymbolLibFileWildcard(), wxFD_SAVE );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
@@ -1268,7 +1272,7 @@ void SYMBOL_EDIT_FRAME::DeleteSymbolFromLibrary()
             for( const wxString& name : derived )
                 msg += name + wxT( "\n" );
 
-            KICAD_MESSAGE_DIALOG_BASE dlg( this, msg, _( "Warning" ), wxYES_NO | wxICON_WARNING | wxCENTER );
+            KICAD_MESSAGE_DIALOG dlg( this, msg, _( "Warning" ), wxYES_NO | wxICON_WARNING | wxCENTER );
             dlg.SetExtendedMessage( wxT( " " ) );
             dlg.SetYesNoLabels( _( "Delete All Listed Symbols" ), _( "Cancel" ) );
 
@@ -1545,6 +1549,8 @@ bool SYMBOL_EDIT_FRAME::saveLibrary( const wxString& aLibrary, bool aNewFile )
 
         SYMBOL_LIBRARY_SAVE_AS_FILEDLG_HOOK saveAsHook( type );
         dlg.SetCustomizeHook( saveAsHook );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return false;

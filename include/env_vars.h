@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -64,6 +65,23 @@ namespace ENV_VAR
      * @return an environment variable name, like KICAD8_TEMPLATE_DIR.
      */
     KICOMMON_API wxString GetVersionedEnvVarName( const wxString& aBaseName );
+
+    /**
+     * Construct a Trace versioned environment variable based on this Trace major version.
+     *
+     * @param aBaseName is the suffix, like TEMPLATE_DIR.
+     * @return an environment variable name, like TRACE1_TEMPLATE_DIR.
+     */
+    KICOMMON_API wxString GetTraceVersionedEnvVarName( const wxString& aBaseName );
+
+    /**
+     * Construct a KiCad versioned environment variable based on this KiCad major version.
+     * This is an alias for GetVersionedEnvVarName for backwards compatibility.
+     *
+     * @param aBaseName is the suffix, like TEMPLATE_DIR.
+     * @return an environment variable name, like KICAD8_TEMPLATE_DIR.
+     */
+    KICOMMON_API wxString GetKicadVersionedEnvVarName( const wxString& aBaseName );
 
     /**
      * Attempt to retrieve the value of a versioned environment variable, such as

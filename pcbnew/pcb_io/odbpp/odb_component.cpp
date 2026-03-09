@@ -19,6 +19,9 @@
  */
 
 #include <wx/regex.h>
+#include <wx/log.h>
+
+#include <board.h>
 
 #include "odb_component.h"
 #include "odb_util.h"
@@ -47,18 +50,27 @@ ODB_COMPONENT& COMPONENTS_MANAGER::AddComponent( const FOOTPRINT*         aFp,
         comp.m_mirror = wxT( "M" );
     }
 
-    comp.m_comp_name = aFp->GetReference().ToAscii();
+    wxString originalRef = aFp->GetReference();
+    comp.m_comp_name = ODB::GenLegalComponentName( originalRef );
+
     comp.m_part_name = wxString::Format( "%s_%s", aFp->GetFPID().GetFullLibraryName(),
                                          aFp->GetFPID().GetLibItemName().wx_str() );
 
     // ODB++ cannot handle spaces in these fields
-    ODB::RemoveWhitespace( comp.m_comp_name );
     ODB::RemoveWhitespace( comp.m_part_name );
 
     if( comp.m_comp_name.IsEmpty() )
     {
         // The spec requires a component name; some ODB++ parsers can't handle it being empty
         comp.m_comp_name = wxString::Format( "UNNAMED%zu", m_compList.size() );
+    }
+
+    // Warn if non-ASCII characters were converted
+    if( comp.m_comp_name != originalRef )
+    {
+        wxLogWarning( _( "Component '%s' has non-ASCII characters in its designator; "
+                         "converted to '%s' for ODB++ export." ),
+                      originalRef, comp.m_comp_name );
     }
 
     wxString base_comp_name = comp.m_comp_name;
@@ -73,6 +85,10 @@ ODB_COMPONENT& COMPONENTS_MANAGER::AddComponent( const FOOTPRINT*         aFp,
             candidate = wxString::Format( "%s_%zu", base_comp_name, suffix++ );
         } while( !m_usedCompNames.insert( candidate ).second );
 
+        wxLogWarning( _( "Component '%s' has an ambiguous designator after conversion; "
+                         "renamed to '%s' for ODB++ export." ),
+                      originalRef, candidate );
+
         comp.m_comp_name = candidate;
     }
 
@@ -83,10 +99,10 @@ ODB_COMPONENT& COMPONENTS_MANAGER::AddComponent( const FOOTPRINT*         aFp,
 
         wxString key = field->GetName();
         ODB::RemoveWhitespace( key );
-        comp.m_prp[key] = wxString::Format( "'%s'", field->GetText() );
+        comp.m_prp[key] = wxString::Format( "'%s'", field->GetShownText( false ) );
     }
 
-    if( aFp->IsDNP() )
+    if( aFp->GetDNPForVariant( aFp->GetBoard() ? aFp->GetBoard()->GetCurrentVariant() : wxString() ) )
     {
         AddSystemAttribute( comp, ODB_ATTR::NO_POP{ true } );
     }

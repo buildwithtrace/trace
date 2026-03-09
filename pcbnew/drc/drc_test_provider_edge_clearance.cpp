@@ -56,7 +56,8 @@ class DRC_TEST_PROVIDER_EDGE_CLEARANCE : public DRC_TEST_PROVIDER
 public:
     DRC_TEST_PROVIDER_EDGE_CLEARANCE () :
             DRC_TEST_PROVIDER(),
-            m_largestEdgeClearance( 0 )
+            m_largestEdgeClearance( 0 ),
+            m_epsilon( 0 )
     {}
 
     virtual ~DRC_TEST_PROVIDER_EDGE_CLEARANCE() = default;
@@ -191,12 +192,8 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::testAgainstEdge( BOARD_ITEM* item, SHAPE*
 
     if( constraint.GetSeverity() != RPT_SEVERITY_IGNORE && minClearance >= 0 )
     {
-        if( itemShape->Collide( shape.get(), minClearance, &actual, &pos ) )
+        if( itemShape->Collide( shape.get(), std::max( 0, minClearance - m_epsilon ), &actual, &pos ) )
         {
-            // Exact clearance is allowed
-            if( minClearance > 0 && actual == minClearance )
-                return true;
-
             if( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T )
             {
                 // Edge collisions are allowed inside the holes of castellated pads
@@ -372,14 +369,14 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
     int       count = 0;
     int       ii = 0;
 
-    forEachGeometryItem( s_allBasicItemsButZones, LSET::AllLayersMask(),
+    forEachGeometryItem( s_allBasicItems, LSET::AllLayersMask(),
             [&]( BOARD_ITEM *item ) -> bool
             {
                 count++;
                 return true;
             } );
 
-    forEachGeometryItem( s_allBasicItemsButZones, LSET::AllLayersMask(),
+    forEachGeometryItem( s_allBasicItems, LSET::AllLayersMask(),
             [&]( BOARD_ITEM *item ) -> bool
             {
                 bool testCopper = !m_drcEngine->IsErrorLimitExceeded( DRCE_EDGE_CLEARANCE );
@@ -412,6 +409,12 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
 
                 case PCB_VIA_T:
                     layersToTest = static_cast<PCB_VIA*>( item )->Padstack().UniqueLayers();
+                    break;
+
+                case PCB_ZONE_T:
+                    for( PCB_LAYER_ID layer : item->GetLayerSet() )
+                        layersToTest.push_back( layer );
+
                     break;
 
                 default:

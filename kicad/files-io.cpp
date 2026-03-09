@@ -26,6 +26,7 @@
 #include <wx/filedlg.h>
 #include <wx/dirdlg.h>
 
+#include <kiplatform/ui.h>
 #include <kiway.h>
 #include <project/project_archiver.h>
 #include <reporter.h>
@@ -38,12 +39,10 @@
 
 void KICAD_MANAGER_FRAME::OnFileHistory( wxCommandEvent& event )
 {
-    wxFileName projFileName = GetFileFromHistory( event.GetId(), _( "KiCad project file" ) );
+    wxString filename = GetFileFromHistory( event.GetId(), _( "KiCad project file" ) );
 
-    if( !projFileName.FileExists() )
-        return;
-
-    LoadProject( projFileName );
+    if( !filename.IsEmpty() )
+        LoadProject( wxFileName( filename ) );
 }
 
 
@@ -61,6 +60,8 @@ void KICAD_MANAGER_FRAME::UnarchiveFiles()
 
     wxFileDialog zipfiledlg( this, _( "Unzip Project" ), fn.GetPath(), fn.GetFullName(),
                              FILEEXT::ZipFileWildcard(), wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &zipfiledlg );
 
     if( zipfiledlg.ShowModal() == wxID_CANCEL )
         return;

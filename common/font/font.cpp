@@ -247,9 +247,9 @@ void FONT::getLinePositions( const wxString& aText, const VECTOR2I& aPosition,
 }
 
 
-void FONT::Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosition,
-                 const VECTOR2I& aCursor, const TEXT_ATTRIBUTES& aAttrs,
-                 const METRICS& aFontMetrics ) const
+void FONT::Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosition, const VECTOR2I& aCursor,
+                 const TEXT_ATTRIBUTES& aAttrs, const METRICS& aFontMetrics, std::optional<VECTOR2I> aMousePos,
+                 wxString* aActiveUrl ) const
 {
     if( !aGal || aText.empty() )
         return;
@@ -267,9 +267,9 @@ void FONT::Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosit
 
     for( size_t i = 0; i < strings_list.GetCount(); i++ )
     {
-        drawSingleLineText( aGal, nullptr, strings_list[i], positions[i], aAttrs.m_Size,
-                            aAttrs.m_Angle, aAttrs.m_Mirrored, aPosition, aAttrs.m_Italic,
-                            aAttrs.m_Underlined, aFontMetrics );
+        drawSingleLineText( aGal, nullptr, strings_list[i], positions[i], aAttrs.m_Size, aAttrs.m_Angle,
+                            aAttrs.m_Mirrored, aPosition, aAttrs.m_Italic, aAttrs.m_Underlined, aAttrs.m_Hover,
+                            aFontMetrics, aMousePos, aActiveUrl );
     }
 }
 
@@ -277,15 +277,17 @@ void FONT::Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosit
 /**
  * @return position of cursor for drawing next substring.
  */
-VECTOR2I drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* aGlyphs,
-                     const MARKUP::NODE* aNode, const VECTOR2I& aPosition,
-                     const KIFONT::FONT* aFont, const VECTOR2I& aSize, const EDA_ANGLE& aAngle,
-                     bool aMirror, const VECTOR2I& aOrigin, TEXT_STYLE_FLAGS aTextStyle,
-                     const METRICS& aFontMetrics )
+VECTOR2I drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* aGlyphs, const MARKUP::NODE* aNode,
+                     const VECTOR2I& aPosition, const KIFONT::FONT* aFont, const VECTOR2I& aSize,
+                     const EDA_ANGLE& aAngle, bool aMirror, const VECTOR2I& aOrigin, TEXT_STYLE_FLAGS aTextStyle,
+                     const METRICS& aFontMetrics, std::optional<VECTOR2I> aMousePos, wxString* aActiveUrl )
 {
     VECTOR2I nextPosition = aPosition;
     bool     drawUnderline = false;
     bool     drawOverbar = false;
+    bool     useHoverColor = false;
+    int      start = aGlyphs ? (int) aGlyphs->size() : 0;
+
 
     if( aNode )
     {
@@ -301,27 +303,32 @@ VECTOR2I drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* a
             if( aNode->isOverbar() )
                 drawOverbar = true;
 
+            if( aTextStyle & TEXT_STYLE::UNDERLINE )
+                drawUnderline = true;
+
             if( aNode->has_content() )
             {
                 BOX2I bbox;
 
                 nextPosition = aFont->GetTextAsGlyphs( &bbox, aGlyphs, aNode->asWxString(), aSize,
-                                                       nextPosition, aAngle, aMirror, aOrigin,
-                                                       textStyle );
+                                                       nextPosition, aAngle, aMirror, aOrigin, textStyle );
 
                 if( aBoundingBox )
                     aBoundingBox->Merge( bbox );
+
+                if( aNode->isURL() && aMousePos.has_value() && bbox.Contains( aMousePos.value() ) )
+                {
+                    useHoverColor = true;
+                    drawUnderline = true;
+                }
             }
-        }
-        else if( aTextStyle & TEXT_STYLE::UNDERLINE )
-        {
-            drawUnderline = true;
         }
 
         for( const std::unique_ptr<MARKUP::NODE>& child : aNode->children )
         {
-            nextPosition = drawMarkup( aBoundingBox, aGlyphs, child.get(), nextPosition, aFont,
-                                       aSize, aAngle, aMirror, aOrigin, textStyle, aFontMetrics );
+            nextPosition = drawMarkup( aBoundingBox, aGlyphs, child.get(), nextPosition, aFont, aSize,
+                                       aAngle, aMirror, aOrigin, textStyle, aFontMetrics, aMousePos,
+                                       aActiveUrl );
         }
     }
 
@@ -369,6 +376,15 @@ VECTOR2I drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* a
         }
     }
 
+    if( useHoverColor )
+    {
+        for( int ii = start; ii < (int) aGlyphs->size(); ++ii )
+            (*aGlyphs)[ii]->SetIsHover( true );
+
+        if( aActiveUrl && aActiveUrl->IsEmpty() )
+            *aActiveUrl = aNode->asWxString();
+    }
+
     return nextPosition;
 }
 
@@ -376,7 +392,8 @@ VECTOR2I drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* a
 VECTOR2I FONT::drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* aGlyphs,
                            const wxString& aText, const VECTOR2I& aPosition, const VECTOR2I& aSize,
                            const EDA_ANGLE& aAngle, bool aMirror, const VECTOR2I& aOrigin,
-                           TEXT_STYLE_FLAGS aTextStyle, const METRICS& aFontMetrics ) const
+                           TEXT_STYLE_FLAGS aTextStyle, const METRICS& aFontMetrics,
+                           std::optional<VECTOR2I> aMousePos, wxString* aActiveUrl ) const
 {
     std::lock_guard<std::mutex> lock( s_markupCacheMutex );
 
@@ -395,14 +412,15 @@ VECTOR2I FONT::drawMarkup( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYP
     wxASSERT( markup && markup->root );
 
     return ::drawMarkup( aBoundingBox, aGlyphs, markup->root.get(), aPosition, this, aSize, aAngle,
-                         aMirror, aOrigin, aTextStyle, aFontMetrics );
+                         aMirror, aOrigin, aTextStyle, aFontMetrics, aMousePos, aActiveUrl );
 }
 
 
 void FONT::drawSingleLineText( KIGFX::GAL* aGal, BOX2I* aBoundingBox, const wxString& aText,
-                               const VECTOR2I& aPosition, const VECTOR2I& aSize,
-                               const EDA_ANGLE& aAngle, bool aMirror, const VECTOR2I& aOrigin,
-                               bool aItalic, bool aUnderline, const METRICS& aFontMetrics ) const
+                               const VECTOR2I& aPosition, const VECTOR2I& aSize, const EDA_ANGLE& aAngle,
+                               bool aMirror, const VECTOR2I& aOrigin, bool aItalic, bool aUnderline,
+                               bool aHover, const METRICS& aFontMetrics, std::optional<VECTOR2I> aMousePos,
+                               wxString* aActiveUrl ) const
 {
     if( !aGal )
         return;
@@ -418,7 +436,13 @@ void FONT::drawSingleLineText( KIGFX::GAL* aGal, BOX2I* aBoundingBox, const wxSt
     std::vector<std::unique_ptr<GLYPH>> glyphs;
 
     (void) drawMarkup( aBoundingBox, &glyphs, aText, aPosition, aSize, aAngle, aMirror, aOrigin,
-                       textStyle, aFontMetrics );
+                       textStyle, aFontMetrics, aMousePos, aActiveUrl );
+
+    if( aHover )
+    {
+        for( std::unique_ptr<GLYPH>& glyph : glyphs )
+            glyph->SetIsHover( true );
+    }
 
     aGal->DrawGlyphs( glyphs );
 }
@@ -478,7 +502,8 @@ VECTOR2I FONT::boundingBoxSingleLine( BOX2I* aBBox, const wxString& aText,
  */
 void wordbreakMarkup( std::vector<std::pair<wxString, int>>* aWords,
                       const std::unique_ptr<MARKUP::NODE>& aNode, const KIFONT::FONT* aFont,
-                      const VECTOR2I& aSize, TEXT_STYLE_FLAGS aTextStyle )
+                      const VECTOR2I& aSize, TEXT_STYLE_FLAGS aTextStyle,
+                      bool aInsideMarkup = false )
 {
     TEXT_STYLE_FLAGS textStyle = aTextStyle;
 
@@ -520,7 +545,7 @@ void wordbreakMarkup( std::vector<std::pair<wxString, int>>* aWords,
             std::vector<std::pair<wxString, int>> childWords;
 
             for( const std::unique_ptr<MARKUP::NODE>& child : aNode->children )
-                wordbreakMarkup( &childWords, child, aFont, aSize, textStyle );
+                wordbreakMarkup( &childWords, child, aFont, aSize, textStyle, true );
 
             for( const std::pair<wxString, int>& childWord : childWords )
             {
@@ -531,6 +556,17 @@ void wordbreakMarkup( std::vector<std::pair<wxString, int>>* aWords,
             word += wxT( "}" );
             aWords->emplace_back( std::make_pair( word, width ) );
             return;
+        }
+        else if( aInsideMarkup )
+        {
+            // Inside a markup node, preserve the content verbatim (no tokenization).
+            // wxStringTokenizer collapses consecutive spaces, which corrupts content
+            // like ~{     } where spaces are intentional.
+            wxString content = aNode->asWxString();
+            int      w = aFont->GetTextAsGlyphs( nullptr, nullptr, content, aSize, { 0, 0 },
+                                                  ANGLE_0, false, { 0, 0 }, textStyle ).x;
+
+            aWords->emplace_back( std::make_pair( content, w ) );
         }
         else
         {
@@ -546,8 +582,9 @@ void wordbreakMarkup( std::vector<std::pair<wxString, int>>* aWords,
                 wxString chars = word;
                 chars.Trim();
 
-                int w = aFont->GetTextAsGlyphs( nullptr, nullptr, chars, aSize, { 0, 0 },
-                                                ANGLE_0, false, { 0, 0 }, textStyle ).x;
+                int w = aFont->GetTextAsGlyphs( nullptr, nullptr, chars.IsEmpty() ? word : chars,
+                                                aSize, { 0, 0 }, ANGLE_0, false, { 0, 0 },
+                                                textStyle ).x;
 
                 aWords->emplace_back( std::make_pair( word, w ) );
             }
@@ -555,7 +592,7 @@ void wordbreakMarkup( std::vector<std::pair<wxString, int>>* aWords,
     }
 
     for( const std::unique_ptr<MARKUP::NODE>& child : aNode->children )
-        wordbreakMarkup( aWords, child, aFont, aSize, textStyle );
+        wordbreakMarkup( aWords, child, aFont, aSize, textStyle, aInsideMarkup );
 }
 
 

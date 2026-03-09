@@ -72,7 +72,7 @@ DIALOG_ZONE_MANAGER_BASE::DIALOG_ZONE_MANAGER_BASE( wxWindow* parent, wxWindowID
 	m_sizerZoneOP->Add( m_btnMoveDown, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
 
 
-	m_leftColumn->Add( m_sizerZoneOP, 0, wxEXPAND|wxTOP, 5 );
+	m_leftColumn->Add( m_sizerZoneOP, 0, wxEXPAND|wxTOP|wxBOTTOM, 5 );
 
 
 	listPanelSizer->Add( m_leftColumn, 1, wxEXPAND|wxRIGHT|wxLEFT, 5 );
@@ -95,10 +95,10 @@ DIALOG_ZONE_MANAGER_BASE::DIALOG_ZONE_MANAGER_BASE( wxWindow* parent, wxWindowID
 	m_sizerPreview = new wxBoxSizer( wxVERTICAL );
 
 
-	m_rightColumn->Add( m_sizerPreview, 1, wxEXPAND|wxRIGHT|wxLEFT, 5 );
+	m_rightColumn->Add( m_sizerPreview, 1, wxEXPAND, 5 );
 
 
-	zonePanelSizer->Add( m_rightColumn, 1, wxEXPAND, 5 );
+	zonePanelSizer->Add( m_rightColumn, 1, wxEXPAND|wxBOTTOM, 5 );
 
 
 	m_zonePanel->SetSizer( zonePanelSizer );
@@ -110,12 +110,15 @@ DIALOG_ZONE_MANAGER_BASE::DIALOG_ZONE_MANAGER_BASE( wxWindow* parent, wxWindowID
 
 	m_MainBoxSizer->Add( m_sizerTop, 1, wxEXPAND, 5 );
 
+	m_staticline1 = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
+	m_MainBoxSizer->Add( m_staticline1, 0, wxEXPAND, 5 );
+
 	m_sizerBottom = new wxBoxSizer( wxHORIZONTAL );
 
 	m_checkRepour = new wxCheckBox( this, wxID_ANY, _("Refill zones"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_checkRepour->SetToolTip( _("Refill zones after changes made on board") );
 
-	m_sizerBottom->Add( m_checkRepour, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 10 );
+	m_sizerBottom->Add( m_checkRepour, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
 
 
 	m_sizerBottom->Add( 100, 0, 1, wxEXPAND, 5 );

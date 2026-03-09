@@ -4,6 +4,7 @@
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,7 +33,7 @@
 #include <gal/graphics_abstraction_layer.h>
 #include <kiface_base.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <locale_io.h>
 #include <symbol_viewer_frame.h>
 #include <widgets/msgpanel.h>
@@ -87,6 +88,8 @@ BEGIN_EVENT_TABLE( SYMBOL_VIEWER_FRAME, SCH_BASE_FRAME )
     EVT_TOOL( ID_LIBVIEW_PREVIOUS, SYMBOL_VIEWER_FRAME::onSelectPreviousSymbol )
     EVT_CHOICE( ID_LIBVIEW_SELECT_UNIT_NUMBER, SYMBOL_VIEWER_FRAME::onSelectSymbolUnit )
     EVT_CHOICE( ID_LIBVIEW_SELECT_BODY_STYLE, SYMBOL_VIEWER_FRAME::onSelectSymbolBodyStyle )
+    EVT_CHOICE( ID_ON_ZOOM_SELECT, SYMBOL_VIEWER_FRAME::OnSelectZoom )
+    EVT_CHOICE( ID_ON_GRID_SELECT, SYMBOL_VIEWER_FRAME::OnSelectGrid )
 
     // listbox events
     EVT_TEXT( ID_LIBVIEW_LIB_FILTER, SYMBOL_VIEWER_FRAME::OnLibFilter )
@@ -110,7 +113,7 @@ SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_libList( nullptr ),
         m_symbolList( nullptr )
 {
-    m_aboutTitle = _HKI( "KiCad Symbol Library Browser" );
+    m_aboutTitle = _HKI( "Trace Symbol Library Browser" );
 
     // Force the frame name used in config. the lib viewer frame has a name
     // depending on aFrameType (needed to identify the frame by wxWidgets),
@@ -204,7 +207,7 @@ SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     // Manage main toolbar
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( "TopMainToolbar" ).Top().Layer(6) );
-    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ) .Bottom().Layer(6) );
+    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(1) );
 
     m_auimgr.AddPane( libPanel, EDA_PANE().Palette().Name( "Libraries" ).Left().Layer(2)
                       .CaptionVisible( false ).MinSize( 100, -1 ).BestSize( 200, -1 ) );
@@ -1070,16 +1073,15 @@ SELECTION& SYMBOL_VIEWER_FRAME::GetCurrentSelection()
 }
 
 
-void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
 
     switch( mail.Command() )
     {
     case MAIL_RELOAD_LIB:
-    {
         ReCreateLibList();
         break;
-    }
+
     case MAIL_REFRESH_SYMBOL:
     {
         LIB_SYMBOL* symbol = GetSelectedSymbol();
@@ -1095,8 +1097,8 @@ void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
         wxString libfullname = LIBRARY_MANAGER::GetFullURI( row, true );
 
         wxString lib( mail.GetPayload() );
-    wxLogTrace( traceLibWatch, "Received refresh symbol request for %s, current symbols "
-            "is %s", lib, libfullname );
+        wxLogTrace( traceLibWatch, "Received refresh symbol request for %s, current symbols is %s",
+                    lib, libfullname );
 
         if( lib == libfullname )
         {
@@ -1104,6 +1106,7 @@ void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
             updatePreviewSymbol();
             GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
         }
+
         break;
     }
     default:;

@@ -15,7 +15,7 @@ IDI_FILE_SCHEMATIC_ICON ICON "../resources/bitmaps_png/icons/fileicon_schematic.
 IDI_FILE_SYMBOL_ICON ICON "../resources/bitmaps_png/icons/fileicon_symbol.ico"
 IDI_FILE_WORKSHEET_ICON ICON "../resources/bitmaps_png/icons/fileicon_worksheet.ico"
 
-#define RC_VER_FILE_DESCRIPTION "KiCad EDA " KICAD_WIN32_RC_PRODVER_STR
+#define RC_VER_FILE_DESCRIPTION "Trace " TRACE_WIN32_RC_PRODVER_STR
 #define RC_VER_INTERNALNAME "kicad"
 #define RC_VER_ORIGINALFILENAME "kicad.exe"
 #include "kiwin32.rc"

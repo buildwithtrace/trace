@@ -46,15 +46,16 @@
 CLI::SCH_EXPORT_PLOT_COMMAND::SCH_EXPORT_PLOT_COMMAND( const std::string& aName,
                                                        const std::string& aDescription,
                                                        SCH_PLOT_FORMAT    aPlotFormat,
-                                                       bool               aOutputIsDir ) :
+                                                       IO_TYPE            aOutputType ) :
         COMMAND( aName ),
         m_plotFormat( aPlotFormat )
 {
     m_argParser.add_description( aDescription );
 
-    addCommonArgs( true, true, false, aOutputIsDir );
+    addCommonArgs( true, true, IO_TYPE::FILE, aOutputType );
     addDrawingSheetArg();
     addDefineArg();
+    addVariantsArg();
 
     m_argParser.add_argument( "-t", ARG_THEME )
             .default_value( std::string() )
@@ -162,7 +163,7 @@ int CLI::SCH_EXPORT_PLOT_COMMAND::doPerform( KIWAY& aKiway )
     plotJob->m_plotPages = pages;
     plotJob->m_plotDrawingSheet = !m_argParser.get<bool>( ARG_EXCLUDE_DRAWING_SHEET );
     plotJob->m_pageSizeSelect = JOB_PAGE_SIZE::PAGE_SIZE_AUTO;
-    plotJob->m_defaultFont = m_argParser.get( ARG_FONT_NAME );
+    plotJob->m_defaultFont = From_UTF8( m_argParser.get<std::string>( ARG_FONT_NAME ).c_str() );
     plotJob->m_show_hop_over = m_argParser.get<bool>( ARG_DRAW_HOP_OVER );
 
     if( m_plotFormat == SCH_PLOT_FORMAT::PDF
@@ -181,6 +182,7 @@ int CLI::SCH_EXPORT_PLOT_COMMAND::doPerform( KIWAY& aKiway )
 
     plotJob->m_drawingSheet = m_argDrawingSheet;
     plotJob->SetVarOverrides( m_argDefineVars );
+    plotJob->m_variantNames = m_argVariantNames;
 
     // PDF local options
     if( m_plotFormat == SCH_PLOT_FORMAT::PDF )

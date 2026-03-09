@@ -42,8 +42,8 @@ EDA_ITEM::EDA_ITEM( EDA_ITEM* parent, KICAD_T idType, bool isSCH_ITEM, bool isBO
         m_flags( 0 ),
         m_parent( parent ),
         m_group( nullptr ),
-        m_forceVisible( false ),
-        m_isRollover( false )
+        m_isRollover( false ),
+        m_forceVisible( false )
 { }
 
 
@@ -53,8 +53,8 @@ EDA_ITEM::EDA_ITEM( KICAD_T idType, bool isSCH_ITEM, bool isBOARD_ITEM ) :
         m_flags( 0 ),
         m_parent( nullptr ),
         m_group( nullptr ),
-        m_forceVisible( false ),
-        m_isRollover( false )
+        m_isRollover( false ),
+        m_forceVisible( false )
 { }
 
 
@@ -65,8 +65,8 @@ EDA_ITEM::EDA_ITEM( const EDA_ITEM& base ) :
         m_flags( base.m_flags ),
         m_parent( base.m_parent ),
         m_group( base.m_group ),
-        m_forceVisible( base.m_forceVisible ),
-        m_isRollover( false )
+        m_isRollover( false ),
+        m_forceVisible( base.m_forceVisible )
 {
     SetForcedTransparency( base.GetForcedTransparency() );
 }
@@ -85,6 +85,14 @@ EDA_ITEM* EDA_ITEM::findParent( KICAD_T aType ) const
     }
 
     return nullptr;
+}
+
+
+void EDA_ITEM::SetParent( EDA_ITEM* aParent )
+{
+    wxCHECK( aParent != this, /* void */ );
+
+    m_parent = aParent;
 }
 
 

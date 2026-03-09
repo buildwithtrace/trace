@@ -266,9 +266,19 @@ public:
     bool ResolveExcludedFromBOM( const SCH_SHEET_PATH* aInstance = nullptr,
                                  const wxString& aVariantName = wxEmptyString ) const;
 
-    virtual void SetExcludedFromBoard( bool aExcludeFromBoard ) { }
-    virtual bool GetExcludedFromBoard() const { return false; }
-    bool ResolveExcludedFromBoard() const;
+    virtual void SetExcludedFromBoard( bool aExclude, const SCH_SHEET_PATH* aInstance = nullptr,
+                                        const wxString& aVariantName = wxEmptyString ) { }
+    virtual bool GetExcludedFromBoard( const SCH_SHEET_PATH* aInstance = nullptr,
+                                       const wxString& aVariantName = wxEmptyString ) const { return false; }
+    bool ResolveExcludedFromBoard( const SCH_SHEET_PATH* aInstance = nullptr,
+                                   const wxString& aVariantName = wxEmptyString ) const;
+
+    virtual void SetExcludedFromPosFiles( bool aExclude, const SCH_SHEET_PATH* aInstance = nullptr,
+                                          const wxString& aVariantName = wxEmptyString ) { }
+    virtual bool GetExcludedFromPosFiles( const SCH_SHEET_PATH* aInstance = nullptr,
+                                          const wxString& aVariantName = wxEmptyString ) const { return false; }
+    bool ResolveExcludedFromPosFiles( const SCH_SHEET_PATH* aInstance = nullptr,
+                                      const wxString& aVariantName = wxEmptyString ) const;
 
     virtual void SetDNP( bool aDNP, const SCH_SHEET_PATH* aInstance = nullptr,
                          const wxString& aVariantName = wxEmptyString ) { }
@@ -276,6 +286,8 @@ public:
                          const wxString& aVariantName = wxEmptyString ) const { return false; }
     bool ResolveDNP( const SCH_SHEET_PATH* aInstance = nullptr,
                      const wxString& aVariantName = wxEmptyString ) const;
+
+    wxString ResolveText( const wxString& aText, const SCH_SHEET_PATH* aPath, int aDepth = 0 ) const;
 
     /**
      * Check if object is movable from the anchor point.
@@ -309,11 +321,18 @@ public:
     SYMBOL* GetParentSymbol();
 
     /**
-     * Allow items to support hypertext actions when hovered/clicked.
+     * Indicates that the item has at least one hypertext action.  This could be a URL assigned to
+     * the item as a whole, or one (or more) urls within the text of the item.
      */
-    virtual bool IsHypertext() const { return false; }
+    virtual bool HasHypertext() const { return false; }
 
-    virtual void DoHypertextAction( EDA_DRAW_FRAME* aFrame ) const { }
+    /**
+     * Indicates that a hypertext link is currently active.
+     * (Note that the default implementation here only handles the simple case.)
+     */
+    virtual bool HasHoveredHypertext() const { return HasHypertext() && IsRollover(); }
+
+    virtual void DoHypertextAction( EDA_DRAW_FRAME* aFrame, const VECTOR2I& aMousePos ) const { }
 
     /**
      * Return the layer this item is on.
@@ -652,6 +671,11 @@ public:
      * Add a rule area to the item's cache.
      */
     void AddRuleAreaToCache( SCH_RULE_AREA* aRuleArea ) { m_rule_areas_cache.insert( aRuleArea ); }
+
+    /**
+     * Remove a specific rule area from the item's cache.
+     */
+    void RemoveRuleAreaFromCache( SCH_RULE_AREA* aRuleArea ) { m_rule_areas_cache.erase( aRuleArea ); }
 
     /**
      * Get the cache of rule areas enclosing this item.

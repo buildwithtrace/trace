@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Jean-Pierre Charras, jp.charras at wanadoo.fr
  *
  * This program is free software; you can redistribute it and/or
@@ -64,6 +65,7 @@
 #include <wx/treebook.h>
 #include <wx/msgdlg.h>
 #include <wx/log.h>
+#include <kiplatform/ui.h>
 
 #ifndef __linux__
 #include <navlib/nl_pl_editor_plugin.h>
@@ -102,7 +104,7 @@ PL_EDITOR_FRAME::PL_EDITOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_showBorderAndTitleBlock   = true; // true for reference drawings.
     DS_DATA_MODEL::GetTheInstance().m_EditMode = true;
-    m_aboutTitle = _HKI( "KiCad Drawing Sheet Editor" );
+    m_aboutTitle = _HKI( "Trace Drawing Sheet Editor" );
 
     // Give an icon
     wxIcon icon;
@@ -189,7 +191,7 @@ PL_EDITOR_FRAME::PL_EDITOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" )
                       .Left().Layer( 3 ) );
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     // Columns; layers 1 - 3
     m_auimgr.AddPane( m_tbRight, EDA_PANE().VToolbar().Name( "RightToolbar" )
@@ -747,10 +749,8 @@ void PL_EDITOR_FRAME::UpdateStatusBar()
     // Display absolute coordinates:
     VECTOR2D cursorPos = GetCanvas()->GetViewControls()->GetCursorPosition();
     VECTOR2D coord = cursorPos - originCoord;
-    double   dXpos =
-            EDA_UNIT_UTILS::UI::ToUserUnit( drawSheetIUScale, GetUserUnits(), coord.x * Xsign );
-    double dYpos =
-            EDA_UNIT_UTILS::UI::ToUserUnit( drawSheetIUScale, GetUserUnits(), coord.y * Ysign );
+    double   dXpos = EDA_UNIT_UTILS::UI::ToUserUnit( drawSheetIUScale, GetUserUnits(), coord.x * Xsign );
+    double   dYpos = EDA_UNIT_UTILS::UI::ToUserUnit( drawSheetIUScale, GetUserUnits(), coord.y * Ysign );
 
     wxString absformatter = wxT( "X %.4g  Y %.4g" );
     wxString locformatter = wxT( "dx %.4g  dy %.4g" );
@@ -845,8 +845,9 @@ DS_DATA_ITEM* PL_EDITOR_FRAME::AddDrawingSheetItem( int aType )
     case DS_DATA_ITEM::DS_BITMAP:
     {
         wxFileDialog fileDlg( this, _( "Choose Image" ), m_mruImagePath, wxEmptyString,
-                              _( "Image Files" ) + wxS( " " ) + wxImage::GetImageExtWildcard(),
-                              wxFD_OPEN );
+                              FILEEXT::ImageFileWildcard(), wxFD_OPEN );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &fileDlg );
 
         if( fileDlg.ShowModal() != wxID_OK )
             return nullptr;
@@ -872,8 +873,8 @@ DS_DATA_ITEM* PL_EDITOR_FRAME::AddDrawingSheetItem( int aType )
         // Set the scale factor for pl_editor (it is set for Eeschema by default)
         image->SetPixelSizeIu( drawSheetIUScale.IU_PER_MILS * 1000.0 / image->GetPPI() );
         item = new DS_DATA_ITEM_BITMAP( image );
+        break;
     }
-    break;
     }
 
     if( item == nullptr )

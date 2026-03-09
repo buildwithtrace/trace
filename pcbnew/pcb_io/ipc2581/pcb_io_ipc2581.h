@@ -73,6 +73,7 @@ public:
         m_progress_reporter = nullptr;
         m_xml_doc = nullptr;
         m_xml_root = nullptr;
+        m_lastAppendedNode = nullptr;
     }
 
     ~PCB_IO_IPC2581() override;
@@ -225,7 +226,7 @@ private:
 
     void addLocationNode( wxXmlNode* aContentNode, const PCB_SHAPE& aShape );
 
-    void addShape( wxXmlNode* aContentNode, const PCB_SHAPE& aShape );
+    void addShape( wxXmlNode* aContentNode, const PCB_SHAPE& aShape, bool aInline = false );
 
     void addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAYER_ID aLayer );
 
@@ -281,6 +282,8 @@ private:
     void insertNode( wxXmlNode* aParent, wxXmlNode* aNode );
 
     void insertNodeAfter( wxXmlNode* aPrev, wxXmlNode* aNode );
+
+    void deleteNode( wxXmlNode*& aNode );
 
     void addLayerAttributes( wxXmlNode* aNode, PCB_LAYER_ID aLayer );
 
@@ -362,6 +365,8 @@ private:
 
     wxXmlDocument*          m_xml_doc;
     wxXmlNode*              m_xml_root;
+
+    wxXmlNode*              m_lastAppendedNode;     ///< Optimization for appendNode to avoid O(n) child traversal
 };
 
 #endif // PCB_IO_IPC2581_H_

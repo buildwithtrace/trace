@@ -3,6 +3,7 @@
  *
  * Copyright (C) 1992-2015 jean-pierre.charras
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,7 +35,6 @@
 #include <attenuators/attenuator_classes.h>
 #include <pcb_calculator_frame.h>
 #include <pcb_calculator_settings.h>
-#include <pcb_calculator_control.h>
 
 #include <calculator_panels/panel_rf_attenuators.h>
 #include <calculator_panels/panel_board_class.h>
@@ -66,7 +66,7 @@ PCB_CALCULATOR_FRAME::PCB_CALCULATOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                   wxT( "calculator_tools" ), unityScale ),
     m_lastNotebookPage( -1 )
 {
-    m_aboutTitle = _HKI( "KiCad Calculator Tools" );
+    m_aboutTitle = _HKI( "Trace Calculator Tools" );
 
     SHAPE_POLY_SET dummy;   // A ugly trick to force the linker to include
                             // some methods in code and avoid link errors
@@ -109,7 +109,6 @@ PCB_CALCULATOR_FRAME::PCB_CALCULATOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     // Register tools
     m_toolManager->RegisterTool( new COMMON_CONTROL );
-    m_toolManager->RegisterTool( new PCB_CALCULATOR_CONTROL );
     m_toolManager->InitTools();
 
     ReCreateMenuBar();
@@ -155,11 +154,7 @@ PCB_CALCULATOR_FRAME::~PCB_CALCULATOR_FRAME()
 
 void PCB_CALCULATOR_FRAME::OnExit( wxCommandEvent& aEvent )
 {
-    if( aEvent.GetId() == wxID_EXIT )
-        Kiway().OnKiCadExit();
-
-    if( aEvent.GetId() == wxID_CLOSE || Kiface().IsSingle() )
-        Close( false );
+    Close( false );
 }
 
 

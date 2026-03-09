@@ -72,7 +72,7 @@ STROKE_FONT* STROKE_FONT::LoadFont( const wxString& aFontName )
     }
     else
     {
-        // FONT TODO: support for other stroke fonts?
+        // If we ever supported other stroke fonts, the code would go here.
         return nullptr;
     }
 }
@@ -283,7 +283,7 @@ VECTOR2I STROKE_FONT::GetTextAsGlyphs( BOX2I* aBBox, std::vector<std::unique_ptr
     if( aBBox )
     {
         aBBox->SetOrigin( aPosition );
-        aBBox->SetEnd( cursor.x - KiROUND( glyphSize.x * INTER_CHAR ), cursor.y + glyphSize.y );
+        aBBox->SetEnd( cursor.x - KiROUND( glyphSize.x * INTER_CHAR ), cursor.y - glyphSize.y );
         aBBox->Normalize();
     }
 

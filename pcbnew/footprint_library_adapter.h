@@ -23,6 +23,7 @@
 #define FOOTPRINT_LIBRARY_ADAPTER_H
 
 #include <lib_id.h>
+#include <core/leak_at_exit.h>
 #include <libraries/library_manager.h>
 #include <pcb_io/pcb_io.h>
 #include <project.h>
@@ -35,27 +36,20 @@ class FOOTPRINT;
  * and linked to one project in particular.  This is what can return actual concrete
  * schematic library content (symbols).
  */
-class FOOTPRINT_LIBRARY_ADAPTER : public LIBRARY_MANAGER_ADAPTER, public PROJECT::_ELEM
+class FOOTPRINT_LIBRARY_ADAPTER : public LIBRARY_MANAGER_ADAPTER
 {
 public:
     FOOTPRINT_LIBRARY_ADAPTER( LIBRARY_MANAGER& aManager );
 
     LIBRARY_TABLE_TYPE Type() const override { return LIBRARY_TABLE_TYPE::FOOTPRINT; }
 
-    PROJECT::ELEM ProjectElementType() override { return PROJECT::ELEM::FPTBL; }
-
     static wxString GlobalPathEnvVariableName();
-
-    void AsyncLoad() override;
 
     /// Loads or reloads the given library, if it exists
     std::optional<LIB_STATUS> LoadOne( LIB_DATA* aLib ) override;
 
     /// Loads or reloads the given library, if it exists
     std::optional<LIB_STATUS> LoadOne( const wxString& aNickname );
-
-    /// Returns the status of a loaded library, or nullopt if the library hasn't been loaded (yet)
-    std::optional<LIB_STATUS> GetLibraryStatus( const wxString& aNickname ) const override;
 
     /**
      * Retrieves a list of footprints contained in a given loaded library
@@ -64,6 +58,7 @@ public:
      * @return a list of footprints contained in the given library
      */
     std::vector<FOOTPRINT*> GetFootprints( const wxString& aNickname, bool aBestEfforts = false );
+
 
     /**
      * Retrieves a list of footprint names contained in a given loaded library
@@ -168,24 +163,27 @@ public:
     bool IsFootprintLibWritable( const wxString& aNickname );
 
 protected:
+    std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries.Get(); }
+    std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries.Get(); }
+    std::shared_mutex& globalLibsMutex() override { return GlobalLibraryMutex; }
+    std::shared_mutex& globalLibsMutex() const override { return GlobalLibraryMutex; }
 
-    std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries; }
-    std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries; }
-    std::mutex& globalLibsMutex() override { return GlobalLibraryMutex; }
+    void enumerateLibrary( LIB_DATA* aLib ) override;
 
     LIBRARY_RESULT<IO_BASE*> createPlugin( const LIBRARY_TABLE_ROW* row ) override;
 
     IO_BASE* plugin( const LIB_DATA* aRow ) override { return pcbplugin( aRow ); }
 
 private:
-    /// Helper to cast the ABC plugin in the LIB_DATA* to a concrete plugin
     static PCB_IO* pcbplugin( const LIB_DATA* aRow );
 
-    // The global libraries, potentially shared between multiple different open
-    // projects, each of which has their own instance of this adapter class
-    static std::map<wxString, LIB_DATA> GlobalLibraries;
+    static LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> GlobalLibraries;
+    static std::shared_mutex GlobalLibraryMutex;
 
-    static std::mutex GlobalLibraryMutex;
+    /// Storage for preloaded footprints, indexed by library nickname.
+    /// These are cloned during library enumeration so GetFootprints() returns instantly.
+    static LEAK_AT_EXIT<std::map<wxString, std::vector<std::unique_ptr<FOOTPRINT>>>> PreloadedFootprints;
+    static std::shared_mutex PreloadedFootprintsMutex;
 };
 
 #endif //FOOTPRINT_LIBRARY_ADAPTER_H
