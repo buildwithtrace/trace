@@ -41,9 +41,7 @@ class PROJECT;
 class EESCHEMA_HELPERS
 {
 public:
-    static SETTINGS_MANAGER* GetSettingsManager();
     static void              SetSchEditFrame( SCH_EDIT_FRAME* aSchEditFrame );
-    static PROJECT*          GetDefaultProject( bool aSetActive );
     static SCHEMATIC*        LoadSchematic( const wxString& aFileName, bool aSetActive,
                                             bool aForceDefaultProject,
                                             PROJECT* aProject = nullptr,
@@ -56,7 +54,6 @@ public:
 
 private:
     static SCH_EDIT_FRAME*   s_SchEditFrame;
-    static SETTINGS_MANAGER* s_SettingsManager;
 };
 
 #endif

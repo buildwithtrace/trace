@@ -73,6 +73,8 @@ public:
         m_progress_reporter = nullptr;
         m_xml_doc = nullptr;
         m_xml_root = nullptr;
+        m_contentNode = nullptr;
+        m_lastAppendedNode = nullptr;
     }
 
     ~PCB_IO_IPC2581() override;
@@ -225,7 +227,7 @@ private:
 
     void addLocationNode( wxXmlNode* aContentNode, const PCB_SHAPE& aShape );
 
-    void addShape( wxXmlNode* aContentNode, const PCB_SHAPE& aShape );
+    void addShape( wxXmlNode* aContentNode, const PCB_SHAPE& aShape, bool aInline = false );
 
     void addShape( wxXmlNode* aContentNode, const PAD& aPad, PCB_LAYER_ID aLayer );
 
@@ -282,6 +284,8 @@ private:
 
     void insertNodeAfter( wxXmlNode* aPrev, wxXmlNode* aNode );
 
+    void deleteNode( wxXmlNode*& aNode );
+
     void addLayerAttributes( wxXmlNode* aNode, PCB_LAYER_ID aLayer );
 
     bool isValidLayerFor2581( PCB_LAYER_ID aLayer );
@@ -298,6 +302,7 @@ private:
     wxString                m_mfg;          //<! If set, field name containing the part manufacturer
     wxString                m_distpn;       //<! If set, field name containing the distributor part number
     wxString                m_dist;         //<! If set, field name containing the distributor name
+    wxString                m_bomRev;       //<! BOM revision string for the BomHeader element
 
     // Node pointer to the main enterprise node to be used for adding
     // enterprises later when forming the AVL
@@ -362,6 +367,9 @@ private:
 
     wxXmlDocument*          m_xml_doc;
     wxXmlNode*              m_xml_root;
+    wxXmlNode*              m_contentNode;
+
+    wxXmlNode*              m_lastAppendedNode;     ///< Optimization for appendNode to avoid O(n) child traversal
 };
 
 #endif // PCB_IO_IPC2581_H_

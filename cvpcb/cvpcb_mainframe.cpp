@@ -30,7 +30,7 @@
 #include <footprint_library_adapter.h>
 #include <kiface_base.h>
 #include <kiplatform/app.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <string_utils.h>
 #include <project/project_file.h>
 #include <netlist_reader/netlist_reader.h>
@@ -43,14 +43,17 @@
 #include <tool/editor_conditions.h>
 #include <tool/tool_dispatcher.h>
 #include <tool/tool_manager.h>
+#include <widgets/kistatusbar.h>
 #include <widgets/wx_progress_reporters.h>
 
 #include <cvpcb_association.h>
 #include <cvpcb_id.h>
 #include <cvpcb_mainframe.h>
+#include <settings/common_settings.h>
 #include <settings/settings_manager.h>
 #include <settings/cvpcb_settings.h>
 #include <display_footprints_frame.h>
+#include <footprint_info_impl.h>
 #include <kiplatform/ui.h>
 #include <listboxes.h>
 #include <tools/cvpcb_actions.h>
@@ -80,7 +83,7 @@ CVPCB_MAINFRAME::CVPCB_MAINFRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_cannotClose         = false;
     m_skipComponentSelect = false;
     m_filteringOptions    = FOOTPRINTS_LISTBOX::UNFILTERED_FP_LIST;
-    m_FootprintsList      = FOOTPRINT_LIST::GetInstance( Kiway() );
+    m_FootprintsList      = new FOOTPRINT_LIST_IMPL();
     m_initialized         = false;
     m_aboutTitle          = _( "Assign Footprints" );
 
@@ -240,6 +243,7 @@ CVPCB_MAINFRAME::~CVPCB_MAINFRAME()
     delete m_actions;
     delete m_toolManager;
     delete m_toolDispatcher;
+    delete m_FootprintsList;
 
     m_auimgr.UnInit();
 }
@@ -908,7 +912,10 @@ bool CVPCB_MAINFRAME::LoadFootprintFiles()
     m_FootprintsList->ReadFootprintFiles( adapter, nullptr, &progressReporter );
 
     if( m_FootprintsList->GetErrorCount() )
-        m_FootprintsList->DisplayErrors( this );
+    {
+        if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
+            statusBar->SetLoadWarningMessages( m_FootprintsList->GetErrorMessages() );
+    }
 
     return true;
 }
@@ -1206,7 +1213,7 @@ void CVPCB_MAINFRAME::ShowChangedLanguage()
 }
 
 
-void CVPCB_MAINFRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void CVPCB_MAINFRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
     const std::string& payload = mail.GetPayload();
 

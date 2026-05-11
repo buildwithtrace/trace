@@ -101,10 +101,14 @@ public:
 protected:
     void showPopupMenu( wxMenu& menu, wxGridEvent& aEvent ) override
     {
-        wxMenuItem* revertMenu = menu.Append( MYID_REVERT_ROW, _( "Revert symbol" ), _( "Revert the symbol to its last saved state" ), wxITEM_NORMAL );
-        wxMenuItem* clearMenu = menu.Append( MYID_CLEAR_CELL, _( "Clear cell" ), _( "Clear the cell value" ), wxITEM_NORMAL );
+        wxMenuItem* revertMenu = menu.Append( MYID_REVERT_ROW, _( "Revert symbol" ),
+                                              _( "Revert the symbol to its last saved state" ), wxITEM_NORMAL );
+        wxMenuItem* clearMenu = menu.Append( MYID_CLEAR_CELL, _( "Clear cell" ),
+                                             _( "Clear the cell value" ), wxITEM_NORMAL );
         menu.AppendSeparator();
-        wxMenuItem* createDerivedSymbolMenu = menu.Append( MYID_CREATE_DERIVED_SYMBOL, _( "Create Derived Symbol" ), _( "Create a new symbol derived from the selected one" ), wxITEM_NORMAL );
+        wxMenuItem* deriveMenu = menu.Append( MYID_CREATE_DERIVED_SYMBOL, _( "Create Derived Symbol" ),
+                                              _( "Create a new symbol derived from the selected one" ),
+                                              wxITEM_NORMAL );
 
         // Get global mouse position and convert to grid client coords
         wxPoint mousePos = wxGetMousePosition();
@@ -122,7 +126,7 @@ protected:
 
         revertMenu->Enable( m_dataModel->IsCellEdited( row, col ) );
         clearMenu->Enable( !m_dataModel->IsCellClear( row, col ) );
-        createDerivedSymbolMenu->Enable( m_dataModel->IsRowSingleSymbol( row ) );
+        deriveMenu->Enable( m_dataModel->IsRowSingleSymbol( row ) );
 
         if( m_dataModel->GetColFieldName( col ) == GetCanonicalFieldName( FIELD_T::FOOTPRINT ) )
         {
@@ -790,6 +794,7 @@ void DIALOG_LIB_FIELDS_TABLE::OnFilterText( wxCommandEvent& event )
 
 void DIALOG_LIB_FIELDS_TABLE::OnFilterMouseMoved(wxMouseEvent& aEvent)
 {
+#if defined( __WXOSX__ ) // Doesn't work properly on other ports
     wxPoint pos = aEvent.GetPosition();
     wxRect  ctrlRect = m_filter->GetScreenRect();
     int     buttonWidth = ctrlRect.GetHeight();         // Presume buttons are square
@@ -801,6 +806,7 @@ void DIALOG_LIB_FIELDS_TABLE::OnFilterMouseMoved(wxMouseEvent& aEvent)
         SetCursor( wxCURSOR_ARROW );
     else
         SetCursor( wxCURSOR_IBEAM );
+#endif
 }
 
 

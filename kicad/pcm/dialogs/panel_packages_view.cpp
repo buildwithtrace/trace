@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2021 Andrew Lutsenko, anlutsenko at gmail dot com
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -434,8 +435,11 @@ bool PANEL_PACKAGES_VIEW::canRunAction() const
     {
     case PPS_PENDING_INSTALL:
     case PPS_PENDING_UNINSTALL:
-    case PPS_PENDING_UPDATE: return false;
-    default: break;
+    case PPS_PENDING_UPDATE:
+        return false;
+
+    default:
+        break;
     }
 
     return m_gridVersions->GetNumberRows() == 1 || m_gridVersions->GetSelectedRows().size() == 1;
@@ -508,12 +512,14 @@ void PANEL_PACKAGES_VIEW::OnDownloadVersionClicked( wxCommandEvent& event )
     }
 
     const wxString& url = *ver_it->download_url;
-    KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     wxWindow* topLevelParent = wxGetTopLevelParent( this );
     wxFileDialog dialog( topLevelParent, _( "Save Package" ), cfg->m_PcmLastDownloadDir,
                          wxString::Format( wxT( "%s_v%s.zip" ), package.identifier, version ),
                          wxT( "ZIP files (*.zip)|*.zip" ), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dialog );
 
     if( dialog.ShowModal() == wxID_CANCEL )
         return;

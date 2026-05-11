@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,7 +28,7 @@
 #include <dialog_shim.h>
 
 
-void TEXTENTRY_TRICKS::OnCharHook( wxTextEntry* aTextEntry, wxKeyEvent& aEvent )
+void TEXTENTRY_TRICKS::OnCharHook( wxTextEntry* aTextEntry, wxKeyEvent& aEvent, wxWindow* focus )
 {
     if( aEvent.GetModifiers() == wxMOD_CONTROL && aEvent.GetKeyCode() == 'X' )
     {
@@ -78,7 +79,7 @@ void TEXTENTRY_TRICKS::OnCharHook( wxTextEntry* aTextEntry, wxKeyEvent& aEvent )
     }
     else
     {
-        aEvent.Skip();
+        focus->HandleWindowEvent( aEvent );
     }
 }
 

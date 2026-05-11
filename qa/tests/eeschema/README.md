@@ -1,6 +1,9 @@
-# KiCad HTTP Library Test Server
+# KiCad HTTP / Provider Test Server
 
-This module implements a test HTTP server using FastAPI. It is a simple way to spin up a local API server to test the KiCad HTTP library feature.
+This module implements a FastAPI fixture server for two paths:
+
+- KiCad HTTP library smoke tests
+- embedded remote provider panel tests
 
 FastAPI gives you a test interface at the `/docs` endpoint to observe the responses for debug.
 
@@ -47,7 +50,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the HTTP test server:
+Run the HTTP/provider test server:
 
 ```bash
 uv run http_lib_test_server.py
@@ -58,9 +61,19 @@ Or use:
 python http_lib_test_server.py
 ```
 
-The server will start on `http://0.0.0.0:8000`
+The server will start on `http://127.0.0.1:8000`
 
-The server implements the KiCad HTTP Library API in the simplest use case, with one resistor category and one sample part (RC0603FR-0710KL). See the [KiCad HTTP Library documentation](https://dev-docs.kicad.org/en/apis-and-binding/pcbnew/) for API details.
+The server implements both:
+
+- the KiCad HTTP Library API in the simplest use case
+- provider metadata, OAuth stubs, session bootstrap, embedded provider page, download endpoints
+- compatibility search/manifest endpoints used by lower-level tests
+
+Optional flags:
+
+```bash
+uv run http_lib_test_server.py --host 127.0.0.1 --port 8000
+```
 
 ## Testing with KiCad
 
@@ -69,9 +82,14 @@ The server implements the KiCad HTTP Library API in the simplest use case, with 
    uv run http_lib_test_server.py
    ```
 
-2. In KiCad, load the HTTP library configuration file `http_test.kicad_httplib` (located in the same folder as the test script)
+2. For HTTP library testing, load `http_test.kicad_httplib` in KiCad.
 
-3. Add a symbol in the schematic editor.  your should find the http_test library in the list.
+3. For remote provider testing, add a provider whose metadata URL is:
+   `http://127.0.0.1:8000/.well-known/kicad-remote-provider`
+
+4. Open the remote symbol panel. The provider page is rendered inside the embedded webview.
+
+5. Use `Sign In` to exercise OAuth loopback + KiCad session bootstrap.
 
 ## License
 

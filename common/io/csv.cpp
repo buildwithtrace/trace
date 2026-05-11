@@ -98,5 +98,5 @@ bool AutoDecodeCSV( const wxString& aInput, std::vector<std::vector<wxString>>& 
     }
 
     // Anything in the first row?
-    return aData[0].size() > 0;
+    return !aData.empty() && aData[0].size() > 0;
 }

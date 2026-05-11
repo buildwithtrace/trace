@@ -26,9 +26,8 @@
 #ifndef DRAW_FRAME_H_
 #define DRAW_FRAME_H_
 
-#include <api/api_plugin.h>
+#include <api/plugin_action_scope.h>
 #include <eda_base_frame.h>
-#include <eda_search_data.h>
 #include <kiway_player.h>
 #include <gal/gal_display_options.h>
 #include <gal_display_options_common.h>
@@ -36,8 +35,11 @@
 #include <class_draw_panel_gal.h>
 #include <kiid.h>
 #include <hotkeys_basic.h>
-#include <widgets/lib_tree.h>
+#include <lib_id.h>
 
+struct EDA_SEARCH_DATA;
+struct PLUGIN_ACTION;
+class LIB_TREE;
 class EDA_ITEM;
 class wxSingleInstanceChecker;
 class ACTION_TOOLBAR;
@@ -115,7 +117,7 @@ public:
      */
     bool IsScriptingConsoleVisible();
 
-    EDA_SEARCH_DATA& GetFindReplaceData() { return *m_findReplaceData; }
+    EDA_SEARCH_DATA& GetFindReplaceData();
     wxArrayString& GetFindHistoryList() { return m_findStringHistoryList; }
 
     virtual void SetPageSettings( const PAGE_INFO& aPageSettings ) = 0;
@@ -224,10 +226,10 @@ public:
      *
      * These parameters are saved in KiCad config for each main frame.
      */
-    bool IsGridVisible() const;
+    bool IsGridVisible();
     virtual void SetGridVisibility( bool aVisible );
 
-    bool         IsGridOverridden() const;
+    bool         IsGridOverridden();
     virtual void SetGridOverrides( bool aOverride );
 
     virtual COLOR4D GetGridColor() { return m_gridColor; }
@@ -470,6 +472,8 @@ public:
 
     wxWindow* GetToolCanvas() const override { return GetCanvas(); }
 
+    void ClearToolbarControl( int aId ) override;
+
     /**
      * Return a reference to the gal rendering options used by GAL for rendering.
      */
@@ -533,7 +537,7 @@ public:
      * @param aCfg is the settings to read the plugin ordering from.
      */
     static std::vector<const PLUGIN_ACTION*> GetOrderedPluginActions( PLUGIN_ACTION_SCOPE aScope,
-        APP_SETTINGS_BASE* aCfg );
+                                                                      APP_SETTINGS_BASE* aCfg );
 
     /**
      * Append actions from API plugins to the given toolbar.
@@ -550,6 +554,8 @@ protected:
     virtual void SetScreen( BASE_SCREEN* aScreen )  { m_currentScreen = aScreen; }
 
     void unitsChangeRefresh() override;
+
+    void setupUIConditions() override;
 
     void setupUnits( APP_SETTINGS_BASE* aCfg );
 

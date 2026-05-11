@@ -18,6 +18,7 @@
  */
 
 #include <eda_draw_frame.h>
+#include <properties/color4d_variant.h>
 #include <properties/std_optional_variants.h>
 #include <properties/eda_angle_variant.h>
 #include <properties/pg_editors.h>
@@ -31,6 +32,8 @@
 #include <wx/filedlg.h>
 #include <wx/intl.h>
 #include <eda_doc.h>
+#include <kiplatform/ui.h>
+#include <kiway_mail.h>
 
 #include <wx/button.h>
 #include <wx/bmpbuttn.h>
@@ -132,7 +135,21 @@ void PG_UNIT_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) c
 {
     wxVariant var = aProperty->GetValue();
 
-    if( var.GetType() == wxT( "std::optional<int>" ) )
+    if( PGPROPERTY_ANGLE* angleProp = dynamic_cast<PGPROPERTY_ANGLE*>( aProperty ) )
+    {
+        if( var.GetType() == wxT( "EDA_ANGLE" ) )
+        {
+            EDA_ANGLE_VARIANT_DATA* angleData =
+                    static_cast<EDA_ANGLE_VARIANT_DATA*>( var.GetData() );
+            m_unitBinder->ChangeAngleValue( angleData->Angle() );
+        }
+        else if( !aProperty->IsValueUnspecified() )
+        {
+            double scale = angleProp->GetScale();
+            m_unitBinder->ChangeDoubleValue( var.GetDouble() / scale );
+        }
+    }
+    else if( var.GetType() == wxT( "std::optional<int>" ) )
     {
         auto* variantData = static_cast<STD_OPTIONAL_INT_VARIANT_DATA*>( var.GetData() );
 
@@ -219,11 +236,14 @@ bool PG_UNIT_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aPr
         }
         else
         {
-            changed = ( aVariant.IsNull() || angle.AsDegrees() != aVariant.GetDouble() );
+            PGPROPERTY_ANGLE* angleProp = static_cast<PGPROPERTY_ANGLE*>( aProperty );
+            double             scaledValue = angle.AsDegrees() * angleProp->GetScale();
+
+            changed = ( aVariant.IsNull() || scaledValue != aVariant.GetDouble() );
 
             if( changed )
             {
-                aVariant = angle.AsDegrees();
+                aVariant = scaledValue;
                 m_unitBinder->SetValue( angle.AsDegrees() );
             }
         }
@@ -330,13 +350,21 @@ wxPGWindowList PG_COLOR_EDITOR::CreateControls( wxPropertyGrid* aGrid, wxPGPrope
     editor->SetPosition( aPos );
     editor->SetSize( aSize );
 
+    // Capture property name instead of pointer to avoid dangling pointer if grid is rebuilt
+    wxString propName = colorProp->GetName();
+
     editor->Bind( COLOR_SWATCH_CHANGED,
                   [=]( wxCommandEvent& aEvt )
                   {
-                      wxVariant val;
-                      auto data = new COLOR4D_VARIANT_DATA( editor->GetSwatchColor() );
-                      val.SetData( data );
-                      aGrid->ChangePropertyValue( colorProp, val );
+                      wxPGProperty* prop = aGrid->GetPropertyByName( propName );
+
+                      if( prop )
+                      {
+                          wxVariant val;
+                          auto data = new COLOR4D_VARIANT_DATA( editor->GetSwatchColor() );
+                          val.SetData( data );
+                          aGrid->ChangePropertyValue( prop, val );
+                      }
                   } );
 
 #if wxCHECK_VERSION( 3, 3, 0 )
@@ -349,6 +377,11 @@ wxPGWindowList PG_COLOR_EDITOR::CreateControls( wxPropertyGrid* aGrid, wxPGPrope
                 [=]()
                 {
                     editor->GetNewSwatchColor();
+
+                    wxPGProperty* prop = aGrid->GetPropertyByName( propName );
+
+                    if( prop )
+                        aGrid->DrawItem( prop );
                 } );
     }
 
@@ -475,7 +508,9 @@ void PG_RATIO_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) 
 }
 
 
-PG_FPID_EDITOR::PG_FPID_EDITOR( EDA_DRAW_FRAME* aFrame ) : m_frame( aFrame )
+PG_FPID_EDITOR::PG_FPID_EDITOR( EDA_DRAW_FRAME* aFrame, const std::function<std::string()>& aNetlistCallback ) :
+        m_frame( aFrame ),
+        m_netlistCallback( aNetlistCallback )
 {
     m_editorName = BuildEditorName( aFrame );
 }
@@ -485,6 +520,12 @@ void PG_FPID_EDITOR::UpdateFrame( EDA_DRAW_FRAME* aFrame )
 {
     m_frame = aFrame;
     m_editorName = BuildEditorName( aFrame );
+}
+
+
+void PG_FPID_EDITOR::UpdateCallback( const std::function<std::string()>& aNetlistCallback )
+{
+    m_netlistCallback = aNetlistCallback;
 }
 
 
@@ -517,10 +558,22 @@ bool PG_FPID_EDITOR::OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wx
 {
     if( aEvent.GetEventType() == wxEVT_BUTTON )
     {
+        if( !m_frame )
+            return true;
+
         wxString fpid = aProperty->GetValue().GetString();
 
         if( KIWAY_PLAYER* frame = m_frame->Kiway().Player( FRAME_FOOTPRINT_CHOOSER, true, m_frame ) )
         {
+            // Create symbol netlist for footprint picker
+            std::string symbolNetlist = m_netlistCallback();
+
+            if( !symbolNetlist.empty() )
+            {
+                KIWAY_MAIL_EVENT event( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST, symbolNetlist );
+                frame->KiwayMailIn( event );
+            }
+
             if( frame->ShowModal( &fpid, m_frame ) )
                 aGrid->ChangePropertyValue( aProperty, fpid );
 
@@ -579,6 +632,9 @@ bool PG_URL_EDITOR::OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wxW
 {
     if( aEvent.GetEventType() == wxEVT_BUTTON )
     {
+        if( !m_frame )
+            return true;
+
         wxString filename = aProperty->GetValue().GetString();
 
         if( filename.IsEmpty() || filename == wxS( "~" ) )
@@ -586,6 +642,8 @@ bool PG_URL_EDITOR::OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wxW
             wxFileDialog openFileDialog( m_frame, _( "Open file" ), wxS( "" ), wxS( "" ),
                                          _( "All Files" ) + wxS( " (*.*)|*.*" ),
                                          wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+            KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
 
             if( openFileDialog.ShowModal() == wxID_OK )
             {

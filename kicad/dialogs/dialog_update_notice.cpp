@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2023 Mark Roszko <mark.roszko@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -35,7 +36,7 @@ DIALOG_UPDATE_NOTICE::DIALOG_UPDATE_NOTICE( wxWindow* aWindow, const wxString& a
         m_detailsUrl( aDetailsUrl ),
         m_downloadsUrl( aDownloadsUrl )
 {
-    wxString msg = wxString::Format( _( "KiCad %s is now available (you have %s). Would you like to download it now?" ), aNewVersion, GetMajorMinorPatchVersion()  );
+    wxString msg = wxString::Format( _( "Trace %s is now available (you have %s). Would you like to download it now?" ), aNewVersion, GetTraceMajorMinorPatchVersion()  );
     m_messageLine2->SetLabelText( msg );
 
     Fit();

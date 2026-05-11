@@ -346,6 +346,7 @@ void DIALOG_PRINT_PCBNEW::onPopUpLayers( wxCommandEvent& event )
             else
                 m_layerCheckListBox->Check( i, false );
         }
+
         break;
 
     case ID_SELECT_COPPER_LAYERS:
@@ -354,6 +355,7 @@ void DIALOG_PRINT_PCBNEW::onPopUpLayers( wxCommandEvent& event )
             if( IsCopperLayer( m_layerList[i] ) )
                 m_layerCheckListBox->Check( i, true );
         }
+
         break;
 
     case ID_DESELECT_COPPER_LAYERS:
@@ -362,16 +364,19 @@ void DIALOG_PRINT_PCBNEW::onPopUpLayers( wxCommandEvent& event )
             if( IsCopperLayer( m_layerList[i] ) )
                 m_layerCheckListBox->Check( i, false );
         }
+
         break;
 
     case ID_SELECT_ALL_LAYERS:
         for( unsigned i = 0; i < m_layerList.size(); i++ )
             m_layerCheckListBox->Check( i, true );
+
         break;
 
     case ID_DESELECT_ALL_LAYERS:
         for( unsigned i = 0; i < m_layerList.size(); i++ )
             m_layerCheckListBox->Check( i, false );
+
         break;
 
     default:
@@ -449,6 +454,8 @@ void DIALOG_PRINT_PCBNEW::saveSettings()
     }
 
     DIALOG_PRINT_GENERIC::saveSettings();
+
+    settings()->Save( cfg );
 }
 
 
@@ -458,6 +465,11 @@ int PCB_CONTROL::Print( const TOOL_EVENT& aEvent )
     m_toolMgr->RunAction( ACTIONS::selectionClear );
 
     PCBNEW_PRINTOUT_SETTINGS settings( m_frame->GetPageSettings() );
+
+    // Load saved settings
+    PCBNEW_SETTINGS* cfg = static_cast<PCB_BASE_EDIT_FRAME*>( m_frame )->GetPcbNewSettings();
+    settings.Load( cfg );
+
     DIALOG_PRINT_PCBNEW dlg( (PCB_BASE_EDIT_FRAME*) m_frame, &settings );
 
     if( m_isFootprintEditor )

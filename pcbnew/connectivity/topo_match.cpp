@@ -28,10 +28,16 @@
 #include <vector>
 #include <algorithm>
 #include <cassert>
+#include <future>
 #include <map>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
+
+#include <thread_pool.h>
 #include <cctype>
 
+#include <core/profile.h>
 #include <pad.h>
 #include <footprint.h>
 #include <refdes_utils.h>
@@ -43,6 +49,8 @@
 
 
 static const wxString traceTopoMatch = wxT( "TOPO_MATCH" );
+static const wxString traceTopoMatchDetail = wxT( "TOPO_MATCH_DETAIL" );
+
 
 namespace TMATCH
 {
@@ -95,14 +103,14 @@ bool PIN::IsIsomorphic( const PIN& b, TOPOLOGY_MISMATCH_REASON& aReason ) const
 
     std::vector<bool> matches( m_conns.size() );
 
-    for( int i = 0; i < m_conns.size(); i++ )
+    for( size_t i = 0; i < m_conns.size(); i++ )
         matches[i] = false;
 
-    int nref = 0;
+    size_t nref = 0;
 
     for( auto& cref : m_conns )
     {
-        for( int i = 0; i < m_conns.size(); i++ )
+        for( size_t i = 0; i < m_conns.size(); i++ )
         {
             if( b.m_conns[i]->IsTopologicallySimilar( *cref ) )
             {
@@ -114,7 +122,7 @@ bool PIN::IsIsomorphic( const PIN& b, TOPOLOGY_MISMATCH_REASON& aReason ) const
         nref++;
     }
 
-    for( int i = 0; i < m_conns.size(); i++ )
+    for( size_t i = 0; i < m_conns.size(); i++ )
     {
         if( !matches[i] )
         {
@@ -132,117 +140,121 @@ bool PIN::IsIsomorphic( const PIN& b, TOPOLOGY_MISMATCH_REASON& aReason ) const
 }
 
 
-// fixme: terrible performance, but computers are fast these days, ain't they? :D
-bool checkIfPadNetsMatch( const BACKTRACK_STAGE& aMatches, CONNECTION_GRAPH* aRefGraph, COMPONENT* aRef,
-                          COMPONENT* aTgt, TOPOLOGY_MISMATCH_REASON& aReason )
+std::unordered_map<int, int> buildBaseNetMapping( const BACKTRACK_STAGE& aMatches )
 {
-    std::map<PIN*, PIN*> pairs;
-    std::vector<PIN*>    pref, ptgt;
+    std::unordered_map<int, int> mapping;
+    mapping.reserve( aMatches.GetMatchingComponentPairs().size() * 4 );
 
-    // GetMatchingComponentPairs() returns target->reference map
-    for( auto& m : aMatches.GetMatchingComponentPairs() )
+    for( const auto& [tgtCmp, refCmp] : aMatches.GetMatchingComponentPairs() )
     {
-        for( PIN* p : m.second->Pins() )
-        {
-            pref.push_back( p );
-        }
+        auto& refPins = refCmp->Pins();
+        auto& tgtPins = tgtCmp->Pins();
 
-        for( PIN* p : m.first->Pins() )
-        {
-            ptgt.push_back( p );
-        }
+        for( size_t i = 0; i < refPins.size() && i < tgtPins.size(); i++ )
+            mapping[refPins[i]->GetNetCode()] = tgtPins[i]->GetNetCode();
     }
 
-    for( PIN* p : aRef->Pins() )
-    {
-        pref.push_back( p );
-    }
+    return mapping;
+}
 
-    for( PIN* p : aTgt->Pins() )
-    {
-        ptgt.push_back( p );
-    }
 
-    if( pref.size() != ptgt.size() )
+bool checkCandidateNetConsistency( const std::unordered_map<int, int>& aBaseMapping,
+                                   COMPONENT* aRef, COMPONENT* aTgt,
+                                   TOPOLOGY_MISMATCH_REASON& aReason,
+                                   const std::unordered_set<int>& aExternalNets )
+{
+    if( aRef->Pins().size() != aTgt->Pins().size() )
     {
         aReason.m_reference = aRef->GetParent()->GetReferenceAsString();
         aReason.m_candidate = aTgt->GetParent()->GetReferenceAsString();
         aReason.m_reason =
                 wxString::Format( _( "Component %s expects %lu matching pads but candidate %s provides %lu." ),
-                                  aReason.m_reference, static_cast<unsigned long>( pref.size() ),
-                                  aReason.m_candidate, static_cast<unsigned long>( ptgt.size() ) );
+                                  aReason.m_reference, static_cast<unsigned long>( aRef->Pins().size() ),
+                                  aReason.m_candidate, static_cast<unsigned long>( aTgt->Pins().size() ) );
         return false;
     }
 
-    for( unsigned int i = 0; i < pref.size(); i++ )
+    // Track net mappings introduced by this candidate's pins that aren't yet in the
+    // base mapping.  Two pins sharing the same ref net must map to the same target net.
+    std::unordered_map<int, int> candidateAdditions;
+
+    for( size_t i = 0; i < aRef->Pins().size(); i++ )
     {
-        pairs[pref[i]] = ptgt[i];
-    }
+        int refNet = aRef->Pins()[i]->GetNetCode();
+        int tgtNet = aTgt->Pins()[i]->GetNetCode();
 
-    for( PIN* refPin : aRef->Pins() )
-    {
-        wxLogTrace( traceTopoMatch, wxT( "pad %s-%s: " ),
-                    aRef->GetParent()->GetReferenceAsString(), refPin->GetReference() );
+        // Pads on external (global/power) nets are shared with the outside world and may be
+        // tied to different global nets in different channels (e.g. an address-select pin tied
+        // to +3V3 in one channel and GND in another).  Skip them in the net-consistency check
+        // so such legitimate differences do not cause false topology-mismatch errors.
+        if( aExternalNets.count( refNet ) || aExternalNets.count( tgtNet ) )
+            continue;
 
-        std::optional<int> prevNet;
+        auto baseIt = aBaseMapping.find( refNet );
 
-        for( COMPONENT* refCmp : aRefGraph->Components() )
+        if( baseIt != aBaseMapping.end() )
         {
-            for( PIN* ppin : refCmp->Pins() )
+            if( baseIt->second != tgtNet )
             {
-                if ( ppin->GetNetCode() != refPin->GetNetCode() )
-                    continue;
+                wxLogTrace( traceTopoMatch, wxT( "nets inconsistent\n" ) );
 
-                wxLogTrace( traceTopoMatch, wxT( "{ref %s-%s:%d} " ),
-                            ppin->GetParent()->GetParent()->GetReferenceAsString(),
-                            ppin->GetReference(), ppin->GetNetCode() );
+                aReason.m_reference = aRef->GetParent()->GetReferenceAsString();
+                aReason.m_candidate = aTgt->GetParent()->GetReferenceAsString();
 
-                auto tpin = pairs.find( ppin );
+                wxString refNetName;
+                wxString tgtNetName;
 
-                if( tpin != pairs.end() )
+                if( const BOARD* board = aRef->GetParent()->GetBoard() )
                 {
-                    int nc = tpin->second->GetNetCode();
-
-                    if( prevNet && ( *prevNet != nc ) )
-                    {
-                        wxLogTrace( traceTopoMatch, wxT( "nets inconsistent\n" ) );
-
-                        aReason.m_reference = aRef->GetParent()->GetReferenceAsString();
-                        aReason.m_candidate = aTgt->GetParent()->GetReferenceAsString();
-
-                        wxString refNetName;
-                        wxString tgtNetName;
-
-                        if( const BOARD* refBoard = aRef->GetParent()->GetBoard() )
-                        {
-                            if( const NETINFO_ITEM* net = refBoard->FindNet( refPin->GetNetCode() ) )
-                                refNetName = net->GetNetname();
-                        }
-
-                        if( const BOARD* tgtBoard = aTgt->GetParent()->GetBoard() )
-                        {
-                            if( const NETINFO_ITEM* net = tgtBoard->FindNet( nc ) )
-                                tgtNetName = net->GetNetname();
-                        }
-
-                        if( refNetName.IsEmpty() )
-                            refNetName = wxString::Format( _( "net %d" ), refPin->GetNetCode() );
-
-                        if( tgtNetName.IsEmpty() )
-                            tgtNetName = wxString::Format( _( "net %d" ), nc );
-
-                        aReason.m_reason = wxString::Format(
-                                _( "Pad %s of %s is on net %s but its match in candidate %s is on net %s." ),
-                                refPin->GetReference(), aReason.m_reference, refNetName, aReason.m_candidate,
-                                tgtNetName );
-
-                        return false;
-                    }
-
-                    prevNet = nc;
+                    if( const NETINFO_ITEM* net = board->FindNet( refNet ) )
+                        refNetName = net->GetNetname();
                 }
+
+                if( const BOARD* board = aTgt->GetParent()->GetBoard() )
+                {
+                    if( const NETINFO_ITEM* net = board->FindNet( tgtNet ) )
+                        tgtNetName = net->GetNetname();
+                }
+
+                if( refNetName.IsEmpty() )
+                    refNetName = wxString::Format( _( "net %d" ), refNet );
+
+                if( tgtNetName.IsEmpty() )
+                    tgtNetName = wxString::Format( _( "net %d" ), tgtNet );
+
+                aReason.m_reason = wxString::Format(
+                        _( "Pad %s of %s is on net %s but its match in candidate %s is on net %s." ),
+                        aRef->Pins()[i]->GetReference(), aReason.m_reference, refNetName,
+                        aReason.m_candidate, tgtNetName );
+
+                return false;
             }
+
+            continue;
         }
+
+        auto localIt = candidateAdditions.find( refNet );
+
+        if( localIt != candidateAdditions.end() )
+        {
+            if( localIt->second != tgtNet )
+            {
+                wxLogTrace( traceTopoMatch, wxT( "nets inconsistent (candidate internal)\n" ) );
+
+                aReason.m_reference = aRef->GetParent()->GetReferenceAsString();
+                aReason.m_candidate = aTgt->GetParent()->GetReferenceAsString();
+                aReason.m_reason = wxString::Format(
+                        _( "Pad %s of %s has inconsistent net mapping in candidate %s." ),
+                        aRef->Pins()[i]->GetReference(), aReason.m_reference,
+                        aReason.m_candidate );
+
+                return false;
+            }
+
+            continue;
+        }
+
+        candidateAdditions[refNet] = tgtNet;
     }
 
     return true;
@@ -250,72 +262,91 @@ bool checkIfPadNetsMatch( const BACKTRACK_STAGE& aMatches, CONNECTION_GRAPH* aRe
 
 
 std::vector<COMPONENT*>
-CONNECTION_GRAPH::findMatchingComponents( CONNECTION_GRAPH* aRefGraph, COMPONENT* aRef,
+CONNECTION_GRAPH::findMatchingComponents( COMPONENT*                             aRef,
+                                          const std::vector<COMPONENT*>&         aStructuralMatches,
                                           const BACKTRACK_STAGE&                 partialMatches,
-                                          std::vector<TOPOLOGY_MISMATCH_REASON>& aMismatchReasons )
+                                          std::vector<TOPOLOGY_MISMATCH_REASON>& aMismatchReasons,
+                                          const std::atomic<bool>*               aCancelled )
 {
+    if( aCancelled && aCancelled->load( std::memory_order_relaxed ) )
+        return {};
+
+    PROF_TIMER timerFmc;
+
     aMismatchReasons.clear();
     std::vector<COMPONENT*> matches;
-    for( auto cmpTarget : m_components )
+    int  candidatesChecked = 0;
+
+    // Build the net consistency map from locked pairs once for this entire evaluation
+    // pass, rather than rebuilding it from scratch for every candidate.
+    std::unordered_map<int, int> baseNetMapping = buildBaseNetMapping( partialMatches );
+
+    double netCheckMs = 0.0;
+
+    for( COMPONENT* cmpTarget : aStructuralMatches )
     {
-        // already matched to sth? move on.
         if( partialMatches.m_locked.find( cmpTarget ) != partialMatches.m_locked.end() )
-        {
             continue;
-        }
+
+        candidatesChecked++;
 
         wxLogTrace( traceTopoMatch, wxT( "Check '%s'/'%s' " ), aRef->m_reference,
                     cmpTarget->m_reference );
 
-        // first, a basic heuristic (reference prefix, pin count & footprint) followed by a pin
-        // connection topology check
         TOPOLOGY_MISMATCH_REASON localReason;
         localReason.m_reference = aRef->GetParent()->GetReferenceAsString();
         localReason.m_candidate = cmpTarget->GetParent()->GetReferenceAsString();
 
-        if( aRef->MatchesWith( cmpTarget, localReason ) )
+        PROF_TIMER timerNet;
+        bool netResult = checkCandidateNetConsistency( baseNetMapping, aRef, cmpTarget, localReason,
+                                                       m_externalNets );
+        timerNet.Stop();
+        netCheckMs += timerNet.msecs();
+
+        if( netResult )
         {
-            // then a net integrity check (expensive because of poor optimization)
-            if( checkIfPadNetsMatch( partialMatches, aRefGraph, aRef, cmpTarget, localReason ) )
-            {
-                wxLogTrace( traceTopoMatch, wxT("match!\n") );
-                matches.push_back( cmpTarget );
-            }
-            else
-            {
-                wxLogTrace( traceTopoMatch, wxT("Reject [net topo mismatch]\n") );
-                aMismatchReasons.push_back( localReason );
-            }
+            wxLogTrace( traceTopoMatch, wxT( "match!\n" ) );
+            matches.push_back( cmpTarget );
         }
         else
         {
-            wxLogTrace( traceTopoMatch, wxT("reject\n") );
+            wxLogTrace( traceTopoMatch, wxT( "Reject [net topo mismatch]\n" ) );
             aMismatchReasons.push_back( localReason );
         }
     }
 
-    auto padSimilarity=[]( COMPONENT*a, COMPONENT*b ) -> double
+    PROF_TIMER timerScore;
+
+    std::unordered_map<COMPONENT*, double> simScores;
+    simScores.reserve( matches.size() );
+
+    for( COMPONENT* match : matches )
     {
-        int n=0;
+        int n = 0;
 
-        for(int i=0;i<a->m_pins.size();i++)
+        for( size_t i = 0; i < aRef->m_pins.size(); i++ )
         {
-            PIN* pa = a->m_pins[i];
-            PIN* pb = b->m_pins[i];
-
-            if( pa->GetNetCode() == pb->GetNetCode() )
+            if( aRef->m_pins[i]->GetNetCode() == match->m_pins[i]->GetNetCode() )
                 n++;
         }
 
-        return (double)n / (double) a->m_pins.size();
-    };
-
-
-    std::sort(matches.begin(), matches.end(), [&] ( COMPONENT*a, COMPONENT*b ) -> int
-    {
-        return padSimilarity( aRef,a ) > padSimilarity( aRef, b );
+        simScores[match] = static_cast<double>( n ) / static_cast<double>( aRef->m_pins.size() );
     }
-);
+
+    std::sort( matches.begin(), matches.end(),
+               [&]( COMPONENT* a, COMPONENT* b ) -> bool
+               {
+                   double simA = simScores[a];
+                   double simB = simScores[b];
+
+                   if( simA != simB )
+                       return simA > simB;
+
+                   return a->GetParent()->GetReferenceAsString()
+                          < b->GetParent()->GetReferenceAsString();
+               } );
+
+    timerScore.Stop();
 
     if( matches.empty() )
     {
@@ -327,7 +358,149 @@ CONNECTION_GRAPH::findMatchingComponents( CONNECTION_GRAPH* aRefGraph, COMPONENT
             aMismatchReasons.push_back( reason );
     }
 
+    timerFmc.Stop();
+
+    wxLogTrace( traceTopoMatchDetail,
+                wxT( "  findMatch '%s' (%d pins): %s total, checked %d/%d structural, "
+                     "netCheck %0.3f ms, score %0.3f ms, %d matches" ),
+                aRef->m_reference, aRef->GetPinCount(), timerFmc.to_string(),
+                candidatesChecked, (int) aStructuralMatches.size(),
+                netCheckMs, timerScore.msecs(),
+                (int) matches.size() );
+
     return matches;
+}
+
+
+void CONNECTION_GRAPH::breakTie( COMPONENT* aRef, std::vector<COMPONENT*>& aMatches ) const
+{
+    if( aMatches.size() <= 1 )
+        return;
+
+    wxString candidateRefs;
+
+    for( size_t i = 0; i < aMatches.size(); i++ )
+    {
+        if( i > 0 )
+            candidateRefs += wxT( ", " );
+
+        candidateRefs += aMatches[i]->GetParent()->GetReferenceAsString();
+    }
+
+    wxLogTrace( traceTopoMatch, wxT( "Topology tie for %s: %s" ),
+                aRef->GetParent()->GetReferenceAsString(), candidateRefs );
+
+    if( breakTieBySymbolUuid( aRef, aMatches ) )
+    {
+        wxLogTrace( traceTopoMatchDetail, wxT( "Broke tie with symbol UUID match for %s" ),
+                    aRef->GetParent()->GetReferenceAsString() );
+    }
+    // TODO: other tie breakers can be added, e.g. based on position or reference designators,
+    // just waiting for actual user test cases
+    else
+    {
+        wxLogTrace( traceTopoMatchDetail, wxT( "No tie breakers worked for %s, leaving match order alone." ),
+                    aRef->GetParent()->GetReferenceAsString() );
+    }
+}
+
+
+bool CONNECTION_GRAPH::breakTieBySymbolUuid( COMPONENT* aRef, std::vector<COMPONENT*>& aMatches ) const
+{
+    auto getSymbolInstanceUuid =
+            []( const FOOTPRINT* aFootprint ) -> KIID
+            {
+                if( !aFootprint )
+                    return niluuid;
+
+                const KIID_PATH& path = aFootprint->GetPath();
+
+                if( path.empty() )
+                    return niluuid;
+
+                const KIID& symbolUuid = path.back();
+
+                return symbolUuid;
+            };
+
+    FOOTPRINT* refFp = aRef ? aRef->GetParent() : nullptr;
+    const KIID refSymbolUuid = getSymbolInstanceUuid( refFp );
+    wxString   candidateSymbolUuids;
+    wxString   matchingSymbolCandidates;
+    int        symbolUuidHitCount = 0;
+    int        uniqueMatchIdx = -1;
+
+    if( refSymbolUuid == niluuid )
+    {
+        wxLogTrace( traceTopoMatchDetail, wxT( "Tie symbol UUID unavailable for %s" ),
+                    refFp ? refFp->GetReferenceAsString() : wxString( wxT( "<null>" ) ) );
+        return false;
+    }
+
+    // Inspect every tied candidate and collect:
+    // 1) a detailed ref->symbol UUID mapping string for traces, and
+    // 2) the subset of candidates whose symbol-path tail UUID matches the reference.
+    for( size_t i = 0; i < aMatches.size(); i++ )
+    {
+        FOOTPRINT*     candidateFp = aMatches[i]->GetParent();
+        const wxString candidateRef = candidateFp->GetReferenceAsString();
+        const KIID     candidateSymbolUuid = getSymbolInstanceUuid( candidateFp );
+
+        if( i > 0 )
+            candidateSymbolUuids += wxT( ", " );
+
+        if( candidateSymbolUuid == niluuid )
+            candidateSymbolUuids += candidateRef + wxT( "=<none>" );
+        else
+            candidateSymbolUuids += candidateRef + wxT( "=" ) + candidateSymbolUuid.AsString();
+
+        if( candidateSymbolUuid == refSymbolUuid )
+        {
+            if( uniqueMatchIdx < 0 )
+                uniqueMatchIdx = static_cast<int>( i );
+
+            symbolUuidHitCount++;
+
+            if( !matchingSymbolCandidates.IsEmpty() )
+                matchingSymbolCandidates += wxT( ", " );
+
+            matchingSymbolCandidates += candidateRef;
+        }
+    }
+
+    wxLogTrace( traceTopoMatchDetail, wxT( "Tie reference symbol UUID for %s: %s (hits=%d)" ),
+                refFp->GetReferenceAsString(), refSymbolUuid.AsString(), symbolUuidHitCount );
+
+    wxLogTrace( traceTopoMatchDetail, wxT( "Tie candidate symbol UUIDs: %s" ), candidateSymbolUuids );
+
+    // One match is what we want, we should have one match between the source symbol instance
+    // and the destination only since in theory we are repeating across two instances of the same sheet
+    if( symbolUuidHitCount == 1 )
+    {
+        wxLogTrace( traceTopoMatchDetail, wxT( "Symbol UUID unique match (usable) for %s: %s" ),
+                    refFp->GetReferenceAsString(), matchingSymbolCandidates );
+
+        std::rotate( aMatches.begin(), aMatches.begin() + uniqueMatchIdx, aMatches.begin() + uniqueMatchIdx + 1 );
+
+        wxLogTrace( traceTopoMatchDetail, wxT( "Applied symbol UUID tie-break for %s: selected %s" ),
+                    refFp->GetReferenceAsString(), aMatches.front()->GetParent()->GetReferenceAsString() );
+
+        return true;
+    }
+    // Copy and pasting footprints can result in multiple matches
+    else if( symbolUuidHitCount > 1 )
+    {
+        wxLogTrace( traceTopoMatchDetail, wxT( "Symbol UUID multiple matches (not usable) for %s: %s" ),
+                    refFp->GetReferenceAsString(), matchingSymbolCandidates );
+        return false;
+    }
+    // Probably not sheet instances, break the tie some other way
+    else
+    {
+        wxLogTrace( traceTopoMatchDetail, wxT( "No symbol UUID candidate match (not usable) for %s" ),
+                    refFp->GetReferenceAsString() );
+        return false;
+    }
 }
 
 
@@ -341,8 +514,23 @@ void COMPONENT::sortPinsByName()
 }
 
 
-void CONNECTION_GRAPH::BuildConnectivity()
+void CONNECTION_GRAPH::sortByPinCount()
 {
+    std::sort( m_components.begin(), m_components.end(),
+               []( COMPONENT* a, COMPONENT* b )
+               {
+                   if( a->GetPinCount() != b->GetPinCount() )
+                       return a->GetPinCount() > b->GetPinCount();
+
+                   return a->GetParent()->GetReferenceAsString() < b->GetParent()->GetReferenceAsString();
+               } );
+}
+
+
+void CONNECTION_GRAPH::BuildConnectivity( const std::unordered_set<int>& aExternalNets )
+{
+    m_externalNets = aExternalNets;
+
     std::map<int, std::vector<PIN*>> nets;
 
     sortByPinCount();
@@ -358,19 +546,26 @@ void CONNECTION_GRAPH::BuildConnectivity()
         }
     }
 
-    for( auto iter : nets )
+    for( auto& [netcode, pins] : nets )
     {
-        wxLogTrace( traceTopoMatch, wxT( "net %d: %d connections\n" ), iter.first,
-                    (int) iter.second.size() );
+        // Skip nets that extend beyond this channel's footprint set.  Global power nets
+        // (GND, VCC, etc.) are shared across channels and can create spurious intra-channel
+        // connections that cause false topology mismatches when hierarchical pins are tied
+        // directly to those nets.
+        if( aExternalNets.count( netcode ) )
+            continue;
 
-        for( auto p : iter.second )
+        wxLogTrace( traceTopoMatch, wxT( "net %d: %d connections\n" ), netcode,
+                    (int) pins.size() );
+
+        for( PIN* p : pins )
         {
-            for( auto p2 : iter.second )
+            p->m_conns.reserve( pins.size() - 1 );
+
+            for( PIN* p2 : pins )
             {
-                if( p != p2 && !alg::contains( p->m_conns, p2 ) )
-                {
+                if( p != p2 )
                     p->m_conns.push_back( p2 );
-                }
             }
         }
     }
@@ -389,12 +584,20 @@ void CONNECTION_GRAPH::BuildConnectivity()
 
 
 bool CONNECTION_GRAPH::FindIsomorphism( CONNECTION_GRAPH* aTarget, COMPONENT_MATCHES& aResult,
-                                        std::vector<TOPOLOGY_MISMATCH_REASON>& aMismatchReasons )
+                                        std::vector<TOPOLOGY_MISMATCH_REASON>& aMismatchReasons,
+                                        const ISOMORPHISM_PARAMS& aParams )
 {
     std::vector<BACKTRACK_STAGE> stack;
     BACKTRACK_STAGE              top;
 
     aMismatchReasons.clear();
+
+    if( aParams.m_totalComponents )
+        aParams.m_totalComponents->store( (int) m_components.size(), std::memory_order_relaxed );
+
+    PROF_TIMER timerTotal;
+    int        backtrackCount = 0;
+    double     mrvTotalMs = 0.0;
 
     std::vector<TOPOLOGY_MISMATCH_REASON> localReasons;
 
@@ -414,16 +617,64 @@ bool CONNECTION_GRAPH::FindIsomorphism( CONNECTION_GRAPH* aTarget, COMPONENT_MAT
         return false;
     }
 
+    // Structural compatibility (MatchesWith) depends only on pin count, footprint ID, and
+    // pin connection topology -- all immutable graph properties.  Precompute it once per
+    // source component so the backtracking loop never repeats these comparisons.
+    size_t numRef = m_components.size();
+    std::vector<std::vector<COMPONENT*>> structuralMatches( numRef );
+
+    PROF_TIMER timerPrecompute;
+    {
+        thread_pool& tp = GetKiCadThreadPool();
+        std::vector<std::future<void>> futures;
+        futures.reserve( numRef );
+
+        const std::atomic<bool>* cancelled = aParams.m_cancelled;
+
+        for( size_t i = 0; i < numRef; i++ )
+        {
+            futures.emplace_back( tp.submit_task(
+                    [this, i, aTarget, &structuralMatches, cancelled]()
+                    {
+                        if( cancelled && cancelled->load( std::memory_order_relaxed ) )
+                            return;
+
+                        COMPONENT* ref = m_components[i];
+                        TOPOLOGY_MISMATCH_REASON reason;
+
+                        for( COMPONENT* tgt : aTarget->m_components )
+                        {
+                            if( ref->MatchesWith( tgt, reason ) )
+                                structuralMatches[i].push_back( tgt );
+                        }
+                    } ) );
+        }
+
+        for( auto& f : futures )
+            f.wait();
+    }
+    timerPrecompute.Stop();
+
+    wxLogTrace( traceTopoMatchDetail,
+                wxT( "Structural precomputation: %s (%d source x %d target)" ),
+                timerPrecompute.to_string(), (int) numRef,
+                (int) aTarget->m_components.size() );
+
+    if( aParams.m_cancelled && aParams.m_cancelled->load( std::memory_order_relaxed ) )
+        return false;
+
     top.m_ref = m_components.front();
     top.m_refIndex = 0;
 
     stack.push_back( top );
 
-    bool matchFound = false;
     int  nloops = 0;
 
     while( !stack.empty() )
     {
+        if( aParams.m_cancelled && aParams.m_cancelled->load( std::memory_order_relaxed ) )
+            return false;
+
         nloops++;
         auto& current = stack.back();
 
@@ -455,8 +706,19 @@ bool CONNECTION_GRAPH::FindIsomorphism( CONNECTION_GRAPH* aTarget, COMPONENT_MAT
 
         if( current.m_currentMatch < 0 )
         {
+            PROF_TIMER timerInitMatch;
+
             localReasons.clear();
-            current.m_matches = aTarget->findMatchingComponents( this, current.m_ref, current, localReasons );
+            current.m_matches = aTarget->findMatchingComponents(
+                    current.m_ref, structuralMatches[current.m_refIndex],
+                    current, localReasons, aParams.m_cancelled );
+
+            timerInitMatch.Stop();
+
+            wxLogTrace( traceTopoMatchDetail,
+                        wxT( "iter %d: initial match for '%s' (%d pins): %s, %d candidates" ),
+                        nloops, current.m_ref->m_reference, current.m_ref->GetPinCount(),
+                        timerInitMatch.to_string(), (int) current.m_matches.size() );
 
             if( current.m_matches.empty() && aMismatchReasons.empty() && !localReasons.empty() )
                 aMismatchReasons = localReasons;
@@ -469,19 +731,25 @@ bool CONNECTION_GRAPH::FindIsomorphism( CONNECTION_GRAPH* aTarget, COMPONENT_MAT
                     (int) current.m_matches.size(), (int) current.m_locked.size(),
                     (int) m_components.size() );
 
+        if( current.m_currentMatch == 0 && current.m_matches.size() > 1 )
+            breakTie( current.m_ref, current.m_matches );
+
         if ( current.m_matches.empty() )
         {
             wxLogTrace( traceTopoMatch, wxT( "stk: No matches at all, going up [level=%d]\n" ),
                         (int) stack.size() );
             stack.pop_back();
+            backtrackCount++;
             continue;
         }
 
-        if( current.m_currentMatch >= 0 && current.m_currentMatch >= current.m_matches.size() )
+        if( current.m_currentMatch >= 0
+            && static_cast<size_t>( current.m_currentMatch ) >= current.m_matches.size() )
         {
             wxLogTrace( traceTopoMatch, wxT( "stk: No more matches, going up [level=%d]\n" ),
                         (int) stack.size() );
             stack.pop_back();
+            backtrackCount++;
             continue;
         }
 
@@ -498,6 +766,12 @@ bool CONNECTION_GRAPH::FindIsomorphism( CONNECTION_GRAPH* aTarget, COMPONENT_MAT
         current.m_currentMatch++;
         current.m_locked[match] = current.m_ref;
 
+        if( aParams.m_matchedComponents )
+        {
+            aParams.m_matchedComponents->store( (int) current.m_locked.size(),
+                                                std::memory_order_relaxed );
+        }
+
         if( current.m_locked.size() == m_components.size() )
         {
             current.m_nloops = nloops;
@@ -508,80 +782,162 @@ bool CONNECTION_GRAPH::FindIsomorphism( CONNECTION_GRAPH* aTarget, COMPONENT_MAT
             for( auto iter : current.m_locked )
                 aResult[ iter.second->GetParent() ] = iter.first->GetParent();
 
+            timerTotal.Stop();
+            wxLogTrace( traceTopoMatch,
+                        wxT( "Isomorphism: %s, %d iterations, %d backtracks, "
+                             "MRV total %0.1f ms (%d candidates)" ),
+                        timerTotal.to_string(), nloops, backtrackCount, mrvTotalMs,
+                        (int) m_components.size() );
+
             return true;
         }
 
 
-        int        minMatches = std::numeric_limits<int>::max();
-        COMPONENT* altNextRef = nullptr;
-        COMPONENT* bestNextRef = nullptr;
-        int        bestRefIndex = 0;
-        int        altRefIndex = 0;
+        // MRV heuristic: find the unlocked component with the fewest candidate matches.
+        // Collect unlocked components, then evaluate them in parallel since each
+        // findMatchingComponents call is independent (read-only on graphs and current stage).
+        struct MRV_CANDIDATE
+        {
+            COMPONENT*                            m_cmp;
+            size_t                                m_index;
+            std::vector<COMPONENT*>               m_matches;
+            std::vector<TOPOLOGY_MISMATCH_REASON> m_reasons;
+        };
+
+        std::vector<MRV_CANDIDATE> mrvCandidates;
+
+        // Build a set of all ref-components already locked so we can skip them in O(1)
+        // instead of scanning m_locked values for each component.
+        std::unordered_set<COMPONENT*> lockedRefs;
+        lockedRefs.reserve( current.m_locked.size() );
+
+        for( const auto& [tgt, ref] : current.m_locked )
+            lockedRefs.insert( ref );
 
         for( size_t i = 0; i < m_components.size(); i++ )
         {
             COMPONENT* cmp = m_components[i];
 
-            if( cmp == current.m_ref )
-                continue;
+            if( cmp != current.m_ref && lockedRefs.find( cmp ) == lockedRefs.end() )
+                mrvCandidates.push_back( { cmp, i, {}, {} } );
+        }
 
-            bool found = false;
+        static const size_t MRV_PARALLEL_THRESHOLD = 4;
 
-            for( auto it = current.m_locked.begin(); it != current.m_locked.end(); it++ )
+        PROF_TIMER timerMrv;
+
+        if( mrvCandidates.size() >= MRV_PARALLEL_THRESHOLD )
+        {
+            thread_pool& tp = GetKiCadThreadPool();
+            std::vector<std::future<void>> futures;
+            futures.reserve( mrvCandidates.size() );
+
+            const std::atomic<bool>* cancelled = aParams.m_cancelled;
+
+            for( MRV_CANDIDATE& c : mrvCandidates )
             {
-                if( it->second == cmp )
-                {
-                    found = true;
-                    break;
-                }
+                futures.emplace_back( tp.submit_task(
+                        [&c, aTarget, &current, &structuralMatches, cancelled]()
+                        {
+                            c.m_matches = aTarget->findMatchingComponents(
+                                    c.m_cmp, structuralMatches[c.m_index],
+                                    current, c.m_reasons, cancelled );
+                        } ) );
             }
 
-            if( found )
-                continue;
+            for( auto& f : futures )
+                f.wait();
+        }
+        else
+        {
+            for( MRV_CANDIDATE& c : mrvCandidates )
+            {
+                c.m_matches = aTarget->findMatchingComponents(
+                        c.m_cmp, structuralMatches[c.m_index],
+                        current, c.m_reasons, aParams.m_cancelled );
+            }
+        }
 
-            localReasons.clear();
-            auto matches = aTarget->findMatchingComponents( this, cmp, current, localReasons );
+        timerMrv.Stop();
+        double mrvMs = timerMrv.msecs();
+        mrvTotalMs += mrvMs;
 
-            int nMatches = matches.size();
+        wxLogTrace( traceTopoMatchDetail,
+                    wxT( "iter %d: MRV scan %0.3f ms, %d unlocked candidates" ),
+                    nloops, mrvMs, (int) mrvCandidates.size() );
+
+        if( aParams.m_cancelled && aParams.m_cancelled->load( std::memory_order_relaxed ) )
+            return false;
+
+        int                     minMatches = std::numeric_limits<int>::max();
+        COMPONENT*              altNextRef = nullptr;
+        COMPONENT*              bestNextRef = nullptr;
+        int                     bestRefIndex = 0;
+        int                     altRefIndex = 0;
+        std::vector<COMPONENT*> bestMatches;
+
+        for( MRV_CANDIDATE& c : mrvCandidates )
+        {
+            int nMatches = static_cast<int>( c.m_matches.size() );
 
             if( nMatches == 1 )
             {
-                bestNextRef = cmp;
-                bestRefIndex = i;
+                bestNextRef = c.m_cmp;
+                bestRefIndex = static_cast<int>( c.m_index );
+                bestMatches = std::move( c.m_matches );
                 break;
             }
             else if( nMatches == 0 )
             {
-                altNextRef = cmp;
-                altRefIndex = i;
+                altNextRef = c.m_cmp;
+                altRefIndex = static_cast<int>( c.m_index );
 
-                if( aMismatchReasons.empty() && !localReasons.empty() )
-                    aMismatchReasons = localReasons;
+                if( aMismatchReasons.empty() && !c.m_reasons.empty() )
+                    aMismatchReasons = c.m_reasons;
             }
             else if( nMatches < minMatches )
             {
                 minMatches = nMatches;
-                bestNextRef = cmp;
-                bestRefIndex = i;
+                bestNextRef = c.m_cmp;
+                bestRefIndex = static_cast<int>( c.m_index );
+                bestMatches = std::move( c.m_matches );
             }
         }
 
         BACKTRACK_STAGE next( current );
-        next.m_currentMatch = -1;
 
         if( bestNextRef )
         {
+            wxLogTrace( traceTopoMatchDetail,
+                        wxT( "iter %d: MRV picked '%s' (%d matches, best of %d)" ),
+                        nloops, bestNextRef->m_reference,
+                        (int) bestMatches.size(), (int) mrvCandidates.size() );
+
             next.m_ref = bestNextRef;
             next.m_refIndex = bestRefIndex;
+            next.m_matches = std::move( bestMatches );
+            next.m_currentMatch = 0;
         }
         else
         {
+            wxLogTrace( traceTopoMatchDetail,
+                        wxT( "iter %d: MRV dead end, alt='%s'" ),
+                        nloops, altNextRef ? altNextRef->m_reference : wxString( "(none)" ) );
+
             next.m_ref = altNextRef;
             next.m_refIndex = altRefIndex;
+            next.m_currentMatch = -1;
         }
 
         stack.push_back( next );
     };
+
+    timerTotal.Stop();
+    wxLogTrace( traceTopoMatch,
+                wxT( "Isomorphism: %s, %d iterations, %d backtracks, "
+                     "MRV total %0.1f ms (%d candidates)" ),
+                timerTotal.to_string(), nloops, backtrackCount, mrvTotalMs,
+                (int) m_components.size() );
 
     return false;
 }
@@ -649,19 +1005,57 @@ int main()
 
 COMPONENT::COMPONENT( const wxString& aRef, FOOTPRINT* aParentFp,
                       std::optional<VECTOR2I> aRaOffset ) :
+        m_raOffset( aRaOffset ),
         m_reference( aRef ),
-        m_parentFootprint( aParentFp ), m_raOffset( aRaOffset )
+        m_parentFootprint( aParentFp )
 {
     m_prefix = UTIL::GetRefDesPrefix( aRef );
 }
 
 
+bool COMPONENT::isChannelSuffix( const wxString& aSuffix )
+{
+    if( aSuffix.IsEmpty() )
+        return true;
+
+    for( wxUniChar ch : aSuffix )
+    {
+        if( std::isalpha( static_cast<int>( ch ) ) )
+            return false;
+    }
+
+    return true;
+}
+
+
+bool COMPONENT::prefixesShareCommonBase( const wxString& aPrefixA, const wxString& aPrefixB )
+{
+    if( aPrefixA == aPrefixB )
+        return true;
+
+    size_t commonLen = 0;
+    size_t minLen = std::min( aPrefixA.length(), aPrefixB.length() );
+
+    while( commonLen < minLen && aPrefixA[commonLen] == aPrefixB[commonLen] )
+        commonLen++;
+
+    if( commonLen == 0 )
+        return false;
+
+    wxString suffixA = aPrefixA.Mid( commonLen );
+    wxString suffixB = aPrefixB.Mid( commonLen );
+
+    return isChannelSuffix( suffixA ) && isChannelSuffix( suffixB );
+}
+
+
 bool COMPONENT::IsSameKind( const COMPONENT& b ) const
 {
-    return m_prefix == b.m_prefix
-           && ( ( m_parentFootprint->GetFPID() == b.m_parentFootprint->GetFPID() )
-                || ( m_parentFootprint->GetFPID().empty()
-                     && b.m_parentFootprint->GetFPID().empty() ) );
+    if( !prefixesShareCommonBase( m_prefix, b.m_prefix ) )
+        return false;
+
+    return ( m_parentFootprint->GetFPID() == b.m_parentFootprint->GetFPID() )
+           || ( m_parentFootprint->GetFPID().empty() && b.m_parentFootprint->GetFPID().empty() );
 }
 
 
@@ -689,7 +1083,7 @@ bool COMPONENT::MatchesWith( COMPONENT* b, TOPOLOGY_MISMATCH_REASON& aReason )
         aReason.m_reference = GetParent()->GetReferenceAsString();
         aReason.m_candidate = b->GetParent()->GetReferenceAsString();
 
-        if( m_prefix != b->m_prefix )
+        if( !prefixesShareCommonBase( m_prefix, b->m_prefix ) )
         {
             aReason.m_reason = wxString::Format(
                     _( "Reference prefix mismatch: %s uses prefix '%s' but candidate %s uses '%s'." ),
@@ -752,7 +1146,8 @@ void CONNECTION_GRAPH::AddFootprint( FOOTPRINT* aFp, const VECTOR2I& aOffset )
 
 
 std::unique_ptr<CONNECTION_GRAPH>
-CONNECTION_GRAPH::BuildFromFootprintSet( const std::set<FOOTPRINT*>& aFps )
+CONNECTION_GRAPH::BuildFromFootprintSet( const std::set<FOOTPRINT*>& aFps,
+                                         const std::set<FOOTPRINT*>& aOtherChannelFps )
 {
     auto cgraph = std::make_unique<CONNECTION_GRAPH>();
     VECTOR2I ref(0, 0);
@@ -761,13 +1156,50 @@ CONNECTION_GRAPH::BuildFromFootprintSet( const std::set<FOOTPRINT*>& aFps )
         ref = (*aFps.begin())->GetPosition();
 
     for( auto fp : aFps )
-    {
         cgraph->AddFootprint( fp, fp->GetPosition() - ref );
+
+    // Collect all net codes present in this footprint set.
+    std::unordered_set<int> localNets;
+
+    for( const FOOTPRINT* fp : aFps )
+    {
+        for( const PAD* pad : fp->Pads() )
+        {
+            if( pad->GetNetCode() > 0 )
+                localNets.insert( pad->GetNetCode() );
+        }
     }
 
-    cgraph->BuildConnectivity();
+    // Collect all net codes present in the comparison channel's footprint set.
+    std::unordered_set<int> otherChannelNets;
 
-    return std::move(cgraph);
+    for( const FOOTPRINT* fp : aOtherChannelFps )
+    {
+        for( const PAD* pad : fp->Pads() )
+        {
+            if( pad->GetNetCode() > 0 )
+                otherChannelNets.insert( pad->GetNetCode() );
+        }
+    }
+
+    // A net is "external" (cross-channel) only if it appears in both this channel and the
+    // other channel.  Power/global rails (GND, VCC, etc.) appear in every channel and must
+    // be excluded from intra-channel topology comparison because configuration pins may
+    // legitimately be tied to different rails in different channels (e.g. I2C address
+    // selection via pull-up to different supplies).  Signal nets that escape to a board
+    // connector are NOT excluded here; those signals are part of the topology and both
+    // channels should route them identically.
+    std::unordered_set<int> externalNets;
+
+    for( int netCode : localNets )
+    {
+        if( otherChannelNets.count( netCode ) )
+            externalNets.insert( netCode );
+    }
+
+    cgraph->BuildConnectivity( externalNets );
+
+    return cgraph;
 }
 
 

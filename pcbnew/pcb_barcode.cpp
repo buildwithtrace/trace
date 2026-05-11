@@ -49,6 +49,10 @@
 
 #include <backend/zint.h>
 #include <board_design_settings.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
+
+constexpr int ECI_UTF8 = 26;
 
 PCB_BARCODE::PCB_BARCODE( BOARD_ITEM* aParent ) :
         BOARD_ITEM( aParent, PCB_BARCODE_T ),
@@ -66,6 +70,51 @@ PCB_BARCODE::PCB_BARCODE( BOARD_ITEM* aParent ) :
 
 PCB_BARCODE::~PCB_BARCODE()
 {
+}
+
+
+PCB_BARCODE::PCB_BARCODE( const PCB_BARCODE& aOther ) :
+        BOARD_ITEM( aOther ),
+        m_width( aOther.m_width ),
+        m_height( aOther.m_height ),
+        m_pos( aOther.m_pos ),
+        m_margin( aOther.m_margin ),
+        m_text( aOther.m_text ),
+        m_kind( aOther.m_kind ),
+        m_angle( aOther.m_angle ),
+        m_errorCorrection( aOther.m_errorCorrection ),
+        m_poly( aOther.m_poly ),
+        m_symbolPoly( aOther.m_symbolPoly ),
+        m_textPoly( aOther.m_textPoly ),
+        m_bbox( aOther.m_bbox )
+{
+    m_text.SetParent( this );
+}
+
+
+PCB_BARCODE& PCB_BARCODE::operator=( const PCB_BARCODE& aOther )
+{
+    if( this != &aOther )
+    {
+        BOARD_ITEM::operator=( aOther );
+
+        m_width = aOther.m_width;
+        m_height = aOther.m_height;
+        m_pos = aOther.m_pos;
+        m_margin = aOther.m_margin;
+        m_text = aOther.m_text;
+        m_kind = aOther.m_kind;
+        m_angle = aOther.m_angle;
+        m_errorCorrection = aOther.m_errorCorrection;
+        m_poly = aOther.m_poly;
+        m_symbolPoly = aOther.m_symbolPoly;
+        m_textPoly = aOther.m_textPoly;
+        m_bbox = aOther.m_bbox;
+
+        m_text.SetParent( this );
+    }
+
+    return *this;
 }
 
 
@@ -254,6 +303,7 @@ void PCB_BARCODE::ComputeTextPoly()
 void PCB_BARCODE::ComputeBarcode()
 {
     m_symbolPoly.RemoveAllContours();
+    m_lastError.clear();
 
     std::unique_ptr<zint_symbol, decltype( &ZBarcode_Delete )> symbol( ZBarcode_Create(), &ZBarcode_Delete );
 
@@ -290,7 +340,7 @@ void PCB_BARCODE::ComputeBarcode()
         return;
     }
 
-    wxString text = GetText();
+    wxString text = GetShownText();
     wxScopedCharBuffer utf8Text = text.ToUTF8();
     size_t length = utf8Text.length();
     unsigned char* dataPtr = reinterpret_cast<unsigned char*>( utf8Text.data() );
@@ -298,15 +348,28 @@ void PCB_BARCODE::ComputeBarcode()
     if( text.empty() )
         return;
 
-    if( ZBarcode_Encode( symbol.get(), dataPtr, length ) )
+    if( ( m_kind == BARCODE_T::QR_CODE || m_kind == BARCODE_T::DATA_MATRIX ) && !text.IsAscii() )
     {
-        wxLogDebug( wxT( "Zint encode error: %s" ), wxString::FromUTF8( symbol->errtxt ) );
+        symbol->eci = ECI_UTF8;
+    }
+
+    if( ZBarcode_Encode( symbol.get(), dataPtr, length ) >= ZINT_ERROR )
+    {
+        if( !text.IsAscii() )
+        {
+            m_lastError = _( "This barcode type does not support international "
+                             "characters. Use QR Code or Data Matrix instead." );
+        }
+        else
+        {
+            m_lastError = wxString::FromUTF8( symbol->errtxt );
+        }
         return;
     }
 
-    if( ZBarcode_Buffer_Vector( symbol.get(), 0 ) ) // 0 means success
+    if( ZBarcode_Buffer_Vector( symbol.get(), 0 ) >= ZINT_ERROR )
     {
-        wxLogDebug( wxT( "Zint render error: %s" ), wxString::FromUTF8( symbol->errtxt ) );
+        m_lastError = wxString::FromUTF8( symbol->errtxt );
         return;
     }
 
@@ -603,7 +666,6 @@ EDA_ITEM* PCB_BARCODE::Clone() const
 {
     PCB_BARCODE* item = new PCB_BARCODE( *this );
     item->CopyFrom( this );
-    item->m_text.SetParent( item );
     return item;
 }
 
@@ -671,6 +733,9 @@ int PCB_BARCODE::Compare( const PCB_BARCODE* aBarcode, const PCB_BARCODE* aOther
         return diff;
 
     if( ( diff = (int) aBarcode->GetKind() - (int) aOther->GetKind() ) != 0 )
+        return diff;
+
+    if( ( diff = aBarcode->m_angle.AsTenthsOfADegree() - aOther->m_angle.AsTenthsOfADegree() ) != 0 )
         return diff;
 
     if( ( diff = (int) aBarcode->GetErrorCorrection() - (int) aOther->GetErrorCorrection() ) != 0 )
@@ -802,6 +867,5 @@ static struct PCB_BARCODE_DESC
     }
 } _PCB_BARCODE_DESC;
 
-// wxAny conversion implementations for enum properties (declarations in header)
 IMPLEMENT_ENUM_TO_WXANY( BARCODE_T );
 IMPLEMENT_ENUM_TO_WXANY( BARCODE_ECC_T );

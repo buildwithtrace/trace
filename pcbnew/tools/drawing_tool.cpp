@@ -48,6 +48,7 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <tools/pcb_grid_helper.h>
+#include <kiplatform/ui.h>
 #include <tools/pcb_selection_tool.h>
 #include <pcb_barcode.h>
 #include <tools/tool_event_utils.h>
@@ -56,6 +57,7 @@
 #include <view/view.h>
 #include <widgets/appearance_controls.h>
 #include <widgets/wx_infobar.h>
+#include <wildcards_and_files_ext.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 
@@ -63,10 +65,13 @@
 #include <board.h>
 #include <board_commit.h>
 #include <board_design_settings.h>
+#include <drc/drc_engine.h>
+#include <drc/drc_rule.h>
 #include <confirm.h>
 #include <footprint.h>
 #include <macros.h>
 #include <gal/painter.h>
+#include <pad.h>
 #include <pcb_edit_frame.h>
 #include <pcb_group.h>
 #include <pcb_point.h>
@@ -75,6 +80,7 @@
 #include <pcb_textbox.h>
 #include <pcb_table.h>
 #include <pcb_tablecell.h>
+#include <pcb_track.h>
 #include <pcb_dimension.h>
 #include <pcbnew_id.h>
 #include <scoped_set_reset.h>
@@ -749,8 +755,10 @@ int DRAWING_TOOL::PlaceReferenceImage( const TOOL_EVENT& aEvent )
                 m_toolMgr->RunAction( ACTIONS::selectionClear );
 
                 wxFileDialog dlg( m_frame, _( "Choose Image" ), wxEmptyString, wxEmptyString,
-                                  _( "Image Files" ) + wxS( " " ) + wxImage::GetImageExtWildcard(),
-                                  wxFD_OPEN );
+                                  FILEEXT::ImageFileWildcard(), wxFD_OPEN );
+
+                KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
                 bool         cancelled = false;
 
                 RunMainStack(
@@ -1235,8 +1243,11 @@ int DRAWING_TOOL::DrawTable( const TOOL_EVENT& aEvent )
                                                COORDS_PADDING );
         m_controls->ForceCursorPosition( true, cursorPos );
 
-        if( evt->IsCancelInteractive() || ( table && evt->IsAction( &ACTIONS::undo ) )
-            || evt->IsDrag() )
+        if( evt->IsDrag() )
+        {
+            continue;
+        }
+        else if( evt->IsCancelInteractive() || ( table && evt->IsAction( &ACTIONS::undo ) ) )
         {
             if( table )
             {
@@ -1465,9 +1476,11 @@ int DRAWING_TOOL::DrawBarcode( const TOOL_EVENT& aEvent )
                                                COORDS_PADDING );
         m_controls->ForceCursorPosition( true, cursorPos );
 
-        if( evt->IsCancelInteractive()
-            || evt->IsDrag()
-            || ( barcode && evt->IsAction( &ACTIONS::undo ) ) )
+        if( evt->IsDrag() )
+        {
+            continue;
+        }
+        else if( evt->IsCancelInteractive() || ( barcode && evt->IsAction( &ACTIONS::undo ) ) )
         {
             if( barcode )
             {
@@ -2065,11 +2078,20 @@ int DRAWING_TOOL::PlaceImportedGraphics( const TOOL_EVENT& aEvent )
 
     if( dlg.ShouldGroupItems() )
     {
-        group = new PCB_GROUP( m_frame->GetModel() );
+        size_t boardItemCount = std::count_if( list.begin(), list.end(),
+                                               []( const std::unique_ptr<EDA_ITEM>& ptr )
+                                               {
+                                                   return ptr->IsBOARD_ITEM();
+                                               } );
 
-        newItems.push_back( group );
-        selectedItems.push_back( group );
-        preview.Add( group );
+        if( boardItemCount >= 2 )
+        {
+            group = new PCB_GROUP( m_frame->GetModel() );
+
+            newItems.push_back( group );
+            selectedItems.push_back( group );
+            preview.Add( group );
+        }
     }
 
     if( dlg.ShouldFixDiscontinuities() )
@@ -2813,9 +2835,11 @@ bool DRAWING_TOOL::drawArc( const TOOL_EVENT& aTool, PCB_SHAPE** aGraphic,
         graphic->SetLayer( m_layer );
 
         grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
-        auto angleSnap = GetAngleSnapMode();
+        LEADER_MODE angleSnap = GetAngleSnapMode();
+
         if( evt->Modifier( MD_CTRL ) )
             angleSnap = LEADER_MODE::DIRECT;
+
         grid.SetUseGrid( getView()->GetGAL()->GetGridSnapping() && !evt->DisableGridSnapping() );
         VECTOR2I cursorPos = GetClampedCoords( grid.BestSnapAnchor( m_controls->GetMousePosition(), graphic,
                                                                     GRID_GRAPHICS ),

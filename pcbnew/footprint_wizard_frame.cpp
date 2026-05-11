@@ -24,6 +24,16 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include "footprint_wizard_frame.h"
+
+#include <wx/listbox.h>
+#include <wx/numformatter.h>
+#include <wx/statline.h>
+#include <wx/tokenzr.h>
+#include <wx/wupdlock.h>
+
+#include <json_common.h>
+
 #include <kiface_base.h>
 #include <pcb_draw_panel_gal.h>
 #include <pcb_edit_frame.h>
@@ -33,17 +43,13 @@
 #include <bitmaps.h>
 #include <grid_tricks.h>
 #include <board.h>
+#include <project/net_settings.h>
+#include <footprint.h>
 #include <footprint_edit_frame.h>
 #include <footprint_editor_settings.h>
 #include <pcbnew_id.h>
 #include <widgets/aui_json_serializer.h>
-#include <wx/listbox.h>
-#include <wx/statline.h>
 
-#include <nlohmann/json.hpp>
-#include <wx/tokenzr.h>
-#include <wx/numformatter.h>
-#include <wx/wupdlock.h>
 #include <pgm_base.h>
 #include <settings/color_settings.h>
 #include <settings/settings_manager.h>
@@ -51,13 +57,13 @@
 #include <tool/tool_dispatcher.h>
 #include <tool/action_toolbar.h>
 #include <tool/common_tools.h>
+#include <tool/common_control.h>
 #include <tools/pcb_selection_tool.h>
 #include <tools/pcb_control.h>
 #include <tools/pcb_actions.h>
 #include <tools/footprint_wizard_tools.h>
 #include <toolbars_footprint_wizard.h>
 #include <python/scripting/pcb_scripting_tool.h>
-#include "footprint_wizard_frame.h"
 
 
 BEGIN_EVENT_TABLE( FOOTPRINT_WIZARD_FRAME, PCB_BASE_EDIT_FRAME )
@@ -146,6 +152,7 @@ FOOTPRINT_WIZARD_FRAME::FOOTPRINT_WIZARD_FRAME( KIWAY* aKiway, wxWindow* aParent
     m_toolManager->RegisterTool( new PCB_SELECTION_TOOL );  // for std context menus (zoom & grid)
     m_toolManager->RegisterTool( new SCRIPTING_TOOL );
     m_toolManager->RegisterTool( new COMMON_TOOLS );
+    m_toolManager->RegisterTool( new COMMON_CONTROL );
     m_toolManager->RegisterTool( new FOOTPRINT_WIZARD_TOOLS );
     m_toolManager->InitTools();
 
@@ -190,7 +197,7 @@ FOOTPRINT_WIZARD_FRAME::FOOTPRINT_WIZARD_FRAME( KIWAY* aKiway, wxWindow* aParent
     m_auimgr.SetManagedWindow( this );
 
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( "TopMainToolbar" ).Top().Layer(6) );
-    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(6)
+    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(1)
                       .BestSize( -1, m_msgFrameHeight ) );
 
     m_auimgr.AddPane( m_parametersPanel, EDA_PANE().Palette().Name( "Params" ).Left().Position(0)
@@ -512,7 +519,7 @@ void FOOTPRINT_WIZARD_FRAME::LoadSettings( APP_SETTINGS_BASE* aCfg )
     PCB_BASE_FRAME::LoadSettings( cfg );
 
     m_auiPerspective = cfg->m_FootprintViewer.perspective;
-    m_viewerAuiState = cfg->m_FootprintViewer.aui_state;
+    m_viewerAuiState = std::make_unique<nlohmann::json>( cfg->m_FootprintViewer.aui_state );
 }
 
 

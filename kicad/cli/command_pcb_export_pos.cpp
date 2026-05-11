@@ -47,18 +47,17 @@ CLI::PCB_EXPORT_POS_COMMAND::PCB_EXPORT_POS_COMMAND() :
 
     m_argParser.add_argument( ARG_SIDE )
             .default_value( std::string( "both" ) )
-            .help( UTF8STDSTR( _( "Valid options: front,back,both. Gerber format only supports "
+            .help( UTF8STDSTR( _( "Valid options: front, back, both. Gerber format only supports "
                                   "\"front\" or \"back\"." ) ) );
 
     m_argParser.add_argument( ARG_FORMAT )
             .default_value( std::string( "ascii" ) )
-            .help( UTF8STDSTR( _( "Valid options: ascii,csv,gerber" ) ) )
+            .help( UTF8STDSTR( _( "Valid options: ascii, csv, gerber" ) ) )
             .metavar( "FORMAT" );
 
     m_argParser.add_argument( ARG_UNITS )
             .default_value( std::string( "in" ) )
-            .help( UTF8STDSTR( _( "Output units; ascii or csv format only; valid options: "
-                                  "in,mm" ) ) )
+            .help( UTF8STDSTR( _( "Output units; ascii or csv format only; valid options: in, mm" ) ) )
             .metavar( "UNITS" );
 
     m_argParser.add_argument( ARG_NEGATE_BOTTOM_X )
@@ -86,6 +85,8 @@ CLI::PCB_EXPORT_POS_COMMAND::PCB_EXPORT_POS_COMMAND() :
     m_argParser.add_argument( ARG_GERBER_BOARD_EDGE )
             .help( UTF8STDSTR( _( "Include board edge layer (Gerber only)" ) ) )
             .flag();
+
+    addVariantsArg();
 }
 
 
@@ -110,6 +111,9 @@ int CLI::PCB_EXPORT_POS_COMMAND::doPerform( KIWAY& aKiway )
     aPosJob->m_useDrillPlaceFileOrigin = m_argParser.get<bool>( ARG_USE_DRILL_FILE_ORIGIN );
     aPosJob->m_excludeDNP = m_argParser.get<bool>( ARG_EXCLUDE_DNP );
     aPosJob->m_gerberBoardEdge = m_argParser.get<bool>( ARG_GERBER_BOARD_EDGE );
+
+    if( !m_argVariantNames.empty() )
+        aPosJob->m_variant = m_argVariantNames.front();
 
     wxString format = From_UTF8( m_argParser.get<std::string>( ARG_FORMAT ).c_str() );
 

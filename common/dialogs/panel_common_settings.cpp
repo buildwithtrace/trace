@@ -59,6 +59,13 @@ PANEL_COMMON_SETTINGS::PANEL_COMMON_SETTINGS( wxWindow* aParent ) :
     m_textEditorBtn->SetBitmap( KiBitmapBundle( BITMAPS::small_folder ) );
     m_pdfViewerBtn->SetBitmap( KiBitmapBundle( BITMAPS::small_folder ) );
 
+#ifndef KICAD_BACKEND_URL_OVERRIDE
+    m_stBackendUrlHeader->Show( false );
+    m_backendUrlLine->Show( false );
+    m_stBackendUrlLabel->Show( false );
+    m_backendUrlCtrl->Show( false );
+#endif
+
     /*
      * Automatic dark mode detection works fine on Mac, so no need for the explicit options.
      */
@@ -83,21 +90,19 @@ PANEL_COMMON_SETTINGS::PANEL_COMMON_SETTINGS( wxWindow* aParent ) :
         m_canvasScaleCtrl->SetIncrement( dpi_scaling_increment );
         m_canvasScaleCtrl->SetValue( DPI_SCALING::GetDefaultScaleFactor() );
 
-        m_canvasScaleCtrl->SetToolTip(
-                _( "Set the scale for the canvas."
-                   "\n\n"
-                   "On high-DPI displays on some platforms, KiCad cannot determine the "
-                   "scaling factor. In this case you may need to set this to a value to "
-                   "match your system's DPI scaling. 2.0 is a common value. "
-                   "\n\n"
-                   "If this does not match the system DPI scaling, the canvas will "
-                   "not match the window size and cursor position." ) );
+        m_canvasScaleCtrl->SetToolTip( _( "Set the scale for the canvas."
+                                          "\n\n"
+                                          "On high-DPI displays on some platforms, KiCad cannot determine the "
+                                          "scaling factor. In this case you may need to set this to a value to "
+                                          "match your system's DPI scaling. 2.0 is a common value. "
+                                          "\n\n"
+                                          "If this does not match the system DPI scaling, the canvas will "
+                                          "not match the window size and cursor position." ) );
 
-        m_canvasScaleAuto->SetToolTip(
-                _( "Use an automatic value for the canvas scale."
-                   "\n\n"
-                   "On some platforms, the automatic value is incorrect and should be "
-                   "set manually." ) );
+        m_canvasScaleAuto->SetToolTip( _( "Use an automatic value for the canvas scale."
+                                          "\n\n"
+                                          "On some platforms, the automatic value is incorrect and should be "
+                                          "set manually." ) );
     }
     else
     {
@@ -108,8 +113,10 @@ PANEL_COMMON_SETTINGS::PANEL_COMMON_SETTINGS( wxWindow* aParent ) :
     }
 
     m_zoomCorrectionCtrl = new ZOOM_CORRECTION_CTRL( this,
-            Pgm().GetCommonSettings()->m_Appearance.zoom_correction_factor );
-    bLeftSizer->Add( m_zoomCorrectionCtrl, 1, wxEXPAND );
+                                                     Pgm().GetCommonSettings()->m_Appearance.zoom_correction_factor,
+                                                     ADVANCED_CFG::GetCfg().m_ScreenDPI );
+
+    m_scalingSizer->Add( m_zoomCorrectionCtrl, 1, wxEXPAND );
 
     // Hide the option of icons in menus for platforms that do not support them
     m_checkBoxIconsInMenus->Show( KIPLATFORM::UI::AllowIconsInMenus() );
@@ -156,6 +163,21 @@ bool PANEL_COMMON_SETTINGS::TransferDataToWindow()
     m_otherPDFViewer->SetValue( !Pgm().UseSystemPdfBrowser() );
     m_PDFViewerPath->SetValue( Pgm().GetPdfBrowserName() );
     setPdfViewerPathState();
+
+#ifdef KICAD_BACKEND_URL_OVERRIDE
+    m_backendUrlCtrl->SetValue( commonSettings->m_System.backend_url );
+
+    if( commonSettings->m_System.backend_url.IsEmpty() )
+    {
+        wxString placeholder;
+#ifdef TRACE_BACKEND_URL
+        placeholder = wxT( TRACE_BACKEND_URL );
+#else
+        placeholder = wxT( "http://localhost:8000/api/v2" );
+#endif
+        m_backendUrlCtrl->SetHint( placeholder );
+    }
+#endif
 
     return true;
 }
@@ -220,6 +242,10 @@ bool PANEL_COMMON_SETTINGS::TransferDataFromWindow()
 
     commonSettings->m_Session.remember_open_files = m_cbRememberOpenFiles->GetValue();
 
+#ifdef KICAD_BACKEND_URL_OVERRIDE
+    commonSettings->m_System.backend_url = m_backendUrlCtrl->GetValue();
+#endif
+
     Pgm().SetTextEditor( m_textEditorPath->GetValue());
 
     Pgm().SetPdfBrowserName( m_PDFViewerPath->GetValue() );
@@ -246,6 +272,10 @@ void PANEL_COMMON_SETTINGS::ResetPanel()
     m_otherPDFViewer->SetValue( !defaultSettings.m_System.use_system_pdf_viewer );
     m_PDFViewerPath->SetValue( defaultSettings.m_System.pdf_viewer_name );
     setPdfViewerPathState();
+
+#ifdef KICAD_BACKEND_URL_OVERRIDE
+    m_backendUrlCtrl->SetValue( wxEmptyString );
+#endif
 }
 
 
@@ -380,6 +410,8 @@ void PANEL_COMMON_SETTINGS::OnPDFViewerClick( wxCommandEvent& event )
 
     wxFileDialog dlg( topLevelParent, _( "Select Preferred PDF Viewer" ), fn.GetPath(),
                       fn.GetFullPath(), wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;

@@ -42,6 +42,7 @@
 #include <view/view_controls.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <pcb_layer_box_selector.h>
+#include <wx/msgdlg.h>
 // For BOX2D viewport checks
 #include <math/box2.h>
 
@@ -62,7 +63,9 @@ DIALOG_BARCODE_PROPERTIES::DIALOG_BARCODE_PROPERTIES( PCB_BASE_FRAME* aParent, P
 
     m_board = m_parent->GetBoard();
 
-    m_dummyBarcode = new PCB_BARCODE( nullptr );
+    // Use the board as parent so text variables like ${PART_NUMBER} can be resolved
+    // in the preview. The dummy barcode is not actually added to the board.
+    m_dummyBarcode = new PCB_BARCODE( m_board );
 
     // Initialize canvas to be able to display the dummy barcode:
     prepareCanvas();
@@ -233,6 +236,14 @@ bool DIALOG_BARCODE_PROPERTIES::TransferDataToWindow()
 
 bool DIALOG_BARCODE_PROPERTIES::TransferDataFromWindow()
 {
+    transferDataToBarcode( m_dummyBarcode );
+
+    if( !m_dummyBarcode->GetText().empty() && m_dummyBarcode->GetSymbolPoly().OutlineCount() == 0 )
+    {
+        wxMessageBox( m_dummyBarcode->GetLastError(), _( "Barcode Error" ), wxOK | wxICON_ERROR, this );
+        return false;
+    }
+
     BOARD_COMMIT commit( m_parent );
     commit.Modify( m_currentBarcode );
 

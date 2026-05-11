@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2014 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
  * This program is free software; you can redistribute it and/or
@@ -27,6 +28,8 @@
 
 #include <functional>
 #include <memory>
+#include <thread>
+#include <chrono>
 
 #include <pgm_base.h>
 #include <executable_names.h>
@@ -37,6 +40,8 @@
 #include <board.h>
 #include <board_commit.h>
 #include <board_design_settings.h>
+#include <collectors.h>
+#include <project/net_settings.h>
 #include <pcb_generator.h>
 #include <footprint.h>
 #include <pad.h>
@@ -48,7 +53,9 @@
 #include <dialogs/dialog_page_settings.h>
 #include <dialogs/dialog_update_pcb.h>
 #include <dialogs/dialog_assign_netclass.h>
+#include <dialogs/dialog_send_to_manufacturer.h>
 #include <dialog_plot.h>
+#include <dialogs/rule_editor_dialog_base.h>
 #include <kiface_base.h>
 #include <kiway.h>
 #include <netlist_reader/pcb_netlist.h>
@@ -58,6 +65,7 @@
 #include <project.h>
 #include <project/project_file.h> // LAST_PATH_TYPE
 #include <settings/settings_manager.h>
+#include <kiplatform/ui.h>
 #include <pcbnew_settings.h>
 #include <tool/tool_manager.h>
 #include <tool/tool_event.h>
@@ -68,16 +76,26 @@
 #include <tools/pcb_selection_conditions.h>
 #include <tools/pcb_selection_tool.h>
 #include <tools/edit_tool.h>
+#include "widgets/ai_chat_panel.h"
 #include <tools/tool_event_utils.h>
 #include <tools/zone_filler_tool.h>
 #include <richio.h>
+#include <amplitude_client.h>
 #include <router/router_tool.h>
+#include <view/view.h>
 #include <view/view_controls.h>
 #include <view/view_group.h>
+#include <gal/graphics_abstraction_layer.h>
 #include <wildcards_and_files_ext.h>
 #include <drawing_sheet/ds_proxy_undo_item.h>
 #include <footprint_edit_frame.h>
 #include <wx/filedlg.h>
+#include <auth/auth_manager.h>
+#include <kicad_curl/kicad_curl_easy.h>
+#include <curl/curl.h>
+#include <nlohmann/json.hpp>
+#include <widgets/wx_progress_reporters.h>
+#include <specctra_import_export/specctra.h>
 #include <wx/msgdlg.h>
 #include <wx/log.h>
 
@@ -181,16 +199,10 @@ int BOARD_EDITOR_CONTROL::OnAngleSnapModeChanged( const TOOL_EVENT& aEvent )
 
     switch( mode )
     {
-    case LEADER_MODE::DIRECT:
-        f->SelectLeftToolbarAction( PCB_ACTIONS::lineModeFree );
-        break;
-    case LEADER_MODE::DEG90:
-        f->SelectLeftToolbarAction( PCB_ACTIONS::lineMode90 );
-        break;
-    case LEADER_MODE::DEG45:
+    case LEADER_MODE::DIRECT: f->SelectToolbarAction( PCB_ACTIONS::lineModeFree ); break;
+    case LEADER_MODE::DEG90:  f->SelectToolbarAction( PCB_ACTIONS::lineMode90 );   break;
     default:
-        f->SelectLeftToolbarAction( PCB_ACTIONS::lineMode45 );
-        break;
+    case LEADER_MODE::DEG45:  f->SelectToolbarAction( PCB_ACTIONS::lineMode45 );   break;
     }
 
     return 0;
@@ -298,6 +310,25 @@ bool BOARD_EDITOR_CONTROL::Init()
 
 int BOARD_EDITOR_CONTROL::Save( const TOOL_EVENT& aEvent )
 {
+    wxWindow* focus = wxWindow::FindFocus();
+
+    if( focus )
+    {
+        wxWindow* topLevel = focus;
+
+        while( topLevel && !topLevel->IsTopLevel() )
+            topLevel = topLevel->GetParent();
+
+        RULE_EDITOR_DIALOG_BASE* reDlg = dynamic_cast<RULE_EDITOR_DIALOG_BASE*>( topLevel );
+
+        if( reDlg )
+        {
+            wxCommandEvent evt;
+            reDlg->OnSave( evt );
+            return 0;
+        }
+    }
+
     m_frame->SaveBoard();
     return 0;
 }
@@ -368,6 +399,9 @@ int BOARD_EDITOR_CONTROL::PageSettings( const TOOL_EVENT& aEvent )
 
 int BOARD_EDITOR_CONTROL::Plot( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "pcb_plot_opened", {
+        { "app_type", "pcbnew" },
+    } );
     DIALOG_PLOT dlg( m_frame );
     dlg.ShowQuasiModal();
     return 0;
@@ -397,6 +431,9 @@ int BOARD_EDITOR_CONTROL::FindNext( const TOOL_EVENT& aEvent )
 
 int BOARD_EDITOR_CONTROL::BoardSetup( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "board_setup_opened", {
+        { "app_type", "pcbnew" },
+    } );
     getEditFrame<PCB_EDIT_FRAME>()->ShowBoardSetupDialog();
     return 0;
 }
@@ -404,6 +441,9 @@ int BOARD_EDITOR_CONTROL::BoardSetup( const TOOL_EVENT& aEvent )
 
 int BOARD_EDITOR_CONTROL::ImportNetlist( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "netlist_import_dialog_opened", {
+        { "app_type", "pcbnew" },
+    } );
     getEditFrame<PCB_EDIT_FRAME>()->InstallNetlistFrame();
     return 0;
 }
@@ -431,8 +471,512 @@ int BOARD_EDITOR_CONTROL::ImportSpecctraSession( const TOOL_EVENT& aEvent )
 }
 
 
+// SSE streaming context for cloud autoroute
+namespace {
+struct AutorouteStreamContext
+{
+    std::string        buffer;
+    std::string        sesContent;
+    std::string        lastMessage;
+    std::string        error;
+    bool               done;
+    bool               hasError;
+    std::atomic<bool>* stopRequested;
+    std::function<void( const std::string& )> progressCallback;
+};
+
+size_t autoroute_stream_callback( void* contents, size_t size, size_t nmemb, void* userp )
+{
+    size_t realsize = size * nmemb;
+    AutorouteStreamContext* ctx = static_cast<AutorouteStreamContext*>( userp );
+
+    if( !ctx || ( ctx->stopRequested && ctx->stopRequested->load() ) )
+        return 0; // Signal to abort
+
+    ctx->buffer.append( static_cast<const char*>( contents ), realsize );
+
+    // Process complete SSE events (format: "data: {...}\n\n")
+    size_t pos;
+    while( ( pos = ctx->buffer.find( "\n\n" ) ) != std::string::npos )
+    {
+        std::string eventBlock = ctx->buffer.substr( 0, pos );
+        ctx->buffer.erase( 0, pos + 2 );
+
+        // Process each line in the event block
+        std::istringstream stream( eventBlock );
+        std::string line;
+        while( std::getline( stream, line ) )
+        {
+            // Skip empty lines
+            if( line.empty() || line == "\r" )
+                continue;
+
+            // Parse SSE data lines
+            if( line.substr( 0, 6 ) == "data: " )
+            {
+                std::string jsonStr = line.substr( 6 );
+                try
+                {
+                    nlohmann::json j = nlohmann::json::parse( jsonStr );
+                    std::string type = j.value( "type", "" );
+
+                    if( type == "progress" )
+                    {
+                        std::string message = j.value( "message", "" );
+                        if( !message.empty() )
+                        {
+                            ctx->lastMessage = message;
+                            if( ctx->progressCallback )
+                                ctx->progressCallback( message );
+                        }
+                    }
+                    else if( type == "done" )
+                    {
+                        ctx->done = true;
+                        if( j.contains( "data" ) && j["data"].contains( "ses_content" )
+                            && j["data"]["ses_content"].is_string() )
+                        {
+                            ctx->sesContent = j["data"]["ses_content"].get<std::string>();
+                        }
+                        else if( j.contains( "ses_content" ) && j["ses_content"].is_string() )
+                        {
+                            ctx->sesContent = j["ses_content"].get<std::string>();
+                        }
+                    }
+                    else if( type == "error" )
+                    {
+                        ctx->hasError = true;
+                        ctx->error = j.value( "message", "Unknown error" );
+                        if( j.contains( "data" ) && j["data"].contains( "message" )
+                            && j["data"]["message"].is_string() )
+                        {
+                            ctx->error = j["data"]["message"].get<std::string>();
+                        }
+                    }
+                }
+                catch( const nlohmann::json::exception& )
+                {
+                    // Skip malformed JSON
+                }
+            }
+        }
+    }
+
+    return realsize;
+}
+} // anonymous namespace
+
+
+/**
+ * Perform cloud autorouting with the given parameters.
+ * This is a shared helper used by both the CloudAutoroute button and the AI tool callback.
+ * 
+ * @param aBoard The board to autoroute.
+ * @param aEditFrame The PCB edit frame (can be nullptr for headless operation).
+ * @param aParams Autorouting parameters (can be empty object).
+ * @param aProgressCallback Optional callback for progress updates.
+ * @param aStopRequested Optional atomic flag to check for cancellation.
+ * @return JSON result with success, message, and progress_log fields.
+ */
+nlohmann::json PerformCloudAutoroute( BOARD* aBoard,
+                                       PCB_EDIT_FRAME* aEditFrame,
+                                       const nlohmann::json& aParams,
+                                       std::function<void( const std::string& )> aProgressCallback,
+                                       std::atomic<bool>* aStopRequested )
+{
+    nlohmann::json result;
+    result["success"] = false;
+    result["progress_log"] = nlohmann::json::array();
+
+    auto logProgress = [&]( const std::string& msg )
+    {
+        result["progress_log"].push_back( msg );
+        if( aProgressCallback )
+            aProgressCallback( msg );
+    };
+
+    // Check authentication
+    if( !AUTH_MANAGER::Instance().IsAuthenticated() )
+    {
+        result["message"] = "Authentication required. Please sign in to use cloud autorouting.";
+        return result;
+    }
+
+    // Get auth token
+    wxString authToken = AUTH_MANAGER::Instance().GetAuthToken();
+    if( authToken.IsEmpty() )
+    {
+        result["message"] = "Could not retrieve authentication token. Please sign in again.";
+        return result;
+    }
+
+    logProgress( "Exporting board to DSN format..." );
+
+    // Export board to DSN string
+    std::string dsnContent;
+    try
+    {
+        dsnContent = DSN::ExportBoardToSpecctraString( aBoard );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        result["message"] = std::string( "Failed to export board to DSN format: " ) + ioe.What().ToStdString();
+        return result;
+    }
+
+    if( dsnContent.empty() )
+    {
+        result["message"] = "Failed to export board to DSN format.";
+        return result;
+    }
+
+    logProgress( "Connecting to autoroute server..." );
+
+    // Prepare request with new API format: dsn_content + params
+    nlohmann::json payload;
+    payload["dsn_content"] = dsnContent;
+    payload["params"] = aParams;
+
+    std::string url;
+    url = GetTraceBackendUrl().ToStdString() + "/pcb/autoroute";
+
+    std::string body = payload.dump();
+
+    // Setup streaming context
+    std::atomic<bool> localStopRequested( false );
+    std::atomic<bool>* stopPtr = aStopRequested ? aStopRequested : &localStopRequested;
+    std::atomic<bool> curlCompleted( false );
+    std::atomic<int> curlResult( 0 );
+    std::atomic<int> httpCode( 0 );
+    std::atomic<bool> timeoutOccurred( false );
+    
+    AutorouteStreamContext ctx;
+    ctx.done = false;
+    ctx.hasError = false;
+    ctx.stopRequested = stopPtr;
+    ctx.progressCallback = logProgress;
+
+    // Perform HTTP request with streaming
+    KICAD_CURL_EASY curl;
+    curl.SetURL( url );
+    curl.SetPostFields( body );
+    curl.SetHeader( "Content-Type", "application/json" );
+    curl.SetHeader( "Accept", "text/event-stream" );
+    curl.SetHeader( "Authorization", std::string( "Bearer " ) + std::string( authToken.ToUTF8() ) );
+
+    // Set timeouts - 60 seconds
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_TIMEOUT, 60L );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_CONNECTTIMEOUT, 30L );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_WRITEFUNCTION, autoroute_stream_callback );
+    curl_easy_setopt( curl.GetCurl(), CURLOPT_WRITEDATA, &ctx );
+
+    // Set transfer callback to check for cancellation frequently
+    curl.SetTransferCallback( [stopPtr]( size_t, size_t, size_t, size_t ) -> int
+    {
+        return stopPtr->load() ? 1 : 0;
+    }, 100000L );
+
+    logProgress( "Sending board to autoroute server..." );
+
+    // Start background thread for curl operation
+    auto startTime = std::chrono::steady_clock::now();
+    constexpr int timeoutSeconds = 60;
+    
+    std::thread curlThread( [&]()
+    {
+        curlResult.store( curl.Perform() );
+        httpCode.store( curl.GetResponseStatusCode() );
+        curlCompleted.store( true );
+    } );
+
+    // Polling loop - check for cancellation and timeout
+    while( !curlCompleted.load() )
+    {
+        if( stopPtr->load() )
+            break;
+
+        auto currentTime = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>( currentTime - startTime ).count();
+        
+        if( elapsed >= timeoutSeconds )
+        {
+            timeoutOccurred.store( true );
+            stopPtr->store( true );
+            logProgress( "Autorouting took too long. Cancelling..." );
+            break;
+        }
+
+        std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
+    }
+
+    // Wait for background thread to finish
+    if( curlThread.joinable() )
+    {
+        if( stopPtr->load() || timeoutOccurred.load() )
+        {
+            auto joinStart = std::chrono::steady_clock::now();
+            constexpr int joinTimeoutMs = 2000;
+            
+            while( curlThread.joinable() && !curlCompleted.load() )
+            {
+                auto joinElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - joinStart ).count();
+                
+                if( joinElapsed > joinTimeoutMs )
+                {
+                    curlThread.detach();
+                    break;
+                }
+                
+                std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
+            }
+            
+            if( curlThread.joinable() )
+                curlThread.join();
+        }
+        else
+        {
+            curlThread.join();
+        }
+    }
+
+    // Handle cancellation or timeout
+    if( stopPtr->load() && !curlCompleted.load() )
+    {
+        if( timeoutOccurred.load() )
+            result["message"] = "Autorouting took too long (>1 minute). Operation cancelled.";
+        else
+            result["message"] = "Autorouting was cancelled.";
+        return result;
+    }
+
+    int finalCurlResult = curlResult.load();
+    int finalHttpCode = httpCode.load();
+
+    if( finalCurlResult != CURLE_OK )
+    {
+        result["message"] = std::string( "Failed to connect to autoroute server: " ) + 
+                           curl_easy_strerror( static_cast<CURLcode>( finalCurlResult ) );
+        return result;
+    }
+
+    if( finalHttpCode != 200 )
+    {
+        result["message"] = "Autoroute server returned error code " + std::to_string( finalHttpCode );
+        return result;
+    }
+
+    if( ctx.hasError )
+    {
+        result["message"] = ctx.error;
+        return result;
+    }
+
+    if( !ctx.done || ctx.sesContent.empty() )
+    {
+        result["message"] = "No routing result received from server.";
+        return result;
+    }
+
+    logProgress( "Importing routing results..." );
+
+    // Import SES content into the board (this modifies the board data structure, not UI)
+    try
+    {
+        DSN::ImportSpecctraSessionFromString( aBoard, ctx.sesContent );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        result["message"] = std::string( "Failed to import routing results: " ) + ioe.What().ToStdString();
+        return result;
+    }
+
+    // Store SES content in result for potential debugging
+    result["ses_content_imported"] = true;
+
+    logProgress( "Autorouting complete!" );
+
+    result["success"] = true;
+    result["message"] = "Autorouting completed successfully.";
+    return result;
+}
+
+
+int BOARD_EDITOR_CONTROL::CloudAutoroute( const TOOL_EVENT& aEvent )
+{
+    auto routeStartTime = std::chrono::steady_clock::now();
+    PCB_EDIT_FRAME* editFrame = getEditFrame<PCB_EDIT_FRAME>();
+    BOARD* board = editFrame->GetBoard();
+
+    // Create progress dialog with cancel button
+    WX_PROGRESS_REPORTER progressDlg( editFrame, _( "Cloud Autorouting" ), 1, PR_CAN_ABORT );
+    progressDlg.SetCurrentProgress( 0.0 );
+    progressDlg.Report( _( "Starting autoroute..." ) );
+    progressDlg.KeepRefreshing();
+
+    // Setup stop flag for cancellation
+    std::atomic<bool> stopRequested( false );
+
+    int preRouteTrackCount = static_cast<int>( board->Tracks().size() );
+    int totalNetCount = board->GetNetCount();
+    int footprintCount = static_cast<int>( board->Footprints().size() );
+
+    AMPLITUDE_CLIENT::Instance().Track( "cloud_autoroute_started", {
+        { "track_count_before", preRouteTrackCount },
+        { "net_count", totalNetCount },
+        { "footprint_count", footprintCount }
+    });
+
+    // Progress callback that updates the dialog (must be thread-safe for wxWidgets)
+    // Note: WX_PROGRESS_REPORTER::Report is thread-safe
+    auto progressCallback = [&progressDlg]( const std::string& message )
+    {
+        progressDlg.Report( wxString::FromUTF8( message ) );
+    };
+
+    // Run autoroute in a background thread so we can update UI
+    std::atomic<bool> completed( false );
+    nlohmann::json result;
+
+    // Clear view before import (on main thread)
+    editFrame->ClearUndoRedoList();
+    if( editFrame->GetCanvas() )
+    {
+        for( PCB_TRACK* track : board->Tracks() )
+            editFrame->GetCanvas()->GetView()->Remove( track );
+    }
+
+    std::thread autorouteThread( [&]()
+    {
+        // PerformCloudAutoroute now only does network operations and board data modification
+        // UI operations are done on the main thread after this completes
+        result = PerformCloudAutoroute( board, nullptr, nlohmann::json::object(),
+                                        progressCallback, &stopRequested );
+        completed.store( true );
+    } );
+
+    // Main thread polling loop - check for cancellation and update UI
+    while( !completed.load() )
+    {
+        if( !progressDlg.KeepRefreshing() )
+        {
+            // User clicked cancel button
+            stopRequested.store( true );
+            break;
+        }
+        std::this_thread::sleep_for( std::chrono::milliseconds( 100 ) );
+    }
+
+    // Wait for thread to finish
+    if( autorouteThread.joinable() )
+    {
+        if( stopRequested.load() && !completed.load() )
+        {
+            // Give thread a moment to finish after cancellation
+            auto joinStart = std::chrono::steady_clock::now();
+            while( !completed.load() )
+            {
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - joinStart ).count();
+                if( elapsed > 2000 )
+                {
+                    autorouteThread.detach();
+                    break;
+                }
+                std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
+            }
+            if( autorouteThread.joinable() )
+                autorouteThread.join();
+        }
+        else
+        {
+            autorouteThread.join();
+        }
+    }
+
+    progressDlg.SetCurrentProgress( 1.0 );
+
+    // Handle result and do UI operations on main thread
+    auto routeEndTime = std::chrono::steady_clock::now();
+    double routeDurationSec = std::chrono::duration<double>( routeEndTime - routeStartTime ).count();
+
+    if( result.value( "success", false ) )
+    {
+        // UI operations must happen on main thread
+        editFrame->OnModify();
+
+        if( editFrame->GetCanvas() )
+        {
+            for( PCB_TRACK* track : board->Tracks() )
+                editFrame->GetCanvas()->GetView()->Add( track );
+        }
+
+        // Save board and sync to trace_pcb
+        wxString boardFileName = board->GetFileName();
+        if( !boardFileName.IsEmpty() )
+        {
+            editFrame->SavePcbFile( boardFileName );
+            ConvertKicadPcbToTracePcb( boardFileName );
+        }
+
+        int postRouteTrackCount = static_cast<int>( board->Tracks().size() );
+        int tracksAdded = postRouteTrackCount - preRouteTrackCount;
+
+        AMPLITUDE_CLIENT::Instance().Track( "cloud_autoroute_completed", {
+            { "success", true },
+            { "duration_seconds", routeDurationSec },
+            { "track_count_before", preRouteTrackCount },
+            { "track_count_after", postRouteTrackCount },
+            { "tracks_added", tracksAdded },
+            { "net_count", totalNetCount },
+            { "footprint_count", footprintCount }
+        });
+
+        editFrame->Refresh();
+        editFrame->SetStatusText( _( "Cloud autorouting completed successfully." ) );
+    }
+    else
+    {
+        // Restore view if autoroute failed (re-add tracks that were removed)
+        if( editFrame->GetCanvas() )
+        {
+            for( PCB_TRACK* track : board->Tracks() )
+                editFrame->GetCanvas()->GetView()->Add( track );
+        }
+        editFrame->Refresh();
+
+        wxString errorMsg = wxString::FromUTF8( result.value( "message", "Unknown error" ) );
+
+        AMPLITUDE_CLIENT::Instance().Track( "cloud_autoroute_completed", {
+            { "success", false },
+            { "duration_seconds", routeDurationSec },
+            { "error_message", result.value( "message", "Unknown error" ) },
+            { "track_count_before", preRouteTrackCount },
+            { "net_count", totalNetCount },
+            { "footprint_count", footprintCount }
+        });
+
+        DisplayErrorMessage( editFrame, _( "Autoroute Error" ), errorMsg );
+    }
+
+    return 0;
+}
+
+
+int BOARD_EDITOR_CONTROL::SendToManufacturer( const TOOL_EVENT& aEvent )
+{
+    PCB_EDIT_FRAME* editFrame = getEditFrame<PCB_EDIT_FRAME>();
+
+    DIALOG_SEND_TO_MANUFACTURER dlg( editFrame );
+    dlg.ShowModal();
+
+    return 0;
+}
+
+
 int BOARD_EDITOR_CONTROL::ExportSpecctraDSN( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "specctra_dsn_exported" );
     wxString    fullFileName = m_frame->GetLastPath( LAST_PATH_SPECCTRADSN );
     wxFileName  fn;
 
@@ -476,6 +1020,8 @@ int BOARD_EDITOR_CONTROL::ExportNetlist( const TOOL_EVENT& aEvent )
 
     dlg.SetExtraControlCreator( &LEGACYFILEDLG_NETLIST_OPTIONS::Create );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return 0;
 
@@ -511,7 +1057,11 @@ int BOARD_EDITOR_CONTROL::ExportNetlist( const TOOL_EVENT& aEvent )
         nlohmann::ordered_map<wxString, wxString> fields;
 
         for( PCB_FIELD* field : footprint->GetFields() )
+        {
+            wxCHECK2( field, continue );
+
             fields[field->GetCanonicalName()] = field->GetText();
+        }
 
         component->SetFields( fields );
 
@@ -528,6 +1078,7 @@ int BOARD_EDITOR_CONTROL::ExportNetlist( const TOOL_EVENT& aEvent )
 
 int BOARD_EDITOR_CONTROL::GenerateGerbers( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "gerbers_generated" );
     PCB_PLOT_PARAMS plotSettings = m_frame->GetPlotSettings();
 
     plotSettings.SetFormat( PLOT_FORMAT::GERBER );
@@ -614,17 +1165,23 @@ int BOARD_EDITOR_CONTROL::RepairBoard( const TOOL_EVENT& aEvent )
             processItem( group );
     }
 
-    for( BOARD_ITEM* drawing : board()->Drawings() )
-        processItem( drawing );
+    // Everything owned by the board not handled above
+    for( BOARD_ITEM* item : board()->GetItemSet() )
+    {
+        // Top-level footprints and tracks were handled above.
+        switch( item->Type() )
+        {
+        case PCB_FOOTPRINT_T:
+        case PCB_TRACE_T:
+        case PCB_ARC_T:
+        case PCB_VIA_T:
+            break;
 
-    for( ZONE* zone : board()->Zones() )
-        processItem( zone );
-
-    for( PCB_MARKER* marker : board()->Markers() )
-        processItem( marker );
-
-    for( PCB_GROUP* group : board()->Groups() )
-        processItem( group );
+        default:
+            processItem( item );
+            break;
+        }
+    }
 
     if( duplicates )
     {
@@ -660,10 +1217,18 @@ int BOARD_EDITOR_CONTROL::RepairBoard( const TOOL_EVENT& aEvent )
 
 int BOARD_EDITOR_CONTROL::UpdatePCBFromSchematic( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "pcb_updated_from_schematic" );
     NETLIST netlist;
+    bool    fetched = false;
 
-    if( m_frame->FetchNetlistFromSchematic( netlist, _( "Updating PCB requires a fully annotated "
-                                                        "schematic." ) ) )
+    RunMainStack(
+            [&]()
+            {
+                fetched = m_frame->FetchNetlistFromSchematic(
+                        netlist, _( "Updating PCB requires a fully annotated schematic." ) );
+            } );
+
+    if( fetched )
     {
         DIALOG_UPDATE_PCB updateDialog( m_frame, &netlist );
         updateDialog.ShowModal();
@@ -732,56 +1297,60 @@ int BOARD_EDITOR_CONTROL::ShowEeschema( const TOOL_EVENT& aEvent )
     }
     else
     {
-        KIWAY_PLAYER* frame = m_frame->Kiway().Player( FRAME_SCH, false );
+        RunMainStack(
+                [&]()
+                {
+                    KIWAY_PLAYER* frame = m_frame->Kiway().Player( FRAME_SCH, false );
 
-        // Please: note: DIALOG_EDIT_LIBENTRY_FIELDS_IN_LIB::initBuffers() calls
-        // Kiway.Player( FRAME_SCH, true )
-        // therefore, the schematic editor is sometimes running, but the schematic project
-        // is not loaded, if the library editor was called, and the dialog field editor was used.
-        // On Linux, it happens the first time the schematic editor is launched, if
-        // library editor was running, and the dialog field editor was open
-        // On Windows, it happens always after the library editor was called,
-        // and the dialog field editor was used
-        if( !frame )
-        {
-            try
-            {
-                frame = boardFrame->Kiway().Player( FRAME_SCH, true );
-            }
-            catch( const IO_ERROR& err )
-            {
+                    // Please: note: DIALOG_EDIT_LIBENTRY_FIELDS_IN_LIB::initBuffers() calls
+                    // Kiway.Player( FRAME_SCH, true )
+                    // therefore, the schematic editor is sometimes running, but the schematic project
+                    // is not loaded, if the library editor was called, and the dialog field editor was used.
+                    // On Linux, it happens the first time the schematic editor is launched, if
+                    // library editor was running, and the dialog field editor was open
+                    // On Windows, it happens always after the library editor was called,
+                    // and the dialog field editor was used
+                    if( !frame )
+                    {
+                        try
+                        {
+                            frame = boardFrame->Kiway().Player( FRAME_SCH, true );
+                        }
+                        catch( const IO_ERROR& err )
+                        {
+                            DisplayErrorMessage( boardFrame,
+                                                 _( "Eeschema failed to load." ) + wxS( "\n" ) + err.What() );
+                            return;
+                        }
+                    }
 
-                DisplayErrorMessage( boardFrame, _( "Eeschema failed to load." ) + wxS( "\n" ) + err.What() );
-                return 0;
-            }
-        }
+                    wxEventBlocker blocker( boardFrame );
 
-        wxEventBlocker blocker( boardFrame );
+                    // If Kiway() cannot create the eeschema frame, it shows a error message, and
+                    // frame is null
+                    if( !frame )
+                        return;
 
-        // If Kiway() cannot create the eeschema frame, it shows a error message, and
-        // frame is null
-        if( !frame )
-            return 0;
+                    if( !frame->IsShownOnScreen() ) // the frame exists, (created by the dialog field editor)
+                                                    // but no project loaded.
+                    {
+                        frame->OpenProjectFiles( std::vector<wxString>( 1, schematic.GetFullPath() ) );
+                        frame->Show( true );
+                    }
 
-        if( !frame->IsShownOnScreen() ) // the frame exists, (created by the dialog field editor)
-                                        // but no project loaded.
-        {
-            frame->OpenProjectFiles( std::vector<wxString>( 1, schematic.GetFullPath() ) );
-            frame->Show( true );
-        }
+                    // On Windows, Raise() does not bring the window on screen, when iconized or not shown
+                    // On Linux, Raise() brings the window on screen, but this code works fine
+                    if( frame->IsIconized() )
+                    {
+                        frame->Iconize( false );
 
-        // On Windows, Raise() does not bring the window on screen, when iconized or not shown
-        // On Linux, Raise() brings the window on screen, but this code works fine
-        if( frame->IsIconized() )
-        {
-            frame->Iconize( false );
+                        // If an iconized frame was created by Pcbnew, Iconize( false ) is not enough
+                        // to show the frame at its normal size: Maximize should be called.
+                        frame->Maximize( false );
+                    }
 
-            // If an iconized frame was created by Pcbnew, Iconize( false ) is not enough
-            // to show the frame at its normal size: Maximize should be called.
-            frame->Maximize( false );
-        }
-
-        frame->Raise();
+                    frame->Raise();
+                } );
     }
 
     return 0;
@@ -805,6 +1374,39 @@ int BOARD_EDITOR_CONTROL::ToggleProperties( const TOOL_EVENT& aEvent )
 int BOARD_EDITOR_CONTROL::ToggleNetInspector( const TOOL_EVENT& aEvent )
 {
     getEditFrame<PCB_EDIT_FRAME>()->ToggleNetInspector();
+    return 0;
+}
+
+
+int BOARD_EDITOR_CONTROL::ToggleAIChat( const TOOL_EVENT& aEvent )
+{
+    PCB_EDIT_FRAME*    frame = getEditFrame<PCB_EDIT_FRAME>();
+    PCB_SELECTION_TOOL* selTool = m_toolMgr->GetTool<PCB_SELECTION_TOOL>();
+    PCB_SELECTION&      selection = selTool->GetSelection();
+
+    std::vector<std::pair<wxString, wxString>> components;
+
+    for( EDA_ITEM* item : selection )
+    {
+        if( item->Type() == PCB_FOOTPRINT_T )
+        {
+            FOOTPRINT* fp = static_cast<FOOTPRINT*>( item );
+            components.emplace_back( fp->GetReference(), fp->GetValue() );
+        }
+    }
+
+    if( !components.empty() )
+    {
+        frame->ShowAIChatPanel();
+
+        if( AI_CHAT_PANEL* chatPanel = frame->GetAIChatPanel() )
+            chatPanel->AddSelectedComponents( components );
+    }
+    else
+    {
+        frame->ToggleAIChat();
+    }
+
     return 0;
 }
 
@@ -1465,8 +2067,17 @@ static bool mergeZones( EDA_DRAW_FRAME* aFrame, BOARD_COMMIT& aCommit,
         return false;
     }
 
+    // Adopt the highest priority from all merged zones so the result maintains
+    // the most aggressive fill ordering.
+    unsigned highestPriority = aOriginZones[0]->GetAssignedPriority();
+
     for( unsigned int i = 1; i < aOriginZones.size(); i++ )
+    {
+        highestPriority = std::max( highestPriority, aOriginZones[i]->GetAssignedPriority() );
         aCommit.Remove( aOriginZones[i] );
+    }
+
+    aOriginZones[0]->SetAssignedPriority( highestPriority );
 
     aMergedZones.push_back( aOriginZones[0] );
 
@@ -1507,12 +2118,6 @@ int BOARD_EDITOR_CONTROL::ZoneMerge( const TOOL_EVENT& aEvent )
         if( firstZone->GetNetCode() != netcode )
         {
             wxLogMessage( _( "Some zone netcodes did not match and were not merged." ) );
-            continue;
-        }
-
-        if( curr_area->GetAssignedPriority() != firstZone->GetAssignedPriority() )
-        {
-            wxLogMessage( _( "Some zone priorities did not match and were not merged." ) );
             continue;
         }
 
@@ -1631,7 +2236,7 @@ int BOARD_EDITOR_CONTROL::ExplicitCrossProbeToSch( const TOOL_EVENT& aEvent )
 void BOARD_EDITOR_CONTROL::doCrossProbePcbToSch( const TOOL_EVENT& aEvent, bool aForce )
 {
     // Don't get in an infinite loop PCB -> SCH -> PCB -> SCH -> ...
-    if( m_frame->m_probingSchToPcb )
+    if( m_frame->m_ProbingSchToPcb )
         return;
 
     PCB_SELECTION_TOOL*  selTool = m_toolMgr->GetTool<PCB_SELECTION_TOOL>();
@@ -1833,6 +2438,8 @@ void BOARD_EDITOR_CONTROL::setTransitions()
     Go( &BOARD_EDITOR_CONTROL::BoardSetup,             PCB_ACTIONS::boardSetup.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ImportNetlist,          PCB_ACTIONS::importNetlist.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ImportSpecctraSession,  PCB_ACTIONS::importSpecctraSession.MakeEvent() );
+    Go( &BOARD_EDITOR_CONTROL::CloudAutoroute,         PCB_ACTIONS::cloudAutoroute.MakeEvent() );
+    Go( &BOARD_EDITOR_CONTROL::SendToManufacturer,     PCB_ACTIONS::sendToManufacturer.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ExportSpecctraDSN,      PCB_ACTIONS::exportSpecctraDSN.MakeEvent() );
 
     if( ADVANCED_CFG::GetCfg().m_ShowPcbnewExportNetlist && m_frame && m_frame->GetExportNetlistAction() )
@@ -1894,6 +2501,7 @@ void BOARD_EDITOR_CONTROL::setTransitions()
     Go( &BOARD_EDITOR_CONTROL::ToggleLayersManager,    PCB_ACTIONS::showLayersManager.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleProperties,       ACTIONS::showProperties.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleNetInspector,     PCB_ACTIONS::showNetInspector.MakeEvent() );
+    Go( &BOARD_EDITOR_CONTROL::ToggleAIChat,           PCB_ACTIONS::showAIChat.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleLibraryTree,      PCB_ACTIONS::showDesignBlockPanel.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleSearch,           PCB_ACTIONS::showSearch.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::TogglePythonConsole,    PCB_ACTIONS::showPythonConsole.MakeEvent() );

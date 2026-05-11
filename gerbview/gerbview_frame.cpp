@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -19,6 +20,7 @@
  */
 
 #include <kiface_base.h>
+#include <settings/color_settings.h>
 #include <base_units.h>
 #include <pgm_base.h>
 #include <bitmaps.h>
@@ -59,10 +61,10 @@
 #include "widgets/dcode_selection_box.h"
 #include <dialog_draw_layers_settings.h>
 
-#ifndef __linux__
-#include <navlib/nl_gerbview_plugin.h>
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
 #include <spacenav/spnav_2d_plugin.h>
+#else
+#include <navlib/nl_gerbview_plugin.h>
 #endif
 
 #include <wx/log.h>
@@ -93,7 +95,7 @@ GERBVIEW_FRAME::GERBVIEW_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_netText = nullptr;
     m_apertText = nullptr;
     m_dcodeText = nullptr;
-    m_aboutTitle = _HKI( "KiCad Gerber Viewer" );
+    m_aboutTitle = _HKI( "Trace Gerber Viewer" );
 
     SHAPE_POLY_SET dummy;   // A ugly trick to force the linker to include
                             // some methods in code and avoid link errors
@@ -162,11 +164,13 @@ GERBVIEW_FRAME::GERBVIEW_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( "TopMainToolbar" ).Top().Layer( 6 ) );
     m_auimgr.AddPane( m_tbTopAux, EDA_PANE().HToolbar().Name( "TopAuxToolbar" ).Top().Layer(4) );
-    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer( 6 ) );
+    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer( 1 ) );
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" ).Left().Layer( 3 ) );
-    m_auimgr.AddPane( m_LayersManager, EDA_PANE().Palette().Name( "LayersManager" ).Right().Layer( 3 )
-                                                 .Caption( _( "Layers Manager" ) ).PaneBorder( false )
-                                                 .MinSize( 80, -1 ).BestSize( m_LayersManager->GetBestSize() ) );
+    m_auimgr.AddPane( m_LayersManager,
+                      EDA_PANE().Palette().Name( "LayersManager" ).Right().Layer( 3 )
+                                .Caption( _( "Layers Manager" ) ).PaneBorder( false )
+                                .MinSize( FromDIP( 80 ), FromDIP( 80 ) )
+                                .BestSize( m_LayersManager->GetBestSize() ) );
 
     m_auimgr.AddPane( GetCanvas(), EDA_PANE().Canvas().Name( "DrawFrame" ).Center() );
 
@@ -411,7 +415,6 @@ void GERBVIEW_FRAME::SetElementVisibility( int aLayerID, bool aNewState )
         break;
 
     case LAYER_NEGATIVE_OBJECTS:
-    {
         gvconfig()->m_Appearance.show_negative_objects = aNewState;
 
         view->UpdateAllItemsConditionally( KIGFX::REPAINT,
@@ -424,7 +427,6 @@ void GERBVIEW_FRAME::SetElementVisibility( int aLayerID, bool aNewState )
                 } );
 
         break;
-    }
 
     case LAYER_GERBVIEW_DRAWINGSHEET:
         gvconfig()->m_Appearance.show_border_and_titleblock = aNewState;
@@ -625,18 +627,27 @@ void GERBVIEW_FRAME::UpdateXORLayers()
             view->SetLayerTarget( GERBER_DRAW_LAYER( i ), target );
 
         // We want the last visible layer, but deprioritize the active layer unless it's the
-        // only layer
-        if( ( lastVisibleLayer == -1 )
-            || ( view->IsLayerVisible( GERBER_DRAW_LAYER( i ) ) && i != GetActiveLayer() ) )
+        // only layer.  We must check visibility first to avoid selecting hidden layers.
+        if( view->IsLayerVisible( GERBER_DRAW_LAYER( i ) ) )
         {
-            lastVisibleLayer = i;
+            if( lastVisibleLayer == -1 || i != GetActiveLayer() )
+                lastVisibleLayer = i;
         }
     }
 
-    //We don't want to diff the last visible layer onto the background, etc.
+    // We don't want to diff the last visible layer onto the background, etc.
+    // In XOR mode, we must keep TARGET_NONCACHED for all layers including the last one.
+    // This is because OpenGL's cached items are flushed at the end of the frame, which
+    // occurs after XOR compositing. If we used TARGET_CACHED for the last layer, its
+    // items would be drawn on top of the XOR result instead of being included in the
+    // XOR calculation.
     if( lastVisibleLayer != -1 )
     {
-        view->SetLayerTarget( GERBER_DRAW_LAYER( lastVisibleLayer ), target );
+        if( gvconfig()->m_Display.m_XORMode )
+            view->SetLayerTarget( GERBER_DRAW_LAYER( lastVisibleLayer ), KIGFX::TARGET_NONCACHED );
+        else
+            view->SetLayerTarget( GERBER_DRAW_LAYER( lastVisibleLayer ), target );
+
         view->SetLayerDiff( GERBER_DRAW_LAYER( lastVisibleLayer ), false );
     }
 
@@ -715,14 +726,13 @@ bool GERBVIEW_FRAME::IsElementVisible( int aLayerID ) const
     {
     case LAYER_DCODES:                return gvconfig()->m_Appearance.show_dcodes;
     case LAYER_NEGATIVE_OBJECTS:      return gvconfig()->m_Appearance.show_negative_objects;
-    case LAYER_GERBVIEW_GRID:         return IsGridVisible();
+    case LAYER_GERBVIEW_GRID:         return gvconfig()->m_Window.grid.show;
     case LAYER_GERBVIEW_DRAWINGSHEET: return gvconfig()->m_Appearance.show_border_and_titleblock;
     case LAYER_GERBVIEW_PAGE_LIMITS:  return gvconfig()->m_Display.m_DisplayPageLimits;
     case LAYER_GERBVIEW_BACKGROUND:   return true;
 
     default:
-        wxFAIL_MSG( wxString::Format( wxT( "GERBVIEW_FRAME::IsElementVisible(): bad arg %d" ),
-                                      aLayerID ) );
+        wxFAIL_MSG( wxString::Format( wxT( "GERBVIEW_FRAME::IsElementVisible(): bad arg %d" ), aLayerID ) );
     }
 
     return true;
@@ -756,6 +766,9 @@ void GERBVIEW_FRAME::SetVisibleLayers( const LSET& aLayerMask )
                                                      gvconfig()->m_Appearance.show_dcodes && v );
         }
     }
+
+    if( gvconfig()->m_Display.m_XORMode )
+        UpdateXORLayers();
 }
 
 
@@ -1045,11 +1058,11 @@ void GERBVIEW_FRAME::ActivateGalCanvas()
     {
         if( !m_spaceMouse )
         {
-#ifndef __linux__
-            m_spaceMouse = std::make_unique<NL_GERBVIEW_PLUGIN>();
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
             m_spaceMouse = std::make_unique<SPNAV_2D_PLUGIN>( galCanvas );
             m_spaceMouse->SetScale( gerbIUScale.IU_PER_MILS / pcbIUScale.IU_PER_MILS );
+#else
+            m_spaceMouse = std::make_unique<NL_GERBVIEW_PLUGIN>();
 #endif
         }
 

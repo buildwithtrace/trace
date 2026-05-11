@@ -28,7 +28,9 @@
 #include <wx/menu.h>
 #include <wx/sizer.h>
 #include <wx/settings.h>
+#include <wx/srchctrl.h>
 #include <widgets/wx_grid.h>
+#include <algorithm>
 #include <functional>
 #include <memory>
 
@@ -44,15 +46,19 @@ static wxString paramValueString( const PARAM_CFG& aParam )
         case paramcfg_id::PARAM_INT:
             s << *static_cast<const PARAM_CFG_INT&>( aParam ).m_Pt_param;
             break;
+
         case paramcfg_id::PARAM_DOUBLE:
             s = wxString::FromCDouble( *static_cast<const PARAM_CFG_DOUBLE&>( aParam ).m_Pt_param );
             break;
+
         case paramcfg_id::PARAM_WXSTRING:
             s = *static_cast<const PARAM_CFG_WXSTRING&>( aParam ).m_Pt_param;
             break;
+
         case paramcfg_id::PARAM_BOOL:
             s << ( *static_cast<const PARAM_CFG_BOOL&>( aParam ).m_Pt_param ? wxS( "true" ) : wxS( "false" ) );
             break;
+
         default:
             wxLogError( wxS( "Unsupported PARAM_CFG variant: " ) + wxString::Format( wxS( "%d" ), aParam.m_Type ) );
         }
@@ -76,15 +82,19 @@ static wxString paramDefaultString( const PARAM_CFG& aParam )
         case paramcfg_id::PARAM_INT:
             s << static_cast<const PARAM_CFG_INT&>( aParam ).m_Default;
             break;
+
         case paramcfg_id::PARAM_DOUBLE:
             s = wxString::FromCDouble( static_cast<const PARAM_CFG_DOUBLE&>( aParam ).m_Default );
             break;
+
         case paramcfg_id::PARAM_WXSTRING:
             s << static_cast<const PARAM_CFG_WXSTRING&>( aParam ).m_default;
             break;
+
         case paramcfg_id::PARAM_BOOL:
             s << ( static_cast<const PARAM_CFG_BOOL&>( aParam ).m_Default ? wxS( "true" ) : wxS( "false" ) );
             break;
+
         default:
             break;
         }
@@ -108,6 +118,7 @@ static void writeParam( PARAM_CFG& aParam, const wxString& aValue )
         *param.m_Pt_param = wxAtoi( aValue );
         break;
     }
+
     case paramcfg_id::PARAM_BOOL:
     {
         PARAM_CFG_BOOL& param = static_cast<PARAM_CFG_BOOL&>( aParam );
@@ -123,29 +134,37 @@ static void writeParam( PARAM_CFG& aParam, const wxString& aValue )
         }
         break;
     }
+
     case paramcfg_id::PARAM_DOUBLE:
     {
         PARAM_CFG_DOUBLE& param = static_cast<PARAM_CFG_DOUBLE&>( aParam );
         aValue.ToCDouble( param.m_Pt_param );
         break;
     }
+
     case paramcfg_id::PARAM_WXSTRING:
     {
         PARAM_CFG_WXSTRING& param = static_cast<PARAM_CFG_WXSTRING&>( aParam );
         *param.m_Pt_param = aValue;
         break;
     }
+
     default:
         wxASSERT_MSG( false, wxS( "Unsupported PARAM_CFG variant: " )
                                 + wxString::Format( wxS( "%d" ), aParam.m_Type ) );
     }
 }
 
+
 DIALOG_EDIT_CFG::DIALOG_EDIT_CFG( wxWindow* aParent ) :
         wxDialog( aParent, wxID_ANY, _( "Edit Advanced Configuration" ), wxDefaultPosition, wxDefaultSize,
                   wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER )
 {
     m_cfgFile = wxFileName( PATHS::GetUserSettingsPath(), wxS( "kicad_advanced" ) );
+
+    m_filterCtrl = new wxSearchCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize );
+    m_filterCtrl->ShowCancelButton( true );
+    m_filterCtrl->SetDescriptiveText( _( "Filter" ) );
 
     m_grid = new WX_GRID( this, wxID_ANY );
     m_grid->CreateGrid( 0, 3 );
@@ -158,8 +177,6 @@ DIALOG_EDIT_CFG::DIALOG_EDIT_CFG( wxWindow* aParent ) :
     m_grid->SetRowLabelSize( 0 );
     m_grid->SetupColumnAutosizer( 1 );
 
-    loadSettings();
-
     wxStdDialogButtonSizer* buttonSizer = new wxStdDialogButtonSizer();
     wxButton*               okButton = new wxButton( this, wxID_OK, _( "OK" ) );
     okButton->SetDefault();
@@ -167,6 +184,7 @@ DIALOG_EDIT_CFG::DIALOG_EDIT_CFG( wxWindow* aParent ) :
     buttonSizer->Realize();
 
     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
+    sizer->Add( m_filterCtrl, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 5 );
     sizer->Add( m_grid, 1, wxEXPAND | wxALL, 5 );
     sizer->Add( buttonSizer, 0, wxEXPAND | wxALL, 5 );
     SetSizer( sizer );
@@ -180,6 +198,9 @@ DIALOG_EDIT_CFG::DIALOG_EDIT_CFG( wxWindow* aParent ) :
 
     m_grid->Bind( wxEVT_GRID_CELL_CHANGED, &DIALOG_EDIT_CFG::OnCellChange, this );
     m_grid->Bind( wxEVT_GRID_CELL_RIGHT_CLICK, &DIALOG_EDIT_CFG::OnCellRightClick, this );
+    m_grid->Bind( wxEVT_GRID_CELL_LEFT_DCLICK, &DIALOG_EDIT_CFG::OnCellLeftDClick, this );
+    m_filterCtrl->Bind( wxEVT_TEXT, &DIALOG_EDIT_CFG::OnFilterChanged, this );
+    m_filterCtrl->Bind( wxEVT_SEARCHCTRL_CANCEL_BTN, &DIALOG_EDIT_CFG::OnFilterChanged, this );
     Bind( wxEVT_SIZE, &DIALOG_EDIT_CFG::OnSize, this );
 
     m_contextRow = -1;
@@ -189,23 +210,39 @@ DIALOG_EDIT_CFG::DIALOG_EDIT_CFG( wxWindow* aParent ) :
 }
 
 
-void DIALOG_EDIT_CFG::loadSettings()
+bool DIALOG_EDIT_CFG::TransferDataToWindow()
 {
-    const ADVANCED_CFG&                            adv = ADVANCED_CFG::GetCfg();
-    const std::vector<std::unique_ptr<PARAM_CFG>>& entries = adv.GetEntries();
+    m_allEntries.clear();
 
-    for( const auto& entry : entries )
+    for( const std::unique_ptr<PARAM_CFG>& entry : ADVANCED_CFG::GetCfg().GetEntries() )
     {
-        wxString value = paramValueString( *entry );
+        ConfigEntry cfg;
+        cfg.key = entry->m_Ident;
+        cfg.value = paramValueString( *entry );
         wxString def = paramDefaultString( *entry );
-        int      row = m_grid->GetNumberRows();
-        m_grid->AppendRows( 1 );
-        m_grid->SetCellValue( row, 0, entry->m_Ident );
-        m_grid->SetCellValue( row, 1, value );
-        m_grid->SetCellValue( row, 2, def == value ? wxS( "0" ) : wxS( "1" ) );
-        m_grid->SetReadOnly( row, 2 );
-        updateRowAppearance( row );
+        cfg.extant = ( def == cfg.value ? wxS( "0" ) : wxS( "1" ) );
+        m_allEntries.push_back( cfg );
     }
+
+    std::sort( m_allEntries.begin(), m_allEntries.end(),
+               []( const ConfigEntry& a, const ConfigEntry& b )
+               {
+                   return a.key.CmpNoCase( b.key ) < 0;
+               } );
+
+    applyFilter();
+
+    return true;
+}
+
+
+bool DIALOG_EDIT_CFG::TransferDataFromWindow()
+{
+    if( !m_grid->CommitPendingChanges() )
+        return false;
+
+    saveSettings();
+    return true;
 }
 
 
@@ -222,8 +259,7 @@ void DIALOG_EDIT_CFG::saveSettings()
         if( key.IsEmpty() || ext != wxS( "1" ) )
             continue;
 
-        const std::vector<std::unique_ptr<PARAM_CFG>>& entries = ADVANCED_CFG::GetCfg().GetEntries();
-        for( auto& entry : entries )
+        for( const std::unique_ptr<PARAM_CFG>& entry : ADVANCED_CFG::GetCfg().GetEntries() )
         {
             if( entry->m_Ident == key )
             {
@@ -247,18 +283,22 @@ void DIALOG_EDIT_CFG::OnCellChange( wxGridEvent& aEvent )
     {
         m_grid->SetCellValue( row, 2, wxS( "1" ) );
         updateRowAppearance( row );
+
+        wxString key = m_grid->GetCellValue( row, 0 );
+        wxString value = m_grid->GetCellValue( row, 1 );
+
+        for( ConfigEntry& entry : m_allEntries )
+        {
+            if( entry.key == key )
+            {
+                entry.value = value;
+                entry.extant = wxS( "1" );
+                break;
+            }
+        }
     }
 
     saveSettings();
-
-    int lastRow = m_grid->GetNumberRows() - 1;
-    if( !m_grid->GetCellValue( lastRow, 0 ).IsEmpty() || !m_grid->GetCellValue( lastRow, 1 ).IsEmpty() )
-    {
-        m_grid->AppendRows( 1 );
-        m_grid->SetCellValue( m_grid->GetNumberRows() - 1, 2, wxS( "0" ) );
-        m_grid->SetReadOnly( m_grid->GetNumberRows() - 1, 2 );
-        updateRowAppearance( m_grid->GetNumberRows() - 1 );
-    }
 
     aEvent.Skip();
 }
@@ -283,10 +323,7 @@ void DIALOG_EDIT_CFG::OnResetDefault( wxCommandEvent& aEvent )
     wxString key = m_grid->GetCellValue( m_contextRow, 0 );
     wxString def;
 
-    const ADVANCED_CFG&                            adv = ADVANCED_CFG::GetCfg();
-    const std::vector<std::unique_ptr<PARAM_CFG>>& entries = adv.GetEntries();
-
-    for( const auto& entry : entries )
+    for( const std::unique_ptr<PARAM_CFG>& entry : ADVANCED_CFG::GetCfg().GetEntries() )
     {
         if( entry->m_Ident == key )
         {
@@ -309,4 +346,85 @@ void DIALOG_EDIT_CFG::updateRowAppearance( int aRow )
     font.SetWeight( ext ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL );
     m_grid->SetCellFont( aRow, 0, font );
     m_grid->SetCellFont( aRow, 1, font );
+}
+
+
+void DIALOG_EDIT_CFG::OnFilterChanged( wxCommandEvent& aEvent )
+{
+    m_filterText = m_filterCtrl->GetValue();
+    applyFilter();
+    aEvent.Skip();
+}
+
+
+void DIALOG_EDIT_CFG::applyFilter()
+{
+    if( m_grid->GetNumberRows() > 0 )
+        m_grid->DeleteRows( 0, m_grid->GetNumberRows() );
+
+    for( const ConfigEntry& entry : m_allEntries )
+    {
+        if( m_filterText.IsEmpty() || entry.key.Upper().Contains( m_filterText.Upper() ) )
+        {
+            int row = m_grid->GetNumberRows();
+            m_grid->AppendRows( 1 );
+            m_grid->SetCellValue( row, 0, entry.key );
+            m_grid->SetCellValue( row, 1, entry.value );
+            m_grid->SetCellValue( row, 2, entry.extant );
+            m_grid->SetReadOnly( row, 2 );
+            updateRowAppearance( row );
+        }
+    }
+}
+
+
+void DIALOG_EDIT_CFG::OnCellLeftDClick( wxGridEvent& aEvent )
+{
+    int row = aEvent.GetRow();
+    int col = aEvent.GetCol();
+
+    if( col != 1 )
+    {
+        aEvent.Skip();
+        return;
+    }
+
+    wxString key = m_grid->GetCellValue( row, 0 );
+
+    for( const std::unique_ptr<PARAM_CFG>& entry : ADVANCED_CFG::GetCfg().GetEntries() )
+    {
+        if( entry->m_Ident == key && entry->m_Type == paramcfg_id::PARAM_BOOL )
+        {
+            wxString currentValue = m_grid->GetCellValue( row, 1 );
+            bool     isTrueValue = currentValue.CmpNoCase( wxS( "true" ) ) == 0
+                               || currentValue.CmpNoCase( wxS( "yes" ) ) == 0
+                               || currentValue.CmpNoCase( wxS( "1" ) ) == 0;
+
+            wxString newValue = isTrueValue ? wxS( "false" ) : wxS( "true" );
+            m_grid->SetCellValue( row, 1, newValue );
+            m_grid->SetCellValue( row, 2, wxS( "1" ) );
+            updateRowAppearance( row );
+            saveSettings();
+
+            for( ConfigEntry& cfg : m_allEntries )
+            {
+                if( cfg.key == key )
+                {
+                    cfg.value = newValue;
+                    cfg.extant = wxS( "1" );
+                    break;
+                }
+            }
+
+            return;
+        }
+    }
+
+    aEvent.Skip();
+}
+
+
+void DIALOG_EDIT_CFG::OnSize( wxSizeEvent& aEvent )
+{
+    aEvent.Skip();
 }

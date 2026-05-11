@@ -31,6 +31,8 @@ namespace KIPLATFORM
 
         bool GetSecret( const wxString& aService, const wxString& aKey, wxString& aSecret );
 
+        bool DeleteSecret( const wxString& aService, const wxString& aKey );
+
     }
 }
 

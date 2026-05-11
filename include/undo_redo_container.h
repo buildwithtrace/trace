@@ -95,6 +95,7 @@ public:
     KIID_VECT_LIST GetGroupMembers() const { return m_groupMembers; }
 
     BASE_SCREEN* GetScreen() const { return m_screen; }
+    void SetScreen( BASE_SCREEN* aScreen ) { m_screen = aScreen; }
 
 private:
     EDA_ITEM_FLAGS m_pickerFlags;      /* A copy of m_flags member. Currently used only to flag

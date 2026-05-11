@@ -198,17 +198,18 @@ public:
 
     // Attribute Toggles
     static TOOL_ACTION setExcludeFromBOM;
-    static TOOL_ACTION setExcludeFromSimulation;
+    static TOOL_ACTION setExcludeFromSim;
     static TOOL_ACTION setExcludeFromBoard;
     static TOOL_ACTION setDNP;
 
     // Design Block management
     static TOOL_ACTION showDesignBlockPanel;
     static TOOL_ACTION showRemoteSymbolPanel;
+    static TOOL_ACTION showAIChat;
     static TOOL_ACTION saveSheetAsDesignBlock;
     static TOOL_ACTION saveSelectionAsDesignBlock;
-    static TOOL_ACTION saveSheetToDesignBlock;
-    static TOOL_ACTION saveSelectionToDesignBlock;
+    static TOOL_ACTION updateDesignBlockFromSheet;
+    static TOOL_ACTION updateDesignBlockFromSelection;
     static TOOL_ACTION deleteDesignBlock;
     static TOOL_ACTION editDesignBlockProperties;
 
@@ -273,9 +274,10 @@ public:
     static TOOL_ACTION exportSymbolView;
     static TOOL_ACTION exportSymbolAsSVG;
     static TOOL_ACTION showPythonConsole;
-    static TOOL_ACTION repairSchematic;
     static TOOL_ACTION previousUnit;
     static TOOL_ACTION nextUnit;
+    static TOOL_ACTION previousSymbol;
+    static TOOL_ACTION nextSymbol;
 
     // Line modes
     static TOOL_ACTION lineModeFree;

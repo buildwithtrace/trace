@@ -1,0 +1,52 @@
+{
+  "id": "pikkolo",
+  "display_name": "Pikkolo Assembly",
+  "website": "https://www.pikkoloassembly.com",
+  "has_api": true,
+  "api_type": "partner_v1",
+  "capabilities": {
+    "layers": [2, 4],
+    "materials": ["FR-4"],
+    "max_board_size_mm": [250, 250],
+    "min_trace_spacing": {
+      "standard": "5/5mil"
+    },
+    "min_hole_size_mm": {
+      "standard_via": 0.254,
+      "component_annular_ring_mil": 7,
+      "via_annular_ring_mil": 5
+    },
+    "thickness_mm": [1.6],
+    "surface_finish": ["Lead-Free HAL"],
+    "solder_mask_colors": ["Green"],
+    "copper_weight_oz": [1],
+    "via_process": ["Through-hole only"],
+    "special_features": [],
+    "restrictions": [
+      "No plated slots",
+      "No blind or buried vias",
+      "No microvias (< 6 mil finished hole)",
+      "No controlled impedance stackups",
+      "All drills >= 10 mil finished diameter",
+      "Inner copper >= 15 mil from board edge",
+      "Drill-to-copper clearance >= 10 mil"
+    ]
+  },
+  "assembly": {
+    "supported": true,
+    "types": ["Full assembly"],
+    "sides": ["Top", "Bottom"],
+    "min_passive_size": "0402",
+    "min_ic_pitch_mm": 0.4,
+    "bga_supported": false,
+    "solder_alloys": ["SAC305 lead-free", "Low-temp Bi57.6/Sn42/Ag0.4", "Leaded on request"],
+    "component_sourcing": ["DigiKey", "Mouser", "Arrow", "User consignment"]
+  },
+  "order_form_params": {
+    "pcb_source": ["fabricate_with_pikkolo", "ship_from_fab", "ship_yourself"],
+    "required_files": ["BOM (.csv/.xlsx)", "Placements (.pnp/.pos/.csv/.xlsx)", "Gerber files (.zip)"],
+    "shipping_methods": ["Standard", "2 Day", "Overnight", "Local Pickup", "Local Dropoff (Denver Metro)"],
+    "shipping_address_fields": ["name", "company", "street_address", "city", "state", "zip_code"]
+  },
+  "drc_presets": ["pikkolo_standard"]
+}

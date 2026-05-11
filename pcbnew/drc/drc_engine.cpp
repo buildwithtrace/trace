@@ -30,6 +30,8 @@
 #include <progress_reporter.h>
 #include <string_utils.h>
 #include <board_design_settings.h>
+#include <project/net_settings.h>
+#include <component_classes/component_class_manager.h>
 #include <drc/drc_engine.h>
 #include <drc/drc_rtree.h>
 #include <drc/drc_rule_parser.h>
@@ -47,6 +49,8 @@
 #include <zone.h>
 #include <project/project_file.h>
 #include <project/tuning_profiles.h>
+#include <connectivity/connectivity_data.h>
+#include <connectivity/from_to_cache.h>
 
 
 // wxListBox's performance degrades horrifically with very large datasets.  It's not clear
@@ -233,7 +237,7 @@ void DRC_ENGINE::loadImplicitRules()
     // 2a) micro-via specific defaults (new DRC doesn't treat microvias in any special way)
 
     std::shared_ptr<DRC_RULE> uViaRule =
-            createImplicitRule( _( "board setup micro-via constraints" ), DRC_IMPLICIT_SOURCE::BOARD_SETUP_CONSTRAINT );
+            createImplicitRule( _( "board setup constraints micro-via" ), DRC_IMPLICIT_SOURCE::BOARD_SETUP_CONSTRAINT );
 
     uViaRule->m_Condition = new DRC_RULE_CONDITION( wxT( "A.Via_Type == 'Micro'" ) );
 
@@ -279,6 +283,11 @@ void DRC_ENGINE::loadImplicitRules()
                     DRC_CONSTRAINT constraint( CLEARANCE_CONSTRAINT );
                     constraint.Value().SetMin( nc->GetClearance() );
                     netclassRule->AddConstraint( constraint );
+
+                    {
+                        std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+                        m_netclassClearances[nc->GetName()] = nc->GetClearance();
+                    }
                 }
 
                 if( nc->HasTrackWidth() )
@@ -346,6 +355,8 @@ void DRC_ENGINE::loadImplicitRules()
                         DRC_CONSTRAINT min_clearanceConstraint( CLEARANCE_CONSTRAINT );
                         min_clearanceConstraint.Value().SetMin( nc->GetDiffPairGap() );
                         netclassRule->AddConstraint( min_clearanceConstraint );
+
+                        m_hasDiffPairClearanceOverrides = true;
                     }
                 }
 
@@ -713,8 +724,10 @@ void DRC_ENGINE::compileRules()
 
         for( const DRC_CONSTRAINT& constraint : rule->m_Constraints )
         {
-            if( !m_constraintMap.count( constraint.m_Type ) )
-                m_constraintMap[ constraint.m_Type ] = new std::vector<DRC_ENGINE_CONSTRAINT*>();
+            auto& ruleVec = m_constraintMap[ constraint.m_Type ];
+
+            if( !ruleVec )
+                ruleVec = new std::vector<DRC_ENGINE_CONSTRAINT*>();
 
             DRC_ENGINE_CONSTRAINT* engineConstraint = new DRC_ENGINE_CONSTRAINT;
 
@@ -722,9 +735,78 @@ void DRC_ENGINE::compileRules()
             engineConstraint->condition = condition;
             engineConstraint->constraint = constraint;
             engineConstraint->parentRule = rule;
-            m_constraintMap[ constraint.m_Type ]->push_back( engineConstraint );
+            ruleVec->push_back( engineConstraint );
         }
     }
+
+    m_hasExplicitClearanceRules = false;
+    m_hasGeometryDependentRules = false;
+    m_explicitConstraints.clear();
+
+    for( auto& [constraintType, ruleList] : m_constraintMap )
+    {
+        for( DRC_ENGINE_CONSTRAINT* c : *ruleList )
+        {
+            if( c->parentRule && !c->parentRule->IsImplicit() )
+            {
+                m_explicitConstraints[constraintType].push_back( c );
+
+                if( constraintType == CLEARANCE_CONSTRAINT )
+                    m_hasExplicitClearanceRules = true;
+
+                if( !m_hasGeometryDependentRules
+                    && c->condition
+                    && c->condition->HasGeometryDependentFunctions() )
+                {
+                    m_hasGeometryDependentRules = true;
+                }
+            }
+        }
+    }
+}
+
+
+void DRC_ENGINE::InitEngine( const std::shared_ptr<DRC_RULE>& rule )
+{
+    m_testProviders = DRC_SHOWMATCHES_PROVIDER_REGISTRY::Instance().GetShowMatchesProviders();
+
+    for( DRC_TEST_PROVIDER* provider : m_testProviders )
+    {
+        if( m_logReporter )
+            m_logReporter->Report( wxString::Format( wxT( "Create DRC provider: '%s'" ), provider->GetName() ) );
+
+        provider->SetDRCEngine( this );
+    }
+
+    m_rules.clear();
+    m_rulesValid = false;
+
+    for( std::pair<DRC_CONSTRAINT_T, std::vector<DRC_ENGINE_CONSTRAINT*>*> pair : m_constraintMap )
+    {
+        for( DRC_ENGINE_CONSTRAINT* constraint : *pair.second )
+            delete constraint;
+
+        delete pair.second;
+    }
+
+    m_constraintMap.clear();
+
+    m_board->IncrementTimeStamp(); // Clear board-level caches
+
+    try
+    {
+        m_rules.push_back( rule );
+        compileRules();
+    }
+    catch( PARSE_ERROR& original_parse_error )
+    {
+        throw original_parse_error;
+    }
+
+    for( int ii = DRCE_FIRST; ii < DRCE_LAST; ++ii )
+        m_errorLimits[ii] = ERROR_LIMIT;
+
+    m_rulesValid = true;
 }
 
 
@@ -752,6 +834,16 @@ void DRC_ENGINE::InitEngine( const wxFileName& aRulePath )
     }
 
     m_constraintMap.clear();
+
+    {
+        std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+        m_ownClearanceCache.clear();
+        m_netclassClearances.clear();
+    }
+
+    m_hasExplicitClearanceRules = false;
+    m_hasDiffPairClearanceOverrides = false;
+    m_explicitConstraints.clear();
 
     m_board->IncrementTimeStamp();  // Clear board-level caches
 
@@ -825,8 +917,14 @@ void DRC_ENGINE::RunTests( EDA_UNITS aUnits, bool aReportAllTrackErrors, bool aT
         if( m_logReporter )
             m_logReporter->Report( wxString::Format( wxT( "Run DRC provider: '%s'" ), provider->GetName() ) );
 
+        PROF_TIMER providerTimer;
+
         if( !provider->RunTests( aUnits ) )
             break;
+
+        providerTimer.Stop();
+        wxLogTrace( traceDrcProfile, "DRC provider '%s' took %0.3f ms",
+                    provider->GetName(), providerTimer.msecs() );
     }
 
     timer.Stop();
@@ -1140,6 +1238,7 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
     else if( aConstraintType == SOLDER_MASK_EXPANSION_CONSTRAINT )
     {
         std::optional<int> override;
+        const BOARD_ITEM* overrideItem = a;
 
         if( pad )
             override = pad->GetLocalSolderMaskMargin();
@@ -1148,11 +1247,20 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
         else if( const PCB_TRACK* track = dynamic_cast<const PCB_TRACK*>( a ) )
             override = track->GetLocalSolderMaskMargin();
 
+        if( !override.has_value() && pad )
+        {
+            if( FOOTPRINT* overrideFootprint = pad->GetParentFootprint() )
+            {
+                override = overrideFootprint->GetLocalSolderMaskMargin();
+                overrideItem = overrideFootprint;
+            }
+        }
+
         if( override )
         {
             REPORT( "" )
             REPORT( wxString::Format( _( "Local override on %s; solder mask expansion: %s." ),
-                                      EscapeHTML( pad->GetItemDescription( this, true ) ),
+                                      EscapeHTML( overrideItem->GetItemDescription( this, true ) ),
                                       MessageTextFromValue( override.value() ) ) )
 
             constraint.m_Value.SetOpt( override.value() );
@@ -1162,15 +1270,25 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
     else if( aConstraintType == SOLDER_PASTE_ABS_MARGIN_CONSTRAINT )
     {
         std::optional<int> override;
+        const BOARD_ITEM* overrideItem = a;
 
         if( pad )
             override = pad->GetLocalSolderPasteMargin();
+
+        if( !override.has_value() && pad )
+        {
+            if( FOOTPRINT* overrideFootprint = pad->GetParentFootprint() )
+            {
+                override = overrideFootprint->GetLocalSolderPasteMargin();
+                overrideItem = overrideFootprint;
+            }
+        }
 
         if( override )
         {
             REPORT( "" )
             REPORT( wxString::Format( _( "Local override on %s; solder paste absolute clearance: %s." ),
-                                      EscapeHTML( pad->GetItemDescription( this, true ) ),
+                                      EscapeHTML( overrideItem->GetItemDescription( this, true ) ),
                                       MessageTextFromValue( override.value() ) ) )
 
             constraint.m_Value.SetOpt( override.value_or( 0 ) );
@@ -1180,15 +1298,25 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
     else if( aConstraintType == SOLDER_PASTE_REL_MARGIN_CONSTRAINT )
     {
         std::optional<double> overrideRatio;
+        const BOARD_ITEM* overrideItem = a;
 
         if( pad )
             overrideRatio = pad->GetLocalSolderPasteMarginRatio();
+
+        if( !overrideRatio.has_value() && pad )
+        {
+            if( FOOTPRINT* overrideFootprint = pad->GetParentFootprint() )
+            {
+                overrideRatio = overrideFootprint->GetLocalSolderPasteMarginRatio();
+                overrideItem = overrideFootprint;
+            }
+        }
 
         if( overrideRatio )
         {
             REPORT( "" )
             REPORT( wxString::Format( _( "Local override on %s; solder paste relative clearance: %s." ),
-                                      EscapeHTML( pad->GetItemDescription( this, true ) ),
+                                      EscapeHTML( overrideItem->GetItemDescription( this, true ) ),
                                       MessageTextFromValue( overrideRatio.value() * 100.0 ) ) )
 
             constraint.m_Value.SetOpt( KiROUND( overrideRatio.value_or( 0 ) * 1000 ) );
@@ -1527,7 +1655,7 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
                     }
                 }
 
-                if( ( aLayer != UNDEFINED_LAYER && !c->layerTest.test( aLayer ) )
+                if( ( IsPcbLayer( aLayer ) && !c->layerTest.test( aLayer ) )
                     || ( m_board->GetEnabledLayers() & c->layerTest ).count() == 0 )
                 {
                     if( implicit )
@@ -1613,12 +1741,73 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
                 }
             };
 
-    if( m_constraintMap.count( aConstraintType ) )
+    // Fast-path for netclass clearance when no explicit or diff pair override rules exist
+    if( aConstraintType == CLEARANCE_CONSTRAINT
+        && !m_hasExplicitClearanceRules
+        && !m_hasDiffPairClearanceOverrides
+        && !aReporter
+        && !a_is_non_copper
+        && ( !b || !b_is_non_copper ) )
     {
-        std::vector<DRC_ENGINE_CONSTRAINT*>* ruleset = m_constraintMap[ aConstraintType ];
+        int clearance = 0;
 
-        for( DRC_ENGINE_CONSTRAINT* rule : *ruleset )
-            processConstraint( rule );
+        // Get netclass names outside of the lock to minimize critical section
+        wxString ncNameA;
+        wxString ncNameB;
+
+        if( ac )
+        {
+            NETCLASS* ncA = ac->GetEffectiveNetClass();
+
+            if( ncA )
+                ncNameA = ncA->GetName();
+        }
+
+        if( bc )
+        {
+            NETCLASS* ncB = bc->GetEffectiveNetClass();
+
+            if( ncB )
+                ncNameB = ncB->GetName();
+        }
+
+        // Look up clearances with shared lock protection
+        if( !ncNameA.empty() || !ncNameB.empty() )
+        {
+            std::shared_lock<std::shared_mutex> readLock( m_clearanceCacheMutex );
+
+            if( !ncNameA.empty() )
+            {
+                auto it = m_netclassClearances.find( ncNameA );
+
+                if( it != m_netclassClearances.end() )
+                    clearance = it->second;
+            }
+
+            if( !ncNameB.empty() )
+            {
+                auto it = m_netclassClearances.find( ncNameB );
+
+                if( it != m_netclassClearances.end() )
+                    clearance = std::max( clearance, it->second );
+            }
+        }
+
+        if( clearance > 0 )
+        {
+            constraint.m_Value.SetMin( clearance );
+            constraint.m_ImplicitMin = true;
+        }
+    }
+    else
+    {
+        auto it = m_constraintMap.find( aConstraintType );
+
+        if( it != m_constraintMap.end() )
+        {
+            for( DRC_ENGINE_CONSTRAINT* rule : *it->second )
+                processConstraint( rule );
+        }
     }
 
     if( constraint.GetParentRule() && !constraint.GetParentRule()->IsImplicit() )
@@ -1643,11 +1832,11 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
         else
             b = parentFootprint;
 
-        if( m_constraintMap.count( aConstraintType ) )
-        {
-            std::vector<DRC_ENGINE_CONSTRAINT*>* ruleset = m_constraintMap[ aConstraintType ];
+        auto it = m_constraintMap.find( aConstraintType );
 
-            for( DRC_ENGINE_CONSTRAINT* rule : *ruleset )
+        if( it != m_constraintMap.end() )
+        {
+            for( DRC_ENGINE_CONSTRAINT* rule : *it->second )
                 processConstraint( rule );
 
             if( constraint.GetParentRule() && !constraint.GetParentRule()->IsImplicit() )
@@ -1851,6 +2040,41 @@ DRC_CONSTRAINT DRC_ENGINE::EvalRules( DRC_CONSTRAINT_T aConstraintType, const BO
 }
 
 
+DRC_CLEARANCE_BATCH DRC_ENGINE::EvalClearanceBatch( const BOARD_ITEM* a, const BOARD_ITEM* b,
+                                                     PCB_LAYER_ID aLayer )
+{
+    DRC_CLEARANCE_BATCH result;
+    DRC_CONSTRAINT c;
+
+    c = EvalRules( CLEARANCE_CONSTRAINT, a, b, aLayer );
+
+    if( c.m_Value.HasMin() )
+        result.clearance = c.m_Value.Min();
+
+    c = EvalRules( HOLE_CLEARANCE_CONSTRAINT, a, b, aLayer );
+
+    if( c.m_Value.HasMin() )
+        result.holeClearance = c.m_Value.Min();
+
+    c = EvalRules( HOLE_TO_HOLE_CONSTRAINT, a, b, aLayer );
+
+    if( c.m_Value.HasMin() )
+        result.holeToHole = c.m_Value.Min();
+
+    c = EvalRules( EDGE_CLEARANCE_CONSTRAINT, a, b, aLayer );
+
+    if( c.m_Value.HasMin() )
+        result.edgeClearance = c.m_Value.Min();
+
+    c = EvalRules( PHYSICAL_CLEARANCE_CONSTRAINT, a, b, aLayer );
+
+    if( c.m_Value.HasMin() )
+        result.physicalClearance = c.m_Value.Min();
+
+    return result;
+}
+
+
 void DRC_ENGINE::ProcessAssertions( const BOARD_ITEM* a,
                                     std::function<void( const DRC_CONSTRAINT* )> aFailureHandler,
                                     REPORTER* aReporter )
@@ -1913,12 +2137,12 @@ void DRC_ENGINE::ProcessAssertions( const BOARD_ITEM* a,
                 }
             };
 
-    if( m_constraintMap.count( ASSERTION_CONSTRAINT ) )
-    {
-        std::vector<DRC_ENGINE_CONSTRAINT*>* ruleset = m_constraintMap[ ASSERTION_CONSTRAINT ];
+    auto it = m_constraintMap.find( ASSERTION_CONSTRAINT );
 
-        for( int ii = 0; ii < (int) ruleset->size(); ++ii )
-            processConstraint( ruleset->at( ii ) );
+    if( it != m_constraintMap.end() )
+    {
+        for( int ii = 0; ii < (int) it->second->size(); ++ii )
+            processConstraint( it->second->at( ii ) );
     }
 }
 
@@ -1929,6 +2153,7 @@ void DRC_ENGINE::ProcessAssertions( const BOARD_ITEM* a,
 bool DRC_ENGINE::IsErrorLimitExceeded( int error_code )
 {
     assert( error_code >= 0 && error_code <= DRCE_LAST );
+    std::lock_guard<std::mutex> lock( m_errorLimitsMutex );
     return m_errorLimits[ error_code ] <= 0;
 }
 
@@ -1936,13 +2161,15 @@ bool DRC_ENGINE::IsErrorLimitExceeded( int error_code )
 void DRC_ENGINE::ReportViolation( const std::shared_ptr<DRC_ITEM>& aItem, const VECTOR2I& aPos,
                                   int aMarkerLayer, const std::function<void( PCB_MARKER* )>& aPathGenerator )
 {
-    static std::mutex globalLock;
-
-    m_errorLimits[ aItem->GetErrorCode() ] -= 1;
+    {
+        std::lock_guard<std::mutex> lock( m_errorLimitsMutex );
+        m_errorLimits[ aItem->GetErrorCode() ] -= 1;
+    }
 
     if( m_violationHandler )
     {
-        std::lock_guard<std::mutex> guard( globalLock );
+        static std::mutex handlerLock;
+        std::lock_guard<std::mutex> guard( handlerLock );
         m_violationHandler( aItem, aPos, aMarkerLayer, aPathGenerator );
     }
 
@@ -2008,9 +2235,7 @@ bool DRC_ENGINE::ReportPhase( const wxString& aMessage )
         return true;
 
     m_progressReporter->AdvancePhase( aMessage );
-    bool retval = m_progressReporter->KeepRefreshing( false );
-    wxSafeYield( nullptr, true ); // Force an update for the message
-    return retval;
+    return m_progressReporter->KeepRefreshing( false );
 }
 
 
@@ -2022,23 +2247,24 @@ bool DRC_ENGINE::IsCancelled() const
 
 bool DRC_ENGINE::HasRulesForConstraintType( DRC_CONSTRAINT_T constraintID )
 {
-    //drc_dbg( 10, "hascorrect id %d size %d\n", ruleID, m_ruleMap[ruleID]->sortedRules.size() );
-
-    if( m_constraintMap.count( constraintID ) )
-        return m_constraintMap[ constraintID ]->size() > 0;
-
-    return false;
+    auto it = m_constraintMap.find( constraintID );
+    return it != m_constraintMap.end() && !it->second->empty();
 }
 
 
-bool DRC_ENGINE::QueryWorstConstraint( DRC_CONSTRAINT_T aConstraintId, DRC_CONSTRAINT& aConstraint )
+bool DRC_ENGINE::QueryWorstConstraint( DRC_CONSTRAINT_T aConstraintId, DRC_CONSTRAINT& aConstraint,
+                                       bool aUnconditionalOnly )
 {
-    int worst = 0;
+    int  worst = 0;
+    auto it = m_constraintMap.find( aConstraintId );
 
-    if( m_constraintMap.count( aConstraintId ) )
+    if( it != m_constraintMap.end() )
     {
-        for( DRC_ENGINE_CONSTRAINT* c : *m_constraintMap[aConstraintId] )
+        for( DRC_ENGINE_CONSTRAINT* c : *it->second )
         {
+            if( aUnconditionalOnly && c->condition )
+                continue;
+
             int current = c->constraint.GetValue().Min();
 
             if( current > worst )
@@ -2056,10 +2282,11 @@ bool DRC_ENGINE::QueryWorstConstraint( DRC_CONSTRAINT_T aConstraintId, DRC_CONST
 std::set<int> DRC_ENGINE::QueryDistinctConstraints( DRC_CONSTRAINT_T aConstraintId )
 {
     std::set<int> distinctMinimums;
+    auto          it = m_constraintMap.find( aConstraintId );
 
-    if( m_constraintMap.count( aConstraintId ) )
+    if( it != m_constraintMap.end() )
     {
-        for( DRC_ENGINE_CONSTRAINT* c : *m_constraintMap[aConstraintId] )
+        for( DRC_ENGINE_CONSTRAINT* c : *it->second )
             distinctMinimums.emplace( c->constraint.GetValue().Min() );
     }
 
@@ -2192,6 +2419,8 @@ std::vector<BOARD_ITEM*> DRC_ENGINE::GetItemsMatchingCondition( const wxString& 
                                                                 DRC_CONSTRAINT_T aConstraint,
                                                                 REPORTER* aReporter )
 {
+    wxLogTrace( wxS( "KI_TRACE_DRC_RULE_EDITOR" ),
+                wxS( "[ShowMatches] engine enter: expr='%s', constraint=%d" ), aExpression, (int) aConstraint );
     std::vector<BOARD_ITEM*> matches;
 
     if( !m_board )
@@ -2200,13 +2429,53 @@ std::vector<BOARD_ITEM*> DRC_ENGINE::GetItemsMatchingCondition( const wxString& 
     DRC_RULE_CONDITION condition( aExpression );
 
     if( !condition.Compile( aReporter ? aReporter : m_logReporter ) )
+    {
+        wxLogTrace( wxS( "KI_TRACE_DRC_RULE_EDITOR" ), wxS( "[ShowMatches] engine: compile failed" ) );
         return matches;
+    }
+
+    // Rebuild the from-to cache so that fromTo() expressions can be evaluated.
+    // This cache requires explicit rebuilding before use since it depends on the full
+    // connectivity graph being available.
+    if( auto connectivity = m_board->GetConnectivity() )
+    {
+        if( auto ftCache = connectivity->GetFromToCache() )
+            ftCache->Rebuild( m_board );
+    }
 
     BOARD_ITEM_SET items = m_board->GetItemSet();
+    size_t totalItems = 0;
+    size_t skippedItems = 0;
+    size_t noLayerItems = 0;
+    size_t checkedItems = 0;
 
     for( auto& [kiid, item] : m_board->GetItemByIdCache() )
     {
+        totalItems++;
+
+        // Skip items that don't have visible geometry or can't be meaningfully matched
+        switch( item->Type() )
+        {
+        case PCB_NETINFO_T:
+        case PCB_GENERATOR_T:
+        case PCB_GROUP_T:
+            skippedItems++;
+            continue;
+
+        default:
+            break;
+        }
+
         LSET itemLayers = item->GetLayerSet();
+
+        if( itemLayers.none() )
+        {
+            noLayerItems++;
+            continue;
+        }
+
+        checkedItems++;
+        bool matched = false;
 
         for( PCB_LAYER_ID layer : itemLayers )
         {
@@ -2214,10 +2483,233 @@ std::vector<BOARD_ITEM*> DRC_ENGINE::GetItemsMatchingCondition( const wxString& 
                                     aReporter ? aReporter : m_logReporter ) )
             {
                 matches.push_back( item );
+                wxLogTrace( wxS( "KI_TRACE_DRC_RULE_EDITOR" ),
+                            wxS( "[ShowMatches] engine: match type=%d kiid=%s layer=%d" ),
+                            (int) item->Type(), kiid.AsString(), (int) layer );
+                matched = true;
                 break; // No need to check other layers
             }
         }
+
+        // Log a few non-matching items to help debug condition issues
+        if( !matched && matches.size() == 0 && checkedItems <= 5 )
+        {
+            wxLogTrace( wxS( "KI_TRACE_DRC_RULE_EDITOR" ),
+                        wxS( "[ShowMatches] engine: no-match sample type=%d kiid=%s layers=%s" ),
+                        (int) item->Type(), kiid.AsString(), itemLayers.FmtHex() );
+        }
     }
 
+    wxLogTrace( wxS( "KI_TRACE_DRC_RULE_EDITOR" ),
+                wxS( "[ShowMatches] engine stats: total=%zu skipped=%zu noLayer=%zu checked=%zu" ),
+                totalItems, skippedItems, noLayerItems, checkedItems );
+
+    wxLogTrace( wxS( "KI_TRACE_DRC_RULE_EDITOR" ), wxS( "[ShowMatches] engine exit: total=%zu" ), matches.size() );
     return matches;
+}
+
+
+int DRC_ENGINE::GetCachedOwnClearance( const BOARD_ITEM* aItem, PCB_LAYER_ID aLayer,
+                                       wxString* aSource )
+{
+    DRC_OWN_CLEARANCE_CACHE_KEY key{ aItem->m_Uuid, aLayer };
+
+    // Fast path: check cache with shared (read) lock
+    {
+        std::shared_lock<std::shared_mutex> readLock( m_clearanceCacheMutex );
+
+        auto it = m_ownClearanceCache.find( key );
+
+        if( it != m_ownClearanceCache.end() )
+        {
+            // Cache hit. We don't cache the source string since it's rarely requested
+            // and caching it would add complexity.
+            return it->second;
+        }
+    }
+
+    // Cache miss - evaluate the constraint (outside lock to avoid blocking other threads)
+    DRC_CONSTRAINT_T constraintType = CLEARANCE_CONSTRAINT;
+
+    if( aItem->Type() == PCB_PAD_T )
+    {
+        const PAD* pad = static_cast<const PAD*>( aItem );
+
+        if( pad->GetAttribute() == PAD_ATTRIB::NPTH )
+            constraintType = HOLE_CLEARANCE_CONSTRAINT;
+    }
+
+    DRC_CONSTRAINT constraint = EvalRules( constraintType, aItem, nullptr, aLayer );
+
+    int clearance = 0;
+
+    if( constraint.Value().HasMin() )
+    {
+        clearance = constraint.Value().Min();
+
+        if( aSource )
+            *aSource = constraint.GetName();
+    }
+
+    // Store in cache with exclusive (write) lock using double-checked locking
+    {
+        std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+
+        auto it = m_ownClearanceCache.find( key );
+
+        if( it == m_ownClearanceCache.end() )
+            m_ownClearanceCache[key] = clearance;
+    }
+
+    return clearance;
+}
+
+
+void DRC_ENGINE::InvalidateClearanceCache( const KIID& aUuid )
+{
+    std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+
+    if( m_board )
+    {
+        LSET copperLayers = m_board->GetEnabledLayers() & LSET::AllCuMask();
+
+        for( PCB_LAYER_ID layer : copperLayers.Seq() )
+            m_ownClearanceCache.erase( DRC_OWN_CLEARANCE_CACHE_KEY{ aUuid, layer } );
+    }
+    else
+    {
+        auto it = m_ownClearanceCache.begin();
+
+        while( it != m_ownClearanceCache.end() )
+        {
+            if( it->first.m_uuid == aUuid )
+                it = m_ownClearanceCache.erase( it );
+            else
+                ++it;
+        }
+    }
+}
+
+
+void DRC_ENGINE::ClearClearanceCache()
+{
+    std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+    m_ownClearanceCache.clear();
+}
+
+
+void DRC_ENGINE::InitializeClearanceCache()
+{
+    if( !m_board )
+        return;
+
+    // Pre-populate the cache for all connected items to avoid delays during first render.
+    // We only need to cache copper layers since clearance outlines are only drawn on copper.
+
+    LSET copperLayers = m_board->GetEnabledLayers() & LSET::AllCuMask();
+
+    using CLEARANCE_MAP = std::unordered_map<DRC_OWN_CLEARANCE_CACHE_KEY, int>;
+
+    // Build flat list of (item, layer) pairs to process.
+    // Estimate size based on tracks + pads * average layers (2 for typical TH pads).
+    std::vector<std::pair<const BOARD_ITEM*, PCB_LAYER_ID>> itemsToProcess;
+    size_t estimatedPads = 0;
+
+    for( FOOTPRINT* footprint : m_board->Footprints() )
+        estimatedPads += footprint->Pads().size();
+
+    itemsToProcess.reserve( m_board->Tracks().size() + estimatedPads * 2 );
+
+    for( PCB_TRACK* track : m_board->Tracks() )
+    {
+        if( track->Type() == PCB_VIA_T )
+        {
+            for( PCB_LAYER_ID layer : LSET( track->GetLayerSet() & copperLayers ).Seq() )
+                itemsToProcess.emplace_back( track, layer );
+        }
+        else
+        {
+            itemsToProcess.emplace_back( track, track->GetLayer() );
+        }
+    }
+
+    for( FOOTPRINT* footprint : m_board->Footprints() )
+    {
+        for( PAD* pad : footprint->Pads() )
+        {
+            for( PCB_LAYER_ID layer : LSET( pad->GetLayerSet() & copperLayers ).Seq() )
+                itemsToProcess.emplace_back( pad, layer );
+        }
+    }
+
+    if( itemsToProcess.empty() )
+        return;
+
+    {
+        std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+        m_ownClearanceCache.reserve( itemsToProcess.size() );
+    }
+
+    thread_pool& tp = GetKiCadThreadPool();
+
+    auto processItems = [this]( size_t aStart, size_t aEnd,
+                                const std::vector<std::pair<const BOARD_ITEM*, PCB_LAYER_ID>>& aItems )
+                                -> CLEARANCE_MAP
+    {
+        CLEARANCE_MAP localCache;
+
+        for( size_t i = aStart; i < aEnd; ++i )
+        {
+            const BOARD_ITEM* item = aItems[i].first;
+            PCB_LAYER_ID layer = aItems[i].second;
+
+            DRC_CONSTRAINT_T constraintType = CLEARANCE_CONSTRAINT;
+
+            if( item->Type() == PCB_PAD_T )
+            {
+                const PAD* pad = static_cast<const PAD*>( item );
+
+                if( pad->GetAttribute() == PAD_ATTRIB::NPTH )
+                    constraintType = HOLE_CLEARANCE_CONSTRAINT;
+            }
+
+            DRC_CONSTRAINT constraint = EvalRules( constraintType, item, nullptr, layer );
+
+            int clearance = 0;
+
+            if( constraint.Value().HasMin() )
+                clearance = constraint.Value().Min();
+
+            localCache[{ item->m_Uuid, layer }] = clearance;
+        }
+
+        return localCache;
+    };
+
+    auto results = tp.submit_blocks( 0, itemsToProcess.size(),
+            [&]( size_t aStart, size_t aEnd ) -> CLEARANCE_MAP
+            {
+                return processItems( aStart, aEnd, itemsToProcess );
+            } );
+
+    // Collect all results first WITHOUT holding the lock to avoid deadlock.
+    // Worker threads call EvalRules() which needs a read lock on m_clearanceCacheMutex.
+    // If we held a write lock while calling .get(), workers would block on the read lock
+    // while we block waiting for them to complete.
+    std::vector<CLEARANCE_MAP> collectedResults;
+    collectedResults.reserve( results.size() );
+
+    for( size_t i = 0; i < results.size(); ++i )
+    {
+        if( results[i].valid() )
+            collectedResults.push_back( results[i].get() );
+    }
+
+    // Now merge with write lock held, but no blocking on futures
+    {
+        std::unique_lock<std::shared_mutex> writeLock( m_clearanceCacheMutex );
+
+        for( const auto& localCache : collectedResults )
+            m_ownClearanceCache.insert( localCache.begin(), localCache.end() );
+    }
 }

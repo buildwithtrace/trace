@@ -213,12 +213,13 @@ int FOOTPRINT_EDITOR_CONTROL::NewFootprint( const TOOL_EVENT& aEvent )
 {
     const LIB_ID   selected = m_frame->GetTargetFPID();
     const wxString libraryName = selected.GetUniStringLibNickname();
-    FOOTPRINT*     newFootprint = m_frame->CreateNewFootprint( wxEmptyString, libraryName );
-
-    if( !newFootprint )
-        return 0;
 
     if( !m_frame->Clear_Pcb( true ) )
+        return 0;
+
+    FOOTPRINT* newFootprint = m_frame->CreateNewFootprint( wxEmptyString, libraryName );
+
+    if( !newFootprint )
         return 0;
 
     canvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
@@ -247,7 +248,6 @@ int FOOTPRINT_EDITOR_CONTROL::NewFootprint( const TOOL_EVENT& aEvent )
 int FOOTPRINT_EDITOR_CONTROL::CreateFootprint( const TOOL_EVENT& aEvent )
 {
     LIB_ID selected = m_frame->GetLibTree()->GetSelectedLibId();
-    wxString libraryName = selected.GetUniStringLibNickname();
 
     if( m_frame->IsContentModified() )
     {
@@ -769,7 +769,7 @@ int FOOTPRINT_EDITOR_CONTROL::Properties( const TOOL_EVENT& aEvent )
     if( aEvent.IsAction( &PCB_ACTIONS::footprintProperties ) )
     {
         LIB_ID treeLibId = m_frame->GetLibTree()->GetSelectedLibId();
-        
+
         // Check if a different footprint is selected in the tree
         if( treeLibId.IsValid()
                 && (  !m_frame->GetBoard()->GetFirstFootprint()
@@ -795,44 +795,51 @@ void FOOTPRINT_EDITOR_CONTROL::editFootprintPropertiesFromLibrary( const LIB_ID&
 {
     // Load the footprint from the library (without adding it to the canvas)
     FOOTPRINT* libraryFootprint = m_frame->LoadFootprint( aLibId );
-    
+
     if( !libraryFootprint )
         return;
-    
+
     // Create a temporary board to hold the footprint (required by the dialog)
     std::unique_ptr<BOARD> tempBoard( new BOARD() );
-    
+
+    // Set up the temp board with the current project and board settings.
+    // Use reference-only mode to avoid modifying the project's settings.
+    tempBoard->SetDesignSettings( m_frame->GetBoard()->GetDesignSettings() );
+    tempBoard->SetProject( &m_frame->Prj(), true );
+    tempBoard->SetBoardUse( BOARD_USE::FPHOLDER );
+    tempBoard->SynchronizeProperties();
+
     // Create a copy to work with and add it to the temporary board
     FOOTPRINT* tempFootprint = static_cast<FOOTPRINT*>( libraryFootprint->Clone() );
     delete libraryFootprint;
-    
+
     tempBoard->Add( tempFootprint );
     tempFootprint->SetParent( tempBoard.get() );
-    
+
     LIB_ID oldFPID = tempFootprint->GetFPID();
-    
+
     // Open the properties dialog
     DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR dialog( m_frame, tempFootprint );
-    
+
     if( dialog.ShowQuasiModal() != wxID_OK )
         return;
-    
+
     // Remove from temporary board before saving (to avoid double-delete)
     tempBoard->Remove( tempFootprint );
-    
+
     // Save the modified footprint back to the library
     FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &m_frame->Prj() );
     wxString libName = aLibId.GetLibNickname();
-    
+
     try
     {
         adapter->SaveFootprint( libName, tempFootprint, true );
-        
+
         // Update the tree view
         wxDataViewItem treeItem = m_frame->GetLibTreeAdapter()->FindItem( oldFPID );
         m_frame->UpdateLibraryTree( treeItem, tempFootprint );
         m_frame->SyncLibraryTree( true );
-        
+
         // Clean up
         delete tempFootprint;
     }
@@ -1032,16 +1039,10 @@ int FOOTPRINT_EDITOR_CONTROL::OnAngleSnapModeChanged( const TOOL_EVENT& aEvent )
 
     switch( mode )
     {
-    case LEADER_MODE::DIRECT:
-        f->SelectLeftToolbarAction( PCB_ACTIONS::lineModeFree );
-        break;
-    case LEADER_MODE::DEG90:
-        f->SelectLeftToolbarAction( PCB_ACTIONS::lineMode90 );
-        break;
-    case LEADER_MODE::DEG45:
+    case LEADER_MODE::DIRECT: f->SelectToolbarAction( PCB_ACTIONS::lineModeFree ); break;
+    case LEADER_MODE::DEG90:  f->SelectToolbarAction( PCB_ACTIONS::lineMode90 );   break;
     default:
-        f->SelectLeftToolbarAction( PCB_ACTIONS::lineMode45 );
-        break;
+    case LEADER_MODE::DEG45:  f->SelectToolbarAction( PCB_ACTIONS::lineMode45 );   break;
     }
 
     return 0;

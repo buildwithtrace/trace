@@ -42,6 +42,7 @@
 #include <api/api_utils.h>
 #include <api/schematic/schematic_types.pb.h>
 #include <properties/property.h>
+#include <properties/property_mgr.h>
 #include <origin_transforms.h>
 #include <math/util.h>
 
@@ -888,6 +889,9 @@ void SCH_LINE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
 
     if( color == COLOR4D::UNSPECIFIED )
         color = renderSettings->GetLayerColor( GetLayer() );
+
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
 
     aPlotter->SetColor( color );
 

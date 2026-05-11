@@ -46,6 +46,7 @@
 #include <wildcards_and_files_ext.h>
 
 #include <wx/filedlg.h>
+#include <kiplatform/ui.h>
 
 
 bool SYMBOL_EDITOR_CONTROL::Init()
@@ -731,9 +732,7 @@ int SYMBOL_EDITOR_CONTROL::ToggleHiddenFields( const TOOL_EVENT& aEvent )
     SYMBOL_EDITOR_SETTINGS* cfg = m_frame->libeditconfig();
     cfg->m_ShowHiddenFields = !cfg->m_ShowHiddenFields;
 
-    // TODO: Why is this needed in symbol edit and not in schematic edit?
-    getEditFrame<SYMBOL_EDIT_FRAME>()->GetRenderSettings()->m_ShowHiddenFields =
-            cfg->m_ShowHiddenFields;
+    getEditFrame<SYMBOL_EDIT_FRAME>()->GetRenderSettings()->m_ShowHiddenFields = cfg->m_ShowHiddenFields;
 
     getView()->UpdateAllItems( KIGFX::REPAINT );
     m_frame->GetCanvas()->Refresh();
@@ -778,6 +777,8 @@ int SYMBOL_EDITOR_CONTROL::ExportView( const TOOL_EVENT& aEvent )
 
     wxFileDialog dlg( editFrame, _( "Export View as PNG" ), projectPath, fn.GetFullName(),
                       FILEEXT::PngFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_OK && !dlg.GetPath().IsEmpty() )
     {
@@ -971,6 +972,24 @@ int SYMBOL_EDITOR_CONTROL::ChangeUnit( const TOOL_EVENT& aEvent )
 }
 
 
+int SYMBOL_EDITOR_CONTROL::PreviousSymbol( const TOOL_EVENT& aEvent )
+{
+    if( SYMBOL_VIEWER_FRAME* viewerFrame = static_cast<SYMBOL_VIEWER_FRAME*>( m_toolMgr->GetToolHolder() ) )
+        viewerFrame->SelectPreviousSymbol();
+
+    return 0;
+}
+
+
+int SYMBOL_EDITOR_CONTROL::NextSymbol( const TOOL_EVENT& aEvent )
+{
+    if( SYMBOL_VIEWER_FRAME* viewerFrame = static_cast<SYMBOL_VIEWER_FRAME*>( m_toolMgr->GetToolHolder() ) )
+        viewerFrame->SelectNextSymbol();
+
+    return 0;
+}
+
+
 int SYMBOL_EDITOR_CONTROL::ShowLibraryTable( const TOOL_EVENT& aEvent )
 {
     DIALOG_LIB_FIELDS_TABLE::SCOPE scope = DIALOG_LIB_FIELDS_TABLE::SCOPE_LIBRARY;
@@ -987,7 +1006,6 @@ int SYMBOL_EDITOR_CONTROL::ShowLibraryTable( const TOOL_EVENT& aEvent )
 
 void SYMBOL_EDITOR_CONTROL::setTransitions()
 {
-    // clang-format off
     Go( &SYMBOL_EDITOR_CONTROL::AddLibrary,            ACTIONS::newLibrary.MakeEvent() );
     Go( &SYMBOL_EDITOR_CONTROL::AddLibrary,            ACTIONS::addLibrary.MakeEvent() );
     Go( &SYMBOL_EDITOR_CONTROL::AddSymbol,             SCH_ACTIONS::newSymbol.MakeEvent() );
@@ -1036,5 +1054,7 @@ void SYMBOL_EDITOR_CONTROL::setTransitions()
 
     Go( &SYMBOL_EDITOR_CONTROL::ChangeUnit,            SCH_ACTIONS::previousUnit.MakeEvent() );
     Go( &SYMBOL_EDITOR_CONTROL::ChangeUnit,            SCH_ACTIONS::nextUnit.MakeEvent() );
-    // clang-format on
+
+    Go( &SYMBOL_EDITOR_CONTROL::PreviousSymbol,        SCH_ACTIONS::previousSymbol.MakeEvent() );
+    Go( &SYMBOL_EDITOR_CONTROL::NextSymbol,            SCH_ACTIONS::nextSymbol.MakeEvent() );
 }

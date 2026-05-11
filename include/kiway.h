@@ -95,6 +95,7 @@
  */
 
 
+#include <array>
 #include <atomic>
 #include <wx/defs.h>
 #include <wx/event.h>
@@ -256,6 +257,8 @@ struct KIFACE
     }
 
     virtual void PreloadLibraries( KIWAY* aKiway ) {}
+
+    virtual void CancelPreload( bool aBlock = true ) {}
 
     virtual void ProjectChanged() {}
 };
@@ -484,8 +487,8 @@ private:
      */
     KIWAY_PLAYER* GetPlayerFrame( FRAME_T aFrameType );
 
-    static KIFACE*  m_kiface[KIWAY_FACE_COUNT];
-    static int      m_kiface_version[KIWAY_FACE_COUNT];
+    static std::array<KIFACE*,KIWAY_FACE_COUNT>  m_kiface;
+    static std::array<int,KIWAY_FACE_COUNT>      m_kiface_version;
 
     int             m_ctl;
 

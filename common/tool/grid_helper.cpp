@@ -434,7 +434,11 @@ VECTOR2I GRID_HELPER::AlignGrid( const VECTOR2I& aPoint ) const
 VECTOR2I GRID_HELPER::AlignGrid( const VECTOR2I& aPoint, const VECTOR2D& aGrid,
                                  const VECTOR2D& aOffset ) const
 {
-    return computeNearest( aPoint, aGrid, aOffset );
+    // Round the grid size and offset rather than relying on the implicit VECTOR2D->VECTOR2I
+    // truncation in computeNearest. Grid sizes that aren't exact in IEEE 754 (e.g., 0.254mm =
+    // 10 mil) would otherwise truncate to the wrong integer (253999 instead of 254000),
+    // producing positions that aren't true grid multiples.
+    return computeNearest( aPoint, KiROUND( aGrid ), KiROUND( aOffset ) );
 }
 
 

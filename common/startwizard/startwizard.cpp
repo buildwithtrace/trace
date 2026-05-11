@@ -22,6 +22,7 @@
 #include <confirm.h>
 #include <kiface_base.h>
 #include <pgm_base.h>
+#include <wx/display.h>
 #include <wx/statline.h>
 #include <wx/wx.h>
 #include <wx/wizard.h>
@@ -31,6 +32,7 @@
 #include <startwizard/startwizard_provider_privacy.h>
 #include <startwizard/startwizard_provider_settings.h>
 #include <wx/hyperlink.h>
+#include <amplitude_client.h>
 
 
 class STARTWIZARD_PAGE : public wxWizardPageSimple
@@ -39,27 +41,46 @@ public:
     STARTWIZARD_PAGE( wxWizard* aParent, const wxString& aPageTitle ) :
             wxWizardPageSimple( aParent )
     {
+        wxBoxSizer* outerSizer = new wxBoxSizer( wxVERTICAL );
+
+        m_scrolledWindow = new wxScrolledWindow( this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                                 wxVSCROLL | wxBORDER_NONE );
+        m_scrolledWindow->SetScrollRate( 0, 5 );
+
         m_mainSizer = new wxBoxSizer( wxVERTICAL );
 
-        wxStaticText* pageTitle = new wxStaticText( this, -1, aPageTitle );
+        wxStaticText* pageTitle = new wxStaticText( m_scrolledWindow, -1, aPageTitle );
         pageTitle->SetFont(
                 wxFont( 14, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD ) );
         m_mainSizer->Add( pageTitle, 0, wxALIGN_CENTRE | wxALL, 5 );
 
-        wxStaticLine* pageDivider = new wxStaticLine( this, wxID_ANY, wxDefaultPosition,
-                                                      wxDefaultSize, wxLI_HORIZONTAL );
+        wxStaticLine* pageDivider = new wxStaticLine( m_scrolledWindow, wxID_ANY,
+                                                      wxDefaultPosition, wxDefaultSize,
+                                                      wxLI_HORIZONTAL );
         m_mainSizer->Add( pageDivider, 0, wxEXPAND | wxALL, 5 );
+
+        m_scrolledWindow->SetSizer( m_mainSizer );
+
+        outerSizer->Add( m_scrolledWindow, 1, wxEXPAND );
+        SetSizer( outerSizer );
     }
+
+    // Returns the scrolled content area; use this as the parent for panel content
+    // so the content is scrollable when the wizard is smaller than the page requires.
+    wxWindow* GetContentParent() const { return m_scrolledWindow; }
 
     void AddContent( wxPanel* aContent )
     {
-        m_mainSizer->Add( aContent );
-
-        SetSizerAndFit( m_mainSizer );
+        m_mainSizer->Add( aContent, 0, wxEXPAND );
+        m_scrolledWindow->FitInside();
     }
 
+    // Returns the minimum size of the scrolled content, independent of the page size.
+    wxSize GetContentMinSize() const { return m_mainSizer->CalcMin(); }
+
 private:
-    wxBoxSizer* m_mainSizer;
+    wxScrolledWindow* m_scrolledWindow;
+    wxBoxSizer*       m_mainSizer;
 };
 
 
@@ -71,7 +92,7 @@ public:
         m_mainSizer = new wxBoxSizer( wxVERTICAL );
 
         wxStaticText* pageTitle = new wxStaticText(
-                this, -1, wxString::Format( _( "Welcome to KiCad %s" ), GetMajorMinorVersion() ) );
+                this, -1, wxString::Format( _( "Welcome to Trace %s" ), GetTraceMajorMinorVersion() ) );
         pageTitle->SetFont(
                 wxFont( 14, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD ) );
         m_mainSizer->Add( pageTitle, 0, wxALIGN_CENTRE | wxALL, 5 );
@@ -81,15 +102,15 @@ public:
         m_mainSizer->Add( pageDivider, 0, wxEXPAND | wxALL, 5 );
 
         m_welcomeText = new wxStaticText( this, -1,
-            _( "KiCad is starting for the first time, or some of its configuration files are missing.\n\n"
+            _( "Trace is starting for the first time, or some of its configuration files are missing.\n\n"
                "Let's take a moment to configure some basic settings.  You can always modify these "
                "settings later by opening the Preferences dialog." ) );
         m_mainSizer->Add( m_welcomeText, 0, wxEXPAND | wxALL, 5 );
 
         wxBoxSizer* helpSizer = new wxBoxSizer( wxHORIZONTAL );
         wxStaticText* helpLabel = new wxStaticText( this, -1, _( "For help, please visit " ) );
-        wxString docsUrl = wxString::Format( "https://go.kicad.org/docs/%s", GetMajorMinorVersion() );
-        wxHyperlinkCtrl* helpLink = new wxHyperlinkCtrl( this, -1, wxT( "docs.kicad.org" ), docsUrl );
+        wxString docsUrl = wxT( "https://docs.buildwithtrace.com" );
+        wxHyperlinkCtrl* helpLink = new wxHyperlinkCtrl( this, -1, wxT( "docs.buildwithtrace.com" ), docsUrl );
         helpSizer->Add( helpLabel, 0, wxEXPAND | wxLEFT | wxTOP | wxBOTTOM, 5 );
         helpSizer->Add( helpLink, 0, wxEXPAND | wxRIGHT | wxTOP | wxBOTTOM, 5 );
         m_mainSizer->Add( helpSizer, 0, wxEXPAND, 5 );
@@ -157,7 +178,7 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
 
     Pgm().HideSplash();
 
-    m_wizard = new wxWizard( aParent, wxID_ANY, _( "KiCad Setup" ) );
+    m_wizard = new wxWizard( aParent, wxID_ANY, _( "Trace Setup" ) );
     m_wizard->SetWindowStyleFlag( wxRESIZE_BORDER );
 
     STARTWIZARD_WELCOME_PAGE* firstPage = new STARTWIZARD_WELCOME_PAGE( m_wizard );
@@ -169,8 +190,10 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
         if( !provider->NeedsUserInput() )
             continue;
 
+        provider->SetWasShown( true );
+
         STARTWIZARD_PAGE* page = new STARTWIZARD_PAGE( m_wizard, provider->GetPageName() );
-        wxPanel*          panel = provider->GetWizardPanel( page, this );
+        wxPanel*          panel = provider->GetWizardPanel( page->GetContentParent(), this );
         page->AddContent( panel );
 
         if( lastPage != nullptr )
@@ -184,7 +207,7 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
 
         lastPage = page;
 
-        wxSize size = page->GetSizer()->CalcMin();
+        wxSize size = page->GetContentMinSize();
 
         if( size.x > minPageSize.x )
             minPageSize.x = size.x;
@@ -193,13 +216,32 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
             minPageSize.y = size.y;
     }
 
-    m_wizard->SetPageSize( minPageSize + wxSize( 10, 10 ) );
-    firstPage->SetWrap( minPageSize.x );
+    // Clamp the page size to the available display area so the wizard is fully
+    // accessible on small or low-resolution screens.  Reserve space for the
+    // wizard title bar, the Back/Next/Cancel button row, and a small margin.
+    static constexpr int WIZARD_CHROME_HEIGHT = 120;
+    static constexpr int WIZARD_MARGIN = 40;
+
+    wxSize pageSize = minPageSize + wxSize( 10, 10 );
+
+    int displayIdx = wxDisplay::GetFromWindow( aParent ? aParent : wxTheApp->GetTopWindow() );
+
+    if( displayIdx == wxNOT_FOUND )
+        displayIdx = 0;
+
+    wxRect displayArea = wxDisplay( (unsigned int) displayIdx ).GetClientArea();
+    int maxPageHeight = displayArea.GetHeight() - WIZARD_CHROME_HEIGHT - WIZARD_MARGIN;
+
+    if( maxPageHeight > 0 && pageSize.y > maxPageHeight )
+        pageSize.y = maxPageHeight;
+
+    m_wizard->SetPageSize( pageSize );
+    firstPage->SetWrap( pageSize.x );
 
     m_wizard->Bind( wxEVT_WIZARD_CANCEL,
             [&]( wxWizardEvent& aEvt )
             {
-                if( IsOK( aParent, _( "Are you sure?  If you cancel KiCad setup, default settings "
+                if( IsOK( aParent, _( "Are you sure?  If you cancel Trace setup, default settings "
                                       "will be chosen for you." ) ) )
                 {
                     for( std::unique_ptr<STARTWIZARD_PROVIDER>& provider : m_providers )
@@ -217,11 +259,13 @@ void STARTWIZARD::CheckAndRun( wxWindow* aParent )
     {
         for( std::unique_ptr<STARTWIZARD_PROVIDER>& provider : m_providers )
         {
-            if( !provider->NeedsUserInput() )
+            if( !provider->WasShown() )
                 continue;
 
             provider->Finish();
         }
+
+        AMPLITUDE_CLIENT::Instance().Track( "wizard_completed" );
     }
 
     m_wizard->Destroy();

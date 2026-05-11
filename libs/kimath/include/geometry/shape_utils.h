@@ -81,6 +81,13 @@ std::array<SEG, 4> BoxToSegs( const BOX2I& aBox );
  */
 void CollectBoxCorners( const BOX2I& aBox, std::vector<VECTOR2I>& aCorners );
 
+/*
+ * Get a SHAPE_LINE_CHAIN representing the outline of a box.
+ *
+ * The first point and winding direction are not specified.
+ */
+SHAPE_LINE_CHAIN BoxToLineChain( const BOX2I& aBox );
+
 /**
  * Get the segments of a box that are in the given direction.
  *

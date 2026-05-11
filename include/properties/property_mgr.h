@@ -141,6 +141,14 @@ public:
     PROPERTY_BASE& AddProperty( PROPERTY_BASE* aProperty, const wxString& aGroup = wxEmptyString );
 
     /**
+     * Replace an existing property.  This is used to modify the implementation of a property without
+     * moving it in the display order.
+     * @param aProperty is the property to register.
+     * @param aGroup is an optional grouping key for the property
+     */
+    PROPERTY_BASE& ReplaceProperty( PROPERTY_BASE* aProperty, const wxString& aGroup );
+
+    /**
      * Replace an existing property for a specific type.
      *
      * It is used to modify a property that has been inherited from a base class.
@@ -268,6 +276,8 @@ private:
     {
     }
 
+    ~PROPERTY_MANAGER();
+
     friend class PROPERTY_COMMIT_HANDLER;
 
     ///< Structure holding type meta-data
@@ -279,6 +289,10 @@ private:
             m_groupDisplayOrder.emplace_back( wxEmptyString );
             m_groups.insert( wxEmptyString );
         }
+
+        ~CLASS_DESC();
+
+        CLASS_DESC( CLASS_DESC&& ) = default;
 
         ///< Unique type identifier (obtained using TYPE_HASH)
         const TYPE_ID m_id;

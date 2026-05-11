@@ -350,7 +350,7 @@ public:
         m_line_p = aOther.m_line_p;
         m_via_n = aOther.m_via_n;
         m_via_p = aOther.m_via_p;
-
+        m_layers = aOther.m_layers;
         m_hasVias = aOther.m_hasVias;
         m_net_n = aOther.m_net_n;
         m_net_p = aOther.m_net_p;
@@ -374,7 +374,7 @@ public:
             m_line_p = std::move( aOther.m_line_p );
             m_via_n = aOther.m_via_n;
             m_via_p = aOther.m_via_p;
-
+            m_layers = aOther.m_layers;
             m_hasVias = aOther.m_hasVias;
             m_net_n = aOther.m_net_n;
             m_net_p = aOther.m_net_p;

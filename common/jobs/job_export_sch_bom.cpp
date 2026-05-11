@@ -40,7 +40,9 @@ JOB_EXPORT_SCH_BOM::JOB_EXPORT_SCH_BOM() :
     m_sortField(),
     m_sortAsc( true ),
     m_filterString(),
-    m_excludeDNP( false )
+    m_excludeDNP( false ),
+    m_groupSymbols( true ),
+    m_variantNames()
 {
     m_params.emplace_back( new JOB_PARAM<wxString>( "field_delimiter",
                                                     &m_fieldDelimiter,
@@ -71,6 +73,7 @@ JOB_EXPORT_SCH_BOM::JOB_EXPORT_SCH_BOM() :
     m_params.emplace_back( new JOB_PARAM<bool>( "sort_asc", &m_sortAsc, m_sortAsc ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "filter_string", &m_filterString, m_filterString ) );
     m_params.emplace_back( new JOB_PARAM<bool>( "exclude_dnp", &m_excludeDNP, m_excludeDNP ) );
+    m_params.emplace_back( new JOB_PARAM<bool>( "group_symbols", &m_groupSymbols, m_groupSymbols ) );
 
     m_params.emplace_back( new JOB_PARAM<wxString>( "bom_preset_name",
                                                     &m_bomPresetName,
@@ -78,6 +81,10 @@ JOB_EXPORT_SCH_BOM::JOB_EXPORT_SCH_BOM() :
     m_params.emplace_back( new JOB_PARAM<wxString>( "bom_format_preset_name",
                                                     &m_bomFmtPresetName,
                                                     m_bomFmtPresetName ) );
+
+    m_params.emplace_back( new JOB_PARAM_LIST<wxString>( "variant_names",
+                                                         &m_variantNames,
+                                                         m_variantNames ) );
 }
 
 

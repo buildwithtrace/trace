@@ -3,6 +3,7 @@
  *
  * Copyright (C) 1992-2012 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,6 +35,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <future>
 #include <wx/datetime.h>
 #include <wx/fswatcher.h>
 #include <wx/laywin.h>
@@ -305,6 +307,13 @@ private:
 
     void gitStatusTimerHandler();
 
+    /**
+     * Ensure all kicad_sch and kicad_pcb files have corresponding trace files.
+     * Scans project root directory and converts missing trace files.
+     * @param aProjectDir The project root directory path
+     */
+    void EnsureTraceFilesExist( const wxString& aProjectDir );
+
 public:
     KICAD_MANAGER_FRAME*    m_Parent;
     PROJECT_TREE*           m_TreeProject;
@@ -322,6 +331,8 @@ private:
     wxString                m_gitCurrentBranchName;
     wxTimer                 m_gitSyncTimer;
     wxTimer                 m_gitStatusTimer;
+    std::future<void>       m_gitSyncTask;
+    std::future<void>       m_gitStatusIconTask;
 
     std::mutex                                       m_gitTreeCacheMutex;
     std::unordered_map<wxString, wxTreeItemId>       m_gitTreeCache;

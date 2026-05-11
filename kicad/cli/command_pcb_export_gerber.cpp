@@ -21,16 +21,14 @@
 #include "command_pcb_export_gerber.h"
 #include <cli/exit_codes.h>
 #include "jobs/job_export_pcb_gerber.h"
-#include <kiface_base.h>
 #include <wx/crt.h>
 
 #include <macros.h>
-#include <locale_io.h>
 #include <string_utils.h>
 
 
-CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aName, bool aOutputIsDir ) :
-        PCB_EXPORT_BASE_COMMAND( aName, false, aOutputIsDir )
+CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aName, IO_TYPE aOutputType ) :
+        PCB_EXPORT_BASE_COMMAND( aName, IO_TYPE::FILE, aOutputType )
 {
     addLayerArg();
     addCommonLayersArg();
@@ -98,19 +96,11 @@ CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND( const std::string& aN
             .help( UTF8STDSTR( _( "Use KiCad Gerber file extension" ) ) )
             .flag();
 
-    m_argParser.add_argument( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT )
-            .help( UTF8STDSTR( _( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_DESC ) ) )
-            .flag();
-
     m_argParser.add_argument( ARG_CHECK_ZONES )
             .help( UTF8STDSTR( _( ARG_CHECK_ZONES_DESC ) ) )
             .flag();
-}
 
-
-CLI::PCB_EXPORT_GERBER_COMMAND::PCB_EXPORT_GERBER_COMMAND() :
-        PCB_EXPORT_GERBER_COMMAND( "gerber" )
-{
+    addVariantsArg();
 }
 
 
@@ -120,10 +110,15 @@ int CLI::PCB_EXPORT_GERBER_COMMAND::populateJob( JOB_EXPORT_PCB_GERBER* aJob )
     aJob->SetConfiguredOutputPath( m_argOutput );
     aJob->m_drawingSheet = m_argDrawingSheet;
     aJob->m_sketchPadsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_PADS_ON_FAB_LAYERS );
+    if( aJob->m_sketchPadsOnFabLayers )
+        aJob->m_plotPadNumbers = true;
     aJob->m_hideDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_HIDE_DNP_FPS_ON_FAB_LAYERS );
     aJob->m_sketchDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_DNP_FPS_ON_FAB_LAYERS );
     aJob->m_crossoutDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_CROSSOUT_DNP_FPS_ON_FAB_LAYERS );
     aJob->SetVarOverrides( m_argDefineVars );
+
+    if( !m_argVariantNames.empty() )
+        aJob->m_variant = m_argVariantNames.front();
 
     aJob->m_plotFootprintValues = !m_argParser.get<bool>( ARG_EXCLUDE_VALUE );
     aJob->m_plotRefDes = !m_argParser.get<bool>( ARG_EXCLUDE_REFDES );
@@ -140,9 +135,6 @@ int CLI::PCB_EXPORT_GERBER_COMMAND::populateJob( JOB_EXPORT_PCB_GERBER* aJob )
     aJob->m_argLayers = From_UTF8( m_argParser.get<std::string>( ARG_LAYERS ).c_str() );
     aJob->m_argCommonLayers = From_UTF8( m_argParser.get<std::string>( ARG_COMMON_LAYERS ).c_str() );
 
-    if( m_argParser.get<bool>( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT ) )
-        wxFprintf( stdout, DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_WARNING );
-
     if( !wxFile::Exists( aJob->m_filename ) )
     {
         wxFprintf( stderr, _( "Board file does not exist or is not accessible\n" ) );
@@ -156,21 +148,4 @@ int CLI::PCB_EXPORT_GERBER_COMMAND::populateJob( JOB_EXPORT_PCB_GERBER* aJob )
     }
 
     return EXIT_CODES::OK;
-}
-
-
-int CLI::PCB_EXPORT_GERBER_COMMAND::doPerform( KIWAY& aKiway )
-{
-    wxFprintf( stdout, wxT( "\033[33;1m%s\033[0m\n" ),
-               _( "This command is deprecated as of KiCad 9.0, please use \"gerbers\" instead\n" ) );
-
-    std::unique_ptr<JOB_EXPORT_PCB_GERBER> gerberJob( new JOB_EXPORT_PCB_GERBER() );
-
-    int exitCode = populateJob( gerberJob.get() );
-
-    if( exitCode != EXIT_CODES::OK )
-        return exitCode;
-
-    LOCALE_IO dummy;
-    return aKiway.ProcessJob( KIWAY::FACE_PCB, gerberJob.get() );
 }

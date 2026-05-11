@@ -126,7 +126,6 @@ private:
 
     struct MDRAG_LINE
     {
-
         ITEM* leaderItem = nullptr;
         std::vector<PNS::ITEM*> originalLeaders;
 
@@ -148,10 +147,10 @@ private:
         bool clipDone      = false;
         int  offset        = 0; // distance between this line and the primary one (only applicable if the respective end segments are parallel)
         SEG midSeg;
-//        VECTOR2I dragAnchor;
         int dragDist          = 0;
         int cornerDistance    = 0;
         int leaderSegDistance = 0;
+        int mdragIndex        = -1; // index in m_mdragLines, used for identity tracking
     };
 
     bool multidragMarkObstacles ( std::vector<MDRAG_LINE>& aCompletedLines );
@@ -162,9 +161,7 @@ private:
     bool tryWalkaround( NODE* aNode, LINE& aOrig, LINE& aWalk );
 
 
-    int                     m_mode;
     bool                    m_dragStatus;
-    PNS_MODE                m_currentMode;
     DRAG_MODE               m_dragMode;
     std::vector<MDRAG_LINE> m_mdragLines;
     std::vector<PNS::ITEM*> m_leaderSegments;

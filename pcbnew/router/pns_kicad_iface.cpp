@@ -22,6 +22,7 @@
 #include <board.h>
 #include <board_connected_item.h>
 #include <board_design_settings.h>
+#include <project/net_settings.h>
 #include <netinfo.h>
 #include <footprint.h>
 #include <layer_range.h>
@@ -35,12 +36,14 @@
 #include <pcb_barcode.h>
 #include <pcb_table.h>
 #include <pcb_tablecell.h>
+#include <pcb_dimension.h>
 #include <board_commit.h>
 #include <eda_group.h>
 #include <layer_ids.h>
 #include <optional>
 #include <kidialog.h>
 #include <tools/pcb_tool_base.h>
+#include <tools/pcb_selection_tool.h>
 #include <tool/tool_manager.h>
 #include <settings/app_settings.h>
 
@@ -60,6 +63,7 @@
 #include <wx/log.h>
 
 #include <memory>
+#include <unordered_set>
 
 #include <advanced_config.h>
 #include <pcbnew_settings.h>
@@ -80,6 +84,8 @@
 
 typedef VECTOR2I::extended_type ecoord;
 
+// Keep this odd so that it can never match a "real" pointer
+#define ENTERED_GROUP_MAGIC_NUMBER ( (BOARD*)777 )
 
 struct CLEARANCE_CACHE_KEY
 {
@@ -87,7 +93,14 @@ struct CLEARANCE_CACHE_KEY
     const PNS::ITEM*  B;
     bool              Flag;
 
-    bool operator==(const CLEARANCE_CACHE_KEY& other) const
+    CLEARANCE_CACHE_KEY( const PNS::ITEM* aA, const PNS::ITEM* aB, bool aFlag ) :
+            A( aA < aB ? aA : aB ),
+            B( aA < aB ? aB : aA ),
+            Flag( aFlag )
+    {
+    }
+
+    bool operator==( const CLEARANCE_CACHE_KEY& other ) const
     {
         return A == other.A && B == other.B && Flag == other.Flag;
     }
@@ -101,7 +114,40 @@ namespace std
         std::size_t operator()( const CLEARANCE_CACHE_KEY& k ) const
         {
             size_t retval = 0xBADC0FFEE0DDF00D;
-            hash_combine( retval, hash<const void*>()( k.A ), hash<const void*>()( k.B ), hash<int>()( k.Flag ) );
+            hash_combine( retval, hash<const void*>()( k.A ), hash<const void*>()( k.B ),
+                          hash<int>()( k.Flag ) );
+            return retval;
+        }
+    };
+}
+
+
+struct HULL_CACHE_KEY
+{
+    const PNS::ITEM* item;
+    int              clearance;
+    int              walkaroundThickness;
+    int              layer;
+
+    bool operator==( const HULL_CACHE_KEY& other ) const
+    {
+        return item == other.item
+            && clearance == other.clearance
+            && walkaroundThickness == other.walkaroundThickness
+            && layer == other.layer;
+    }
+};
+
+namespace std
+{
+    template <>
+    struct hash<HULL_CACHE_KEY>
+    {
+        std::size_t operator()( const HULL_CACHE_KEY& k ) const
+        {
+            size_t retval = 0xBADC0FFEE0DDF00D;
+            hash_combine( retval, hash<const void*>()( k.item ), hash<int>()( k.clearance ),
+                          hash<int>()( k.walkaroundThickness ), hash<int>()( k.layer ) );
             return retval;
         }
     };
@@ -148,6 +194,9 @@ public:
     void ClearCaches() override;
     void ClearTemporaryCaches() override;
 
+    const SHAPE_LINE_CHAIN& HullCache( const PNS::ITEM* aItem, int aClearance,
+                                       int aWalkaroundThickness, int aLayer ) override;
+
 private:
     BOARD_ITEM* getBoardItem( const PNS::ITEM* aItem, PCB_LAYER_ID aBoardLayer, int aIdx = 0 );
 
@@ -161,6 +210,7 @@ private:
 
     std::unordered_map<CLEARANCE_CACHE_KEY, int> m_clearanceCache;
     std::unordered_map<CLEARANCE_CACHE_KEY, int> m_tempClearanceCache;
+    std::unordered_map<HULL_CACHE_KEY, SHAPE_LINE_CHAIN> m_hullCache;
 };
 
 
@@ -414,15 +464,186 @@ bool PNS_PCBNEW_RULE_RESOLVER::QueryConstraint( PNS::CONSTRAINT_TYPE aType,
     PCB_LAYER_ID   board_layer = m_routerIface->GetBoardLayerFromPNSLayer( aPNSLayer );
     DRC_CONSTRAINT hostConstraint;
 
-    // A track being routed may not have a BOARD_ITEM associated yet.
-    if( aItemA && !parentA )
-        parentA = getBoardItem( aItemA, board_layer, 0 );
+    // For clearance-type constraints, pick the smaller (more permissive) value.
+    // Returns true if we found a zero/negative clearance (can't get more permissive).
+    auto pickSmallerConstraint = []( DRC_CONSTRAINT& aBest, const DRC_CONSTRAINT& aCandidate ) -> bool
+    {
+        if( aCandidate.IsNull() )
+            return false;
 
-    if( aItemB && !parentB )
-        parentB = getBoardItem( aItemB, board_layer, 1 );
+        if( aBest.IsNull() )
+        {
+            aBest = aCandidate;
+        }
+        else if( aCandidate.m_Value.HasMin() && aBest.m_Value.HasMin()
+                 && aCandidate.m_Value.Min() < aBest.m_Value.Min() )
+        {
+            aBest = aCandidate;
+        }
 
-    if( parentA )
-        hostConstraint = drcEngine->EvalRules( hostType, parentA, parentB, board_layer );
+        return aBest.m_Value.HasMin() && aBest.m_Value.Min() <= 0;
+    };
+
+    // Check for multi-segment LINEs without BoardItems. These need segment-by-segment
+    // evaluation because custom DRC rules may have geometry-dependent conditions (like
+    // intersectsCourtyard) that require evaluating actual segment positions.
+    auto isMultiSegmentLine = []( const PNS::ITEM* aItem, BOARD_ITEM* aParent ) -> bool
+    {
+        if( !aItem || aParent || aItem->Kind() != PNS::ITEM::LINE_T )
+            return false;
+
+        const auto* line = static_cast<const PNS::LINE*>( aItem );
+        return line->CLine().SegmentCount() > 1;
+    };
+
+    bool lineANeedsSegmentEval = false;
+    bool lineBNeedsSegmentEval = false;
+
+    if( drcEngine->HasGeometryDependentRules() )
+    {
+        lineANeedsSegmentEval = isMultiSegmentLine( aItemA, parentA );
+        lineBNeedsSegmentEval = isMultiSegmentLine( aItemB, parentB );
+    }
+
+    // Evaluate segments of a multi-segment LINE against a single opposing item.
+    auto evaluateLineSegments = [&]( const PNS::ITEM* aLineItem, BOARD_ITEM* aOpposingItem,
+                                     bool aLineIsFirst, int aIdx ) -> DRC_CONSTRAINT
+    {
+        DRC_CONSTRAINT bestConstraint;
+        const auto* line = static_cast<const PNS::LINE*>( aLineItem );
+        const SHAPE_LINE_CHAIN& chain = line->CLine();
+
+        PCB_TRACK& dummyTrack = m_dummyTracks[aIdx];
+        dummyTrack.SetLayer( board_layer );
+        dummyTrack.SetNet( static_cast<NETINFO_ITEM*>( aLineItem->Net() ) );
+        dummyTrack.SetWidth( line->Width() );
+
+        for( int i = 0; i < chain.SegmentCount(); i++ )
+        {
+            dummyTrack.SetStart( chain.CPoint( i ) );
+            dummyTrack.SetEnd( chain.CPoint( i + 1 ) );
+
+            DRC_CONSTRAINT segConstraint = aLineIsFirst
+                ? drcEngine->EvalRules( hostType, &dummyTrack, aOpposingItem, board_layer )
+                : drcEngine->EvalRules( hostType, aOpposingItem, &dummyTrack, board_layer );
+
+            if( pickSmallerConstraint( bestConstraint, segConstraint ) )
+                break;
+        }
+
+        return bestConstraint;
+    };
+
+    // Check if two multi-segment lines have overlapping bboxes (worth doing segment evaluation)
+    auto linesBBoxOverlap = [&]() -> bool
+    {
+        if( !lineANeedsSegmentEval || !lineBNeedsSegmentEval )
+            return true;
+
+        const auto* lineA = static_cast<const PNS::LINE*>( aItemA );
+        const auto* lineB = static_cast<const PNS::LINE*>( aItemB );
+        const int proximityThreshold = std::max( lineA->Width(), lineB->Width() ) * 2;
+
+        BOX2I bboxA = lineA->CLine().BBox();
+        bboxA.Inflate( proximityThreshold );
+
+        return bboxA.Intersects( lineB->CLine().BBox() );
+    };
+
+    // Handle multi-segment lines with segment-by-segment evaluation.
+    if( ( lineANeedsSegmentEval || lineBNeedsSegmentEval ) && linesBBoxOverlap() )
+    {
+        // Get dummy items for non-multi-segment items that need them
+        if( aItemA && !parentA && !lineANeedsSegmentEval )
+            parentA = getBoardItem( aItemA, board_layer, 0 );
+
+        if( aItemB && !parentB && !lineBNeedsSegmentEval )
+            parentB = getBoardItem( aItemB, board_layer, 1 );
+
+        if( lineANeedsSegmentEval && lineBNeedsSegmentEval )
+        {
+            // Both items are multi-segment lines. Evaluate segment pairs, skipping pairs
+            // that are far apart since geometry-dependent rules won't trigger for them.
+            const auto* lineA = static_cast<const PNS::LINE*>( aItemA );
+            const auto* lineB = static_cast<const PNS::LINE*>( aItemB );
+            const SHAPE_LINE_CHAIN& chainA = lineA->CLine();
+            const SHAPE_LINE_CHAIN& chainB = lineB->CLine();
+
+            const int proximityThreshold = std::max( lineA->Width(), lineB->Width() ) * 2;
+
+            PCB_TRACK& dummyA = m_dummyTracks[0];
+            dummyA.SetLayer( board_layer );
+            dummyA.SetNet( static_cast<NETINFO_ITEM*>( aItemA->Net() ) );
+            dummyA.SetWidth( lineA->Width() );
+
+            PCB_TRACK& dummyB = m_dummyTracks[1];
+            dummyB.SetLayer( board_layer );
+            dummyB.SetNet( static_cast<NETINFO_ITEM*>( aItemB->Net() ) );
+            dummyB.SetWidth( lineB->Width() );
+
+            bool  done = false;
+            BOX2I bboxA, bboxB;
+
+            for( int i = 0; i < chainA.SegmentCount() && !done; i++ )
+            {
+                const VECTOR2I& ptA1 = chainA.CPoint( i );
+                const VECTOR2I& ptA2 = chainA.CPoint( i + 1 );
+
+                bboxA.SetOrigin( ptA1 );
+                bboxA.SetEnd( ptA2 );
+                bboxA.Normalize();
+                bboxA.Inflate( proximityThreshold );
+
+                dummyA.SetStart( ptA1 );
+                dummyA.SetEnd( ptA2 );
+
+                for( int j = 0; j < chainB.SegmentCount(); j++ )
+                {
+                    const VECTOR2I& ptB1 = chainB.CPoint( j );
+                    const VECTOR2I& ptB2 = chainB.CPoint( j + 1 );
+
+                    bboxB.SetOrigin( ptB1 );
+                    bboxB.SetEnd( ptB2 );
+                    bboxB.Normalize();
+
+                    if( !bboxA.Intersects( bboxB ) )
+                        continue;
+
+                    dummyB.SetStart( ptB1 );
+                    dummyB.SetEnd( ptB2 );
+
+                    DRC_CONSTRAINT segConstraint =
+                            drcEngine->EvalRules( hostType, &dummyA, &dummyB, board_layer );
+
+                    if( pickSmallerConstraint( hostConstraint, segConstraint ) )
+                    {
+                        done = true;
+                        break;
+                    }
+                }
+            }
+        }
+        else if( lineANeedsSegmentEval )
+        {
+            hostConstraint = evaluateLineSegments( aItemA, parentB, true, 0 );
+        }
+        else
+        {
+            hostConstraint = evaluateLineSegments( aItemB, parentA, false, 1 );
+        }
+    }
+    else
+    {
+        // Standard path: no multi-segment lines (or lines too far apart), use anchor-based dummies
+        if( aItemA && !parentA )
+            parentA = getBoardItem( aItemA, board_layer, 0 );
+
+        if( aItemB && !parentB )
+            parentB = getBoardItem( aItemB, board_layer, 1 );
+
+        if( parentA )
+            hostConstraint = drcEngine->EvalRules( hostType, parentA, parentB, board_layer );
+    }
 
     if( hostConstraint.IsNull() )
         return false;
@@ -465,28 +686,26 @@ bool PNS_PCBNEW_RULE_RESOLVER::QueryConstraint( PNS::CONSTRAINT_TYPE aType,
 
 void PNS_PCBNEW_RULE_RESOLVER::ClearCacheForItems( std::vector<const PNS::ITEM*>& aItems )
 {
-    int n_pruned = 0;
-    std::set<const PNS::ITEM*> remainingItems( aItems.begin(), aItems.end() );
+    if( aItems.empty() )
+        return;
 
-/* We need to carefully check both A and B item pointers in the cache against dirty/invalidated
-   items in the set, as the clearance relation is commutative ( CL[a,b] == CL[b,a] ). The code
-   below is a bit ugly, but works in O(n*log(m)) and is run once or twice during ROUTER::Move() call
-   - so I hope it still gets better performance than no cache at all */
+    std::unordered_set<const PNS::ITEM*> dirtyItems( aItems.begin(), aItems.end() );
+
     for( auto it = m_clearanceCache.begin(); it != m_clearanceCache.end(); )
     {
-        bool dirty = remainingItems.find( it->first.A ) != remainingItems.end();
-        dirty |= remainingItems.find( it->first.B) != remainingItems.end();
-
-        if( dirty )
-        {
+        if( dirtyItems.contains( it->first.A ) || dirtyItems.contains( it->first.B ) )
             it = m_clearanceCache.erase( it );
-            n_pruned++;
-        } else
-            it++;
+        else
+            ++it;
     }
-#if 0
-    printf("ClearCache : n_pruned %d\n", n_pruned );
-#endif
+
+    for( auto it = m_hullCache.begin(); it != m_hullCache.end(); )
+    {
+        if( dirtyItems.contains( it->first.item ) )
+            it = m_hullCache.erase( it );
+        else
+            ++it;
+    }
 }
 
 
@@ -494,6 +713,7 @@ void PNS_PCBNEW_RULE_RESOLVER::ClearCaches()
 {
     m_clearanceCache.clear();
     m_tempClearanceCache.clear();
+    m_hullCache.clear();
 }
 
 
@@ -503,10 +723,29 @@ void PNS_PCBNEW_RULE_RESOLVER::ClearTemporaryCaches()
 }
 
 
+const SHAPE_LINE_CHAIN& PNS_PCBNEW_RULE_RESOLVER::HullCache( const PNS::ITEM* aItem,
+                                                             int aClearance,
+                                                             int aWalkaroundThickness,
+                                                             int aLayer )
+{
+    HULL_CACHE_KEY key = { aItem, aClearance, aWalkaroundThickness, aLayer };
+
+    auto it = m_hullCache.find( key );
+
+    if( it != m_hullCache.end() )
+        return it->second;
+
+    SHAPE_LINE_CHAIN hull = aItem->Hull( aClearance, aWalkaroundThickness, aLayer );
+    auto result = m_hullCache.emplace( key, std::move( hull ) );
+
+    return result.first->second;
+}
+
+
 int PNS_PCBNEW_RULE_RESOLVER::Clearance( const PNS::ITEM* aA, const PNS::ITEM* aB,
                                          bool aUseClearanceEpsilon )
 {
-    CLEARANCE_CACHE_KEY key = { aA, aB, aUseClearanceEpsilon };
+    CLEARANCE_CACHE_KEY key( aA, aB, aUseClearanceEpsilon );
 
     // Search cache (used for actual board items)
     auto it = m_clearanceCache.find( key );
@@ -608,7 +847,8 @@ int PNS_PCBNEW_RULE_RESOLVER::Clearance( const PNS::ITEM* aA, const PNS::ITEM* a
 }
 
 
-bool PNS_KICAD_IFACE_BASE::inheritTrackWidth( PNS::ITEM* aItem, int* aInheritedWidth )
+bool PNS_KICAD_IFACE_BASE::inheritTrackWidth( PNS::ITEM* aItem, int* aInheritedWidth,
+                                              const VECTOR2I& aStartPosition )
 {
     VECTOR2I p;
 
@@ -644,23 +884,81 @@ bool PNS_KICAD_IFACE_BASE::inheritTrackWidth( PNS::ITEM* aItem, int* aInheritedW
 
     assert( jt != nullptr );
 
-    int mval = INT_MAX;
-
     PNS::ITEM_SET linkedSegs( jt->CLinks() );
     linkedSegs.ExcludeItem( aItem ).FilterKinds( PNS::ITEM::SEGMENT_T | PNS::ITEM::ARC_T );
+
+    if( linkedSegs.Empty() )
+        return false;
+
+    // When a start position is provided, find the connected track whose far end is closest to
+    // the cursor. Since all tracks share the pad/via endpoint, the far-end direction is a proxy
+    // for which exit stub the user is pointing at.
+    if( aStartPosition != VECTOR2I() )
+    {
+        PNS::ITEM*  closestItem = nullptr;
+        SEG::ecoord minDist = VECTOR2I::ECOORD_MAX;
+
+        for( PNS::ITEM* item : linkedSegs.Items() )
+        {
+            if( item->Layer() != m_startLayer )
+                continue;
+
+            PNS::LINKED_ITEM* li = static_cast<PNS::LINKED_ITEM*>( item );
+
+            VECTOR2I anchor0 = li->Anchor( 0 );
+            VECTOR2I anchor1 = li->Anchor( 1 );
+
+            // The "other end" is the anchor farther from the pad/via center
+            VECTOR2I otherEnd = ( anchor0 - p ).SquaredEuclideanNorm() > ( anchor1 - p ).SquaredEuclideanNorm()
+                                ? anchor0
+                                : anchor1;
+
+            SEG::ecoord dist = ( otherEnd - aStartPosition ).SquaredEuclideanNorm();
+
+            if( dist < minDist )
+            {
+                minDist = dist;
+                closestItem = item;
+            }
+        }
+
+        if( closestItem )
+        {
+            int w = tryGetTrackWidth( closestItem );
+
+            if( w > 0 )
+            {
+                *aInheritedWidth = w;
+                return true;
+            }
+        }
+    }
+
+    // Fallback to minimum width when no start position provided or no valid exit stub found
+    int min_current_layer = INT_MAX;
+    int min_all_layers = INT_MAX;
 
     for( PNS::ITEM* item : linkedSegs.Items() )
     {
         int w = tryGetTrackWidth( item );
 
         if( w > 0 )
-            mval = std::min( w, mval );
+        {
+            min_all_layers = std::min( w, min_all_layers );
+
+            if( item->Layer() == m_startLayer )
+                min_current_layer = std::min( w, min_current_layer );
+        }
     }
 
-    if( mval == INT_MAX )
+    if( min_all_layers == INT_MAX )
         return false;
 
-    *aInheritedWidth = mval;
+    if( min_current_layer < INT_MAX )
+        *aInheritedWidth = min_current_layer;
+    else
+        *aInheritedWidth = min_all_layers;
+
     return true;
 }
 
@@ -715,7 +1013,7 @@ bool PNS_KICAD_IFACE_BASE::ImportSizes( PNS::SIZES_SETTINGS& aSizes, PNS::ITEM* 
 
     if( bds.m_UseConnectedTrackWidth && !bds.m_TempOverrideTrackWidth && aStartItem != nullptr )
     {
-        found = inheritTrackWidth( aStartItem, &trackWidth );
+        found = inheritTrackWidth( aStartItem, &trackWidth, startPosInt );
 
         if( found )
             aSizes.SetWidthSource( _( "existing track" ) );
@@ -798,7 +1096,7 @@ bool PNS_KICAD_IFACE_BASE::ImportSizes( PNS::SIZES_SETTINGS& aSizes, PNS::ITEM* 
 
     // First try to pick up diff pair width from starting track, if enabled
     if( bds.m_UseConnectedTrackWidth && aStartItem )
-        found = inheritTrackWidth( aStartItem, &diffPairWidth );
+        found = inheritTrackWidth( aStartItem, &diffPairWidth, startPosInt );
 
     // Next, pick up gap from netclass, and width also if we didn't get a starting width above
     if( bds.UseNetClassDiffPair() && aStartItem )
@@ -811,9 +1109,9 @@ bool PNS_KICAD_IFACE_BASE::ImportSizes( PNS::SIZES_SETTINGS& aSizes, PNS::ITEM* 
         dummyTrack.SetNet( static_cast<NETINFO_ITEM*>( aStartItem->Net() ) );
 
         PNS::SEGMENT coupledTrack;
-        dummyTrack.SetEnds( aStartItem->Anchor( 0 ), aStartItem->Anchor( 0 ) );
-        dummyTrack.SetLayer( m_startLayer );
-        dummyTrack.SetNet( static_cast<NETINFO_ITEM*>( coupledNet ) );
+        coupledTrack.SetEnds( aStartItem->Anchor( 0 ), aStartItem->Anchor( 0 ) );
+        coupledTrack.SetLayer( m_startLayer );
+        coupledTrack.SetNet( static_cast<NETINFO_ITEM*>( coupledNet ) );
 
         if( !found
             && m_ruleResolver->QueryConstraint( PNS::CONSTRAINT_TYPE::CT_WIDTH, &dummyTrack,
@@ -967,6 +1265,12 @@ public:
     ~PNS_PCBNEW_DEBUG_DECORATOR()
     {
         PNS_PCBNEW_DEBUG_DECORATOR::Clear();
+        
+        for ( PNS::ITEM* item : m_clonedItems )
+        {
+            delete item;
+        }
+
         delete m_items;
     }
 
@@ -988,8 +1292,7 @@ public:
         m_view->Add( m_items );
     }
 
-    void AddPoint( const VECTOR2I& aP, const KIGFX::COLOR4D& aColor, int aSize,
-                   const wxString& aName = wxT( "" ),
+    void AddPoint( const VECTOR2I& aP, const KIGFX::COLOR4D& aColor, int aSize, const wxString& aName = wxT( "" ),
                    const SRC_LOCATION_INFO& aSrcLoc = SRC_LOCATION_INFO() ) override
 
     {
@@ -1013,7 +1316,16 @@ public:
         if( !m_view || !aItem )
             return;
 
-        ROUTER_PREVIEW_ITEM* pitem = new ROUTER_PREVIEW_ITEM( aItem, m_iface, m_view );
+        PNS::ITEM* cloned = aItem->Clone();
+
+        if( auto line = dyn_cast<PNS::LINE*>( cloned ))
+        {
+            line->ClearLinks();
+        }
+
+        m_clonedItems.push_back( cloned );
+
+        ROUTER_PREVIEW_ITEM* pitem = new ROUTER_PREVIEW_ITEM( cloned, m_iface, m_view );
 
         pitem->SetColor( aColor.WithAlpha( 0.5 ) );
         pitem->SetWidth( aOverrideWidth );
@@ -1069,13 +1381,16 @@ public:
             if( m_view->GetGAL() )
                 m_depth = m_view->GetGAL()->GetMinDepth();
         }
+
+        for( PNS::ITEM* item : m_clonedItems )
+            delete item;
+
+        m_clonedItems.clear();
     }
 
-    virtual void Message( const wxString& msg,
-                          const SRC_LOCATION_INFO& aSrcLoc = SRC_LOCATION_INFO() ) override
-                          {
-                                printf("PNS: %s\n", msg.c_str().AsChar() );
-                          }
+    virtual void Message( const wxString& msg, const SRC_LOCATION_INFO& aSrcLoc = SRC_LOCATION_INFO() ) override
+    {
+    }
 
 private:
     double nextDepth()
@@ -1093,6 +1408,7 @@ private:
     PNS::ROUTER_IFACE* m_iface;
     KIGFX::VIEW* m_view;
     KIGFX::VIEW_GROUP* m_items;
+    std::vector<PNS::ITEM*> m_clonedItems;
 
     double m_depth;
 };
@@ -1179,79 +1495,87 @@ std::vector<std::unique_ptr<PNS::SOLID>> PNS_KICAD_IFACE_BASE::syncPad( PAD* aPa
     }
 
     auto makeSolidFromPadLayer =
-        [&]( PCB_LAYER_ID aLayer )
-        {
-            std::unique_ptr<PNS::SOLID> solid = std::make_unique<PNS::SOLID>();
-
-            if( aPad->GetAttribute() == PAD_ATTRIB::NPTH )
-                solid->SetRoutable( false );
-
-            if( aPad->Padstack().Mode() == PADSTACK::MODE::CUSTOM )
+            [&]( PCB_LAYER_ID aLayer )
             {
-                solid->SetLayer( GetPNSLayerFromBoardLayer( aLayer ) );
-            }
-            else if( aPad->Padstack().Mode() == PADSTACK::MODE::FRONT_INNER_BACK )
-            {
-                if( aLayer == F_Cu || aLayer == B_Cu )
+                // For FRONT_INNER_BACK mode, skip creating a SOLID for inner layers when there are
+                // no inner layers (2-layer board). Otherwise PNS_LAYER_RANGE(1, 0) would be swapped
+                // to (0, 1) and indexed on both F_Cu and B_Cu, causing incorrect collision checks.
+                if( aPad->Padstack().Mode() == PADSTACK::MODE::FRONT_INNER_BACK
+                    && aLayer != F_Cu && aLayer != B_Cu
+                    && aPad->BoardCopperLayerCount() <= 2 )
+                {
+                    return;
+                }
+
+                std::unique_ptr<PNS::SOLID> solid = std::make_unique<PNS::SOLID>();
+
+                if( aPad->GetAttribute() == PAD_ATTRIB::NPTH )
+                    solid->SetRoutable( false );
+
+                if( aPad->Padstack().Mode() == PADSTACK::MODE::CUSTOM )
+                {
                     solid->SetLayer( GetPNSLayerFromBoardLayer( aLayer ) );
+                }
+                else if( aPad->Padstack().Mode() == PADSTACK::MODE::FRONT_INNER_BACK )
+                {
+                    if( aLayer == F_Cu || aLayer == B_Cu )
+                        solid->SetLayer( GetPNSLayerFromBoardLayer( aLayer ) );
+                    else
+                        solid->SetLayers( PNS_LAYER_RANGE( 1, aPad->BoardCopperLayerCount() - 2 ) );
+                }
                 else
-                    solid->SetLayers( PNS_LAYER_RANGE( 1, aPad->BoardCopperLayerCount() - 2 ) );
-            }
-            else
-            {
-                solid->SetLayers( layers );
-            }
+                {
+                    solid->SetLayers( layers );
+                }
 
-            solid->SetNet( aPad->GetNet() );
-            solid->SetParent( aPad );
-            solid->SetPadToDie( aPad->GetPadToDieLength() );
-            solid->SetPadToDieDelay( aPad->GetPadToDieDelay() );
-            solid->SetOrientation( aPad->GetOrientation() );
+                solid->SetNet( aPad->GetNet() );
+                solid->SetParent( aPad );
+                solid->SetPadToDie( aPad->GetPadToDieLength() );
+                solid->SetPadToDieDelay( aPad->GetPadToDieDelay() );
+                solid->SetOrientation( aPad->GetOrientation() );
 
-            if( aPad->IsFreePad() )
-                solid->SetIsFreePad();
+                if( aPad->IsFreePad() )
+                    solid->SetIsFreePad();
 
-            VECTOR2I wx_c = aPad->ShapePos( aLayer );
-            VECTOR2I offset = aPad->GetOffset( aLayer );
+                VECTOR2I wx_c = aPad->ShapePos( aLayer );
+                VECTOR2I offset = aPad->GetOffset( aLayer );
 
-            VECTOR2I c( wx_c.x, wx_c.y );
+                VECTOR2I c( wx_c.x, wx_c.y );
 
-            RotatePoint( offset, aPad->GetOrientation() );
+                RotatePoint( offset, aPad->GetOrientation() );
 
-            solid->SetPos( VECTOR2I( c.x - offset.x, c.y - offset.y ) );
-            solid->SetOffset( VECTOR2I( offset.x, offset.y ) );
+                solid->SetPos( VECTOR2I( c.x - offset.x, c.y - offset.y ) );
+                solid->SetOffset( VECTOR2I( offset.x, offset.y ) );
 
-            if( aPad->GetDrillSize().x > 0 )
-            {
-                solid->SetHole( new PNS::HOLE( aPad->GetEffectiveHoleShape()->Clone() ) );
-                solid->Hole()->SetLayers( PNS_LAYER_RANGE( 0, aPad->BoardCopperLayerCount() - 1 ) );
-            }
+                if( aPad->GetDrillSize().x > 0 )
+                {
+                    solid->SetHole( new PNS::HOLE( aPad->GetEffectiveHoleShape()->Clone() ) );
+                    solid->Hole()->SetLayers( PNS_LAYER_RANGE( 0, aPad->BoardCopperLayerCount() - 1 ) );
+                }
 
-            // We generate a single SOLID for a pad, so we have to treat it as ALWAYS_FLASHED and
-            // then perform layer-specific flashing tests internally.
-            const std::shared_ptr<SHAPE>& shape =
-                    aPad->GetEffectiveShape( aLayer, FLASHING::ALWAYS_FLASHED );
+                // We generate a single SOLID for a pad, so we have to treat it as ALWAYS_FLASHED and
+                // then perform layer-specific flashing tests internally.
+                const std::shared_ptr<SHAPE>& shape = aPad->GetEffectiveShape( aLayer, FLASHING::ALWAYS_FLASHED );
 
-            if( shape->HasIndexableSubshapes() && shape->GetIndexableSubshapeCount() == 1 )
-            {
-                std::vector<const SHAPE*> subshapes;
-                shape->GetIndexableSubshapes( subshapes );
+                if( shape->HasIndexableSubshapes() && shape->GetIndexableSubshapeCount() == 1 )
+                {
+                    std::vector<const SHAPE*> subshapes;
+                    shape->GetIndexableSubshapes( subshapes );
 
-                solid->SetShape( subshapes[0]->Clone() );
-            }
-            // For anything that's not a single shape we use a polygon.  Multiple shapes have a tendency
-            // to confuse the hull generator. https://gitlab.com/kicad/code/kicad/-/issues/15553
-            else
-            {
-                const std::shared_ptr<SHAPE_POLY_SET>& poly =
-                        aPad->GetEffectivePolygon( aLayer, ERROR_OUTSIDE );
+                    solid->SetShape( subshapes[0]->Clone() );
+                }
+                // For anything that's not a single shape we use a polygon.  Multiple shapes have a tendency
+                // to confuse the hull generator. https://gitlab.com/kicad/code/kicad/-/issues/15553
+                else
+                {
+                    const std::shared_ptr<SHAPE_POLY_SET>& poly = aPad->GetEffectivePolygon( aLayer, ERROR_OUTSIDE );
 
-                if( poly->OutlineCount() )
-                    solid->SetShape( new SHAPE_SIMPLE( poly->Outline( 0 ) ) );
-            }
+                    if( poly->OutlineCount() )
+                        solid->SetShape( new SHAPE_SIMPLE( poly->Outline( 0 ) ) );
+                }
 
-            solids.emplace_back( std::move( solid ) );
-        };
+                solids.emplace_back( std::move( solid ) );
+            };
 
     aPad->Padstack().ForEachUniqueLayer( makeSolidFromPadLayer );
 
@@ -1261,8 +1585,7 @@ std::vector<std::unique_ptr<PNS::SOLID>> PNS_KICAD_IFACE_BASE::syncPad( PAD* aPa
 
 std::unique_ptr<PNS::SEGMENT> PNS_KICAD_IFACE_BASE::syncTrack( PCB_TRACK* aTrack )
 {
-    auto segment = std::make_unique<PNS::SEGMENT>( SEG( aTrack->GetStart(), aTrack->GetEnd() ),
-                                                   aTrack->GetNet() );
+    auto segment = std::make_unique<PNS::SEGMENT>( SEG( aTrack->GetStart(), aTrack->GetEnd() ), aTrack->GetNet() );
 
     segment->SetWidth( aTrack->GetWidth() );
     segment->SetLayer( GetPNSLayerFromBoardLayer( aTrack->GetLayer() ) );
@@ -1325,18 +1648,18 @@ std::unique_ptr<PNS::VIA> PNS_KICAD_IFACE_BASE::syncVia( PCB_VIA* aVia )
      */
 
     auto via = std::make_unique<PNS::VIA>( aVia->GetPosition(),
-                                   SetLayersFromPCBNew( aVia->TopLayer(), aVia->BottomLayer() ),
-                                   0,
-                                   aVia->GetDrillValue(),
-                                   aVia->GetNet(),
-                                   aVia->GetViaType() );
+                                           SetLayersFromPCBNew( aVia->TopLayer(), aVia->BottomLayer() ),
+                                           0,
+                                           aVia->GetDrillValue(),
+                                           aVia->GetNet(),
+                                           aVia->GetViaType() );
     via->SetUnconnectedLayerMode( aVia->Padstack().UnconnectedLayerMode() );
 
     auto syncDiameter =
-        [&]( PCB_LAYER_ID aLayer )
-        {
-            via->SetDiameter( GetPNSLayerFromBoardLayer( aLayer ), aVia->GetWidth( aLayer ) );
-        };
+            [&]( PCB_LAYER_ID aLayer )
+            {
+                via->SetDiameter( GetPNSLayerFromBoardLayer( aLayer ), aVia->GetWidth( aLayer ) );
+            };
 
     switch( aVia->Padstack().Mode() )
     {
@@ -1437,7 +1760,7 @@ bool PNS_KICAD_IFACE_BASE::syncZone( PNS::NODE* aWorld, ZONE* aZone, SHAPE_POLY_
         if( !layers[ layer ] )
             continue;
 
-        for( int polyId = 0; polyId < poly->TriangulatedPolyCount(); polyId++ )
+        for( unsigned int polyId = 0; polyId < poly->TriangulatedPolyCount(); polyId++ )
         {
             const SHAPE_POLY_SET::TRIANGULATED_POLYGON* tri = poly->TriangulatedPolygon( polyId );
 
@@ -1501,6 +1824,60 @@ bool PNS_KICAD_IFACE_BASE::syncTextItem( PNS::NODE* aWorld, BOARD_ITEM* aItem, P
     aWorld->Add( std::move( solid ) );
 
     return true;
+}
+
+
+bool PNS_KICAD_IFACE_BASE::syncDimension( PNS::NODE* aWorld, PCB_DIMENSION_BASE* aDimension )
+{
+    if( !IsKicadCopperLayer( aDimension->GetLayer() ) )
+        return false;
+
+    auto addPolysToWorld =
+            [&]( const SHAPE_POLY_SET& aPolys )
+            {
+                for( int ii = 0; ii < aPolys.OutlineCount(); ++ii )
+                {
+                    std::unique_ptr<PNS::SOLID> solid = std::make_unique<PNS::SOLID>();
+                    SHAPE_SIMPLE*               shape = new SHAPE_SIMPLE;
+
+                    solid->SetLayer( GetPNSLayerFromBoardLayer( aDimension->GetLayer() ) );
+                    solid->SetNet( nullptr );
+                    solid->SetParent( aDimension );
+                    solid->SetShape( shape );   // takes ownership
+                    solid->SetRoutable( false );
+
+                    for( const VECTOR2I& pt : aPolys.Outline( ii ).CPoints() )
+                        shape->Append( pt );
+
+                    aWorld->Add( std::move( solid ) );
+                }
+            };
+
+    SHAPE_POLY_SET cornerBuffer;
+
+    aDimension->TransformShapeToPolygon( cornerBuffer, aDimension->GetLayer(), 0,
+                                         aDimension->GetMaxError(), ERROR_OUTSIDE );
+
+    cornerBuffer.Simplify();
+
+    if( cornerBuffer.OutlineCount() )
+        addPolysToWorld( cornerBuffer );
+
+    // Footprints can have hidden dimensions
+    if( aDimension->IsVisible() && !aDimension->GetText().IsEmpty() )
+    {
+        SHAPE_POLY_SET textBuffer;
+
+        aDimension->PCB_TEXT::TransformShapeToPolygon( textBuffer, aDimension->GetLayer(), 0,
+                                                       aDimension->GetMaxError(), ERROR_OUTSIDE );
+
+        textBuffer.Simplify();
+
+        if( textBuffer.OutlineCount() )
+            addPolysToWorld( textBuffer );
+    }
+
+    return cornerBuffer.OutlineCount() || !aDimension->GetText().IsEmpty();
 }
 
 
@@ -1662,8 +2039,7 @@ bool PNS_KICAD_IFACE_BASE::IsFlashedOnLayer( const PNS::ITEM* aItem, int aLayer 
 }
 
 
-bool PNS_KICAD_IFACE_BASE::IsFlashedOnLayer( const PNS::ITEM* aItem,
-                                             const PNS_LAYER_RANGE& aLayer ) const
+bool PNS_KICAD_IFACE_BASE::IsFlashedOnLayer( const PNS::ITEM* aItem, const PNS_LAYER_RANGE& aLayer ) const
 {
     PNS_LAYER_RANGE test = aItem->Layers().Intersection( aLayer );
 
@@ -1783,13 +2159,12 @@ void PNS_KICAD_IFACE_BASE::SyncWorld( PNS::NODE *aWorld )
             syncBarcode( aWorld, static_cast<PCB_BARCODE*>( gitem ) );
             break;
 
-        case PCB_DIM_ALIGNED_T:         // ignore only if not on a copper layer
+        case PCB_DIM_ALIGNED_T:
         case PCB_DIM_CENTER_T:
         case PCB_DIM_RADIAL_T:
         case PCB_DIM_ORTHOGONAL_T:
         case PCB_DIM_LEADER_T:
-            if( gitem->IsOnCopperLayer() )
-                UNIMPLEMENTED_FOR( wxString::Format( wxT( "%s on copper layer" ), gitem->GetClass() ) );
+            syncDimension( aWorld, static_cast<PCB_DIMENSION_BASE*>( gitem ) );
             break;
 
         case PCB_REFERENCE_IMAGE_T:     // ignore
@@ -1805,7 +2180,7 @@ void PNS_KICAD_IFACE_BASE::SyncWorld( PNS::NODE *aWorld )
     SHAPE_POLY_SET  buffer;
     SHAPE_POLY_SET* boardOutline = nullptr;
 
-    if( m_board->GetBoardPolygonOutlines( buffer ) )
+    if( m_board->GetBoardPolygonOutlines( buffer, true ) )
         boardOutline = &buffer;
 
     for( ZONE* zone : m_board->Zones() )
@@ -1865,15 +2240,15 @@ void PNS_KICAD_IFACE_BASE::SyncWorld( PNS::NODE *aWorld )
                 syncBarcode( aWorld, static_cast<PCB_BARCODE*>( item ) );
                 break;
 
-            case PCB_DIM_ALIGNED_T:         // ignore only if not on a copper layer
+            case PCB_DIM_ALIGNED_T:
             case PCB_DIM_CENTER_T:
             case PCB_DIM_RADIAL_T:
             case PCB_DIM_ORTHOGONAL_T:
             case PCB_DIM_LEADER_T:
-            case PCB_REFERENCE_IMAGE_T:
-                if( item->IsOnCopperLayer() )
-                    UNIMPLEMENTED_FOR( wxString::Format( wxT( "%s on copper layer" ), item->GetClass() ) );
+                syncDimension( aWorld, static_cast<PCB_DIMENSION_BASE*>( item ) );
+                break;
 
+            case PCB_REFERENCE_IMAGE_T:     // ignore
                 break;
 
             default:
@@ -1959,7 +2334,7 @@ void PNS_KICAD_IFACE::DisplayItem( const PNS::ITEM* aItem, int aClearance, bool 
     {
         pitem->SetClearance( aClearance );
 
-        auto* settings = static_cast<PCBNEW_SETTINGS*>( m_tool->GetManager()->GetSettings() );
+        PCBNEW_SETTINGS* settings = static_cast<PCBNEW_SETTINGS*>( m_tool->GetManager()->GetSettings() );
 
         switch( settings->m_Display.m_TrackClearance )
         {
@@ -2176,10 +2551,8 @@ void PNS_KICAD_IFACE::modifyBoardItem( PNS::ITEM* aItem )
 
         if( std::optional<PNS_LAYER_RANGE> secondaryLayers = via->SecondaryHoleLayers() )
         {
-            via_board->SetSecondaryDrillStartLayer(
-                    GetBoardLayerFromPNSLayer( secondaryLayers->Start() ) );
-            via_board->SetSecondaryDrillEndLayer(
-                    GetBoardLayerFromPNSLayer( secondaryLayers->End() ) );
+            via_board->SetSecondaryDrillStartLayer( GetBoardLayerFromPNSLayer( secondaryLayers->Start() ) );
+            via_board->SetSecondaryDrillEndLayer( GetBoardLayerFromPNSLayer( secondaryLayers->End() ) );
         }
         else
         {
@@ -2301,10 +2674,8 @@ BOARD_CONNECTED_ITEM* PNS_KICAD_IFACE::createBoardItem( PNS::ITEM* aItem )
 
         if( std::optional<PNS_LAYER_RANGE> secondaryLayers = via->SecondaryHoleLayers() )
         {
-            via_board->SetSecondaryDrillStartLayer(
-                    GetBoardLayerFromPNSLayer( secondaryLayers->Start() ) );
-            via_board->SetSecondaryDrillEndLayer(
-                    GetBoardLayerFromPNSLayer( secondaryLayers->End() ) );
+            via_board->SetSecondaryDrillStartLayer( GetBoardLayerFromPNSLayer( secondaryLayers->Start() ) );
+            via_board->SetSecondaryDrillEndLayer( GetBoardLayerFromPNSLayer( secondaryLayers->End() ) );
         }
         else
         {
@@ -2346,10 +2717,18 @@ BOARD_CONNECTED_ITEM* PNS_KICAD_IFACE::createBoardItem( PNS::ITEM* aItem )
 
     if( newBoardItem )
     {
+        if( aItem->IsLocked() )
+            newBoardItem->SetLocked( true );
+
         if( BOARD_ITEM* src = aItem->GetSourceItem() )
         {
             if( m_itemGroups.contains( src ) )
                 m_replacementMap[src].push_back( newBoardItem );
+        }
+        else
+        {
+            // This is a new item, which goes in the entered group (if any)
+            m_replacementMap[ENTERED_GROUP_MAGIC_NUMBER].push_back( newBoardItem );
         }
     }
 
@@ -2373,6 +2752,7 @@ void PNS_KICAD_IFACE::AddItem( PNS::ITEM* aItem )
 
 void PNS_KICAD_IFACE::Commit()
 {
+    PCB_SELECTION_TOOL*  selTool = m_tool->GetManager()->GetTool<PCB_SELECTION_TOOL>();
     std::set<FOOTPRINT*> processedFootprints;
 
     EraseView();
@@ -2396,9 +2776,15 @@ void PNS_KICAD_IFACE::Commit()
 
     for( const auto& [ src, items ] : m_replacementMap )
     {
-        if( auto it = m_itemGroups.find( src ); it != m_itemGroups.end() )
+        EDA_GROUP* group = nullptr;
+
+        if( src == ENTERED_GROUP_MAGIC_NUMBER )
+            group = selTool ? selTool->GetEnteredGroup() : nullptr;
+        else if( auto it = m_itemGroups.find( src ); it != m_itemGroups.end() )
+            group = it->second;
+
+        if( group )
         {
-            EDA_GROUP* group = it->second;
             m_commit->Modify( group->AsEdaItem(), nullptr, RECURSE_MODE::NO_RECURSE );
 
             for( BOARD_ITEM* bi : items )
@@ -2409,7 +2795,7 @@ void PNS_KICAD_IFACE::Commit()
     m_itemGroups.clear();
     m_replacementMap.clear();
 
-    m_commit->Push( _( "Routing" ), m_commitFlags );
+    m_commit->Push( _( "Routing" ), m_commitFlags | SKIP_ENTERED_GROUP );
     m_commit = std::make_unique<BOARD_COMMIT>( m_tool );
 }
 
@@ -2494,7 +2880,7 @@ void PNS_KICAD_IFACE::SetHostTool( PCB_TOOL_BASE* aTool )
 
 PCB_LAYER_ID PNS_KICAD_IFACE_BASE::GetBoardLayerFromPNSLayer( int aLayer ) const
 {
-    if( aLayer < 0 )
+    if( aLayer < 0 || aLayer >= m_board->GetCopperLayerCount() )
         return PCB_LAYER_ID::UNDEFINED_LAYER;
 
     if( aLayer == 0 )
@@ -2530,8 +2916,7 @@ void PNS_KICAD_IFACE_BASE::SetStartLayerFromPCBNew( PCB_LAYER_ID aLayer )
 
 PNS_LAYER_RANGE PNS_KICAD_IFACE_BASE::SetLayersFromPCBNew( PCB_LAYER_ID aStartLayer, PCB_LAYER_ID aEndLayer )
 {
-    return PNS_LAYER_RANGE( GetPNSLayerFromBoardLayer( aStartLayer ),
-                             GetPNSLayerFromBoardLayer( aEndLayer ) );
+    return PNS_LAYER_RANGE( GetPNSLayerFromBoardLayer( aStartLayer ), GetPNSLayerFromBoardLayer( aEndLayer ) );
 }
 
 
@@ -2550,7 +2935,10 @@ long long int PNS_KICAD_IFACE_BASE::CalculateRoutedPathLength( const PNS::ITEM_S
         endPad = static_cast<PAD*>( aEndPad->Parent() );
 
     constexpr PATH_OPTIMISATIONS opts = {
-        .OptimiseViaLayers = false, .MergeTracks = false, .OptimiseTracesInPads = false, .InferViaInPad = true
+        .OptimiseViaLayers = false,
+        .MergeTracks = false,
+        .OptimiseTracesInPads = false,
+        .InferViaInPad = true
     };
     const BOARD* board = GetBoard();
     return board->GetLengthCalculation()->CalculateLength( lengthItems, opts, startPad, endPad );
@@ -2572,7 +2960,10 @@ int64_t PNS_KICAD_IFACE_BASE::CalculateRoutedPathDelay( const PNS::ITEM_SET& aLi
         endPad = static_cast<PAD*>( aEndPad->Parent() );
 
     constexpr PATH_OPTIMISATIONS opts = {
-        .OptimiseViaLayers = false, .MergeTracks = false, .OptimiseTracesInPads = false, .InferViaInPad = true
+        .OptimiseViaLayers = false,
+        .MergeTracks = false,
+        .OptimiseTracesInPads = false,
+        .InferViaInPad = true
     };
     const BOARD* board = GetBoard();
     return board->GetLengthCalculation()->CalculateDelay( lengthItems, opts, startPad, endPad );

@@ -21,6 +21,7 @@
 
 #include <base_units.h>
 #include <optional>
+#include <board.h>
 #include <board_stackup_manager/stackup_predefined_prms.h>
 #include <build_version.h>
 #include <callback_gal.h>
@@ -992,11 +993,9 @@ void ODB_LAYER_ENTITY::InitAuxilliaryData()
         }
 
         wxString dLayerName;
-        bool     drill_value = false;
 
         if( std::get<2>( layer_pair ) != PCB_LAYER_ID::UNDEFINED_LAYER )
         {
-            drill_value = true;
             dLayerName = wxString::Format( "%s_%s-%s", featureName,
                                            m_board->GetLayerName( std::get<1>( layer_pair ) ),
                                            m_board->GetLayerName( std::get<2>( layer_pair ) ) );
@@ -1086,6 +1085,87 @@ void ODB_LAYER_ENTITY::GenFeatures( ODB_TREE_WRITER& writer )
 void ODB_LAYER_ENTITY::GenAttrList( ODB_TREE_WRITER& writer )
 {
     auto fileproxy = writer.CreateFileProxy( "attrlist" );
+
+    std::ostream& ost = fileproxy.GetStream();
+
+    BOARD_DESIGN_SETTINGS& dsnSettings = m_board->GetDesignSettings();
+    BOARD_STACKUP&         stackup = dsnSettings.GetStackupDescriptor();
+
+    BOARD_STACKUP_ITEM* stackupItem = nullptr;
+
+    if( m_layerID != PCB_LAYER_ID::UNDEFINED_LAYER )
+    {
+        for( BOARD_STACKUP_ITEM* item : stackup.GetList() )
+        {
+            if( item->GetBrdLayerId() == m_layerID )
+            {
+                stackupItem = item;
+                break;
+            }
+        }
+    }
+    else
+    {
+        for( BOARD_STACKUP_ITEM* item : stackup.GetList() )
+        {
+            if( item->GetType() == BS_ITEM_TYPE_DIELECTRIC )
+            {
+                wxString dielectricName = wxString::Format( "DIELECTRIC_%d",
+                                                            item->GetDielectricLayerId() );
+
+                if( ODB::GenLegalEntityName( dielectricName ) == m_matrixLayerName )
+                {
+                    stackupItem = item;
+                    break;
+                }
+            }
+        }
+    }
+
+    if( stackupItem )
+    {
+        int thickness = stackupItem->GetThickness();
+
+        if( thickness > 0 )
+        {
+            double thicknessOut = PCB_IO_ODBPP::m_scale * thickness;
+            ost << ".layer_dielectric=" << ODB::Double2String( thicknessOut ) << std::endl;
+        }
+
+        if( stackupItem->GetType() == BS_ITEM_TYPE_COPPER )
+        {
+            double copperThicknessMM = static_cast<double>( thickness ) / pcbIUScale.mmToIU( 1.0 );
+            double thicknessOz = copperThicknessMM / 0.035;
+            ost << ".copper_weight=" << ODB::Double2String( thicknessOz ) << std::endl;
+        }
+
+        if( stackupItem->HasEpsilonRValue() )
+        {
+            double epsilonR = stackupItem->GetEpsilonR();
+
+            if( epsilonR > 0.0 )
+            {
+                ost << ".dielectric_constant=" << ODB::Double2String( epsilonR ) << std::endl;
+            }
+        }
+
+        if( stackupItem->HasLossTangentValue() )
+        {
+            double lossTangent = stackupItem->GetLossTangent();
+
+            if( lossTangent > 0.0 )
+            {
+                ost << ".loss_tangent=" << ODB::Double2String( lossTangent ) << std::endl;
+            }
+        }
+
+        wxString material = stackupItem->GetMaterial();
+
+        if( !material.IsEmpty() )
+        {
+            ost << ".material=" << ODB::GenLegalEntityName( material ).ToStdString() << std::endl;
+        }
+    }
 }
 
 
@@ -1143,7 +1223,7 @@ void ODB_STEP_ENTITY::InitEdaData()
 
         ODB_COMPONENT& comp = iter->second->InitComponentData( fp, eda_pkg );
 
-        for( int i = 0; i < fp->Pads().size(); ++i )
+        for( int i = 0; i < (int) fp->Pads().size(); ++i )
         {
             PAD*  pad = fp->Pads()[i];
             auto& eda_net = m_edaData.GetNet( pad->GetNetCode() );
@@ -1236,7 +1316,7 @@ void ODB_STEP_ENTITY::GenerateProfileFile( ODB_TREE_WRITER& writer )
 
     SHAPE_POLY_SET board_outline;
 
-    if( !m_board->GetBoardPolygonOutlines( board_outline ) )
+    if( !m_board->GetBoardPolygonOutlines( board_outline, true ) )
     {
         wxLogError( "Failed to get board outline" );
     }
@@ -1324,8 +1404,7 @@ bool ODB_STEP_ENTITY::CreateDirectoryTree( ODB_TREE_WRITER& writer )
 
 void ODB_STEP_ENTITY::MakeLayerEntity()
 {
-    LSET                layers = m_board->GetEnabledLayers();
-    const NETINFO_LIST& nets = m_board->GetNetInfo();
+    LSET layers = m_board->GetEnabledLayers();
 
     // To avoid the overhead of repeatedly cycling through the layers and nets,
     // we pre-sort the board items into a map of layer -> net -> items

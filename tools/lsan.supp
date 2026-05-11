@@ -1,0 +1,2 @@
+# These are instances of LEAK_AT_EXIT, which are leaked on purpose for speedy exit
+leak:*intentional_leak

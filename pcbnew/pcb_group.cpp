@@ -41,6 +41,8 @@
 #include <google/protobuf/any.pb.h>
 
 #include <wx/debug.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 PCB_GROUP::PCB_GROUP( BOARD_ITEM* aParent ) :
         BOARD_ITEM( aParent, PCB_GROUP_T )
@@ -236,6 +238,25 @@ void PCB_GROUP::swapData( BOARD_ITEM* aImage )
     PCB_GROUP* image = static_cast<PCB_GROUP*>( aImage );
 
     std::swap( *this, *image );
+
+    // A group doesn't own its children (they're owned by the board), so undo doesn't do a
+    // deep clone when making an image.  However, it's still safest to update the parentGroup
+    // pointers of the group's children. We must do it in the right order in case any of the
+    // children are shared (ie: image first, "this" second so that any shared children end up
+    // with "this").
+    image->RunOnChildren(
+            [&]( BOARD_ITEM* child )
+            {
+                child->SetParentGroup( image );
+            },
+            RECURSE_MODE::NO_RECURSE );
+
+    RunOnChildren(
+            [&]( BOARD_ITEM* child )
+            {
+                child->SetParentGroup( this );
+            },
+            RECURSE_MODE::NO_RECURSE );
 }
 
 

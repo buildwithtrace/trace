@@ -77,7 +77,7 @@ void SCH_VIEW::Update( const KIGFX::VIEW_ITEM* aItem, int aUpdateFlags ) const
                     {
                         VIEW::Update( child, aUpdateFlags );
                     },
-                    RECURSE_MODE::NO_RECURSE );
+                    RECURSE_MODE::RECURSE );
         }
     }
 
@@ -124,6 +124,11 @@ void SCH_VIEW::DisplaySheet( const SCH_SCREEN *aScreen )
     m_drawingSheet->SetColorLayer( LAYER_SCHEMATIC_DRAWINGSHEET );
     m_drawingSheet->SetPageBorderColorLayer( LAYER_SCHEMATIC_PAGE_LIMITS );
     m_drawingSheet->SetIsFirstPage( aScreen->GetVirtualPageNumber() == 1 );
+
+    wxString currentVariant = aScreen->Schematic()->GetCurrentVariant();
+    wxString variantDesc = aScreen->Schematic()->GetVariantDescription( currentVariant );
+    m_drawingSheet->SetVariantName( TO_UTF8( currentVariant ) );
+    m_drawingSheet->SetVariantDesc( TO_UTF8( variantDesc ) );
 
     if( m_frame && m_frame->IsType( FRAME_SCH ) )
     {

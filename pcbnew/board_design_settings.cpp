@@ -28,6 +28,7 @@
 #include <kiface_base.h>
 #include <pad.h>
 #include <board_design_settings.h>
+#include <project/net_settings.h>
 #include <drc/drc_item.h>
 #include <drc/drc_engine.h>
 #include <settings/json_settings_internals.h>
@@ -170,8 +171,8 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     m_DRCSeverities[ DRCE_DRILLED_HOLES_TOO_CLOSE ] = RPT_SEVERITY_WARNING;
 
     m_DRCSeverities[ DRCE_MISSING_COURTYARD ] = RPT_SEVERITY_IGNORE;
-    m_DRCSeverities[ DRCE_PTH_IN_COURTYARD ] = RPT_SEVERITY_IGNORE;
-    m_DRCSeverities[ DRCE_NPTH_IN_COURTYARD ] = RPT_SEVERITY_IGNORE;
+    m_DRCSeverities[ DRCE_PTH_IN_COURTYARD ] = RPT_SEVERITY_ERROR;
+    m_DRCSeverities[ DRCE_NPTH_IN_COURTYARD ] = RPT_SEVERITY_ERROR;
 
     m_DRCSeverities[ DRCE_DANGLING_TRACK ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_DANGLING_VIA ] = RPT_SEVERITY_WARNING;
@@ -187,6 +188,7 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
     m_DRCSeverities[ DRCE_NET_CONFLICT ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_SCHEMATIC_PARITY ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_FOOTPRINT_FILTERS ] = RPT_SEVERITY_IGNORE;
+    m_DRCSeverities[ DRCE_SCHEMATIC_FIELDS_PARITY ] = RPT_SEVERITY_WARNING;
 
     m_DRCSeverities[ DRCE_SILK_CLEARANCE ] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[ DRCE_SILK_MASK_CLEARANCE ] = RPT_SEVERITY_WARNING;
@@ -206,6 +208,8 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
 
     m_DRCSeverities[DRCE_MISSING_TUNING_PROFILE] = RPT_SEVERITY_WARNING;
     m_DRCSeverities[DRCE_TUNING_PROFILE_IMPLICIT_RULES] = RPT_SEVERITY_IGNORE;
+
+    m_DRCSeverities[DRCE_TRACK_NOT_CENTERED_ON_VIA] = RPT_SEVERITY_IGNORE;
 
     m_MaxError = ARC_HIGH_DEF;
     m_ZoneKeepExternalFillets = false;
@@ -303,7 +307,7 @@ BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS( JSON_SETTINGS* aParent, const std:
 
     m_params.emplace_back( new PARAM_SCALED<int>( "rules.min_silk_clearance",
             &m_SilkClearance, pcbIUScale.mmToIU( DEFAULT_SILKCLEARANCE ),
-            pcbIUScale.mmToIU( 0.00 ), pcbIUScale.mmToIU( 100.0 ), pcbIUScale.MM_PER_IU ) );
+            pcbIUScale.mmToIU( -10.0 ), pcbIUScale.mmToIU( 100.0 ), pcbIUScale.MM_PER_IU ) );
 
     m_params.emplace_back( new PARAM_SCALED<int>( "rules.min_groove_width",
             &m_MinGrooveWidth, pcbIUScale.mmToIU( DEFAULT_MINGROOVEWIDTH ),
@@ -1444,7 +1448,7 @@ int BOARD_DESIGN_SETTINGS::GetCurrentDiffPairGap() const
     {
         return m_customDiffPair.m_Gap;
     }
-    else if( m_diffPairIndex == 0 )
+    else if( m_diffPairIndex <= 0 || m_diffPairIndex >= (int) m_DiffPairDimensionsList.size() )
     {
         if( m_NetSettings->GetDefaultNetclass()->HasDiffPairGap() )
             return m_NetSettings->GetDefaultNetclass()->GetDiffPairGap();
@@ -1464,7 +1468,7 @@ int BOARD_DESIGN_SETTINGS::GetCurrentDiffPairViaGap() const
     {
         return m_customDiffPair.m_ViaGap;
     }
-    else if( m_diffPairIndex == 0 )
+    else if( m_diffPairIndex <= 0 || m_diffPairIndex >= (int) m_DiffPairDimensionsList.size() )
     {
         if( m_NetSettings->GetDefaultNetclass()->HasDiffPairViaGap() )
             return m_NetSettings->GetDefaultNetclass()->GetDiffPairViaGap();

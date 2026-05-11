@@ -87,9 +87,6 @@ class DIALOG_FOOTPRINT_PROPERTIES_BASE : public DIALOG_SHIM
 		wxStaticText* m_SolderPasteMarginLabel;
 		wxTextCtrl* m_SolderPasteMarginCtrl;
 		wxStaticText* m_SolderPasteMarginUnits;
-		wxStaticText* m_PasteMarginRatioLabel;
-		wxTextCtrl* m_PasteMarginRatioCtrl;
-		wxStaticText* m_PasteMarginRatioUnits;
 		wxStaticText* m_staticTextInfoCopper;
 		wxStaticText* m_staticTextInfoPaste;
 		wxStaticText* m_staticText16;

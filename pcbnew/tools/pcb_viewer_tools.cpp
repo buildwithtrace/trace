@@ -26,9 +26,11 @@
 #include <wx/clipbrd.h>
 
 #include <3d_viewer/eda_3d_viewer_frame.h>
+#include <footprint.h>
 #include <footprint_editor_settings.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <kiplatform/ui.h>
+#include <pad.h>
 #include <pcb_base_frame.h>
 #include <preview_items/ruler_item.h>
 #include <preview_items/two_point_geom_manager.h>
@@ -38,6 +40,7 @@
 #include <tool/tool_manager.h>
 #include <tools/pcb_grid_helper.h>
 #include <tools/pcb_actions.h>
+#include <amplitude_client.h>
 
 
 bool PCB_VIEWER_TOOLS::Init()
@@ -76,6 +79,10 @@ void PCB_VIEWER_TOOLS::Reset( RESET_REASON aReason )
 
 int PCB_VIEWER_TOOLS::Show3DViewer( const TOOL_EVENT& aEvent )
 {
+    AMPLITUDE_CLIENT::Instance().Track( "3d_viewer_opened", {
+        { "app_type", "pcbnew" },
+    } );
+
     bool do_reload_board = true;    // reload board flag
 
     // At EDA_3D_VIEWER_FRAME creation, the current board is loaded, so disable loading
@@ -224,6 +231,8 @@ int PCB_VIEWER_TOOLS::TextOutlines( const TOOL_EVENT& aEvent )
     {
         for( PCB_FIELD* field : fp->GetFields() )
         {
+            wxCHECK2( field, continue );
+
             view()->Update( field, KIGFX::REPAINT );
         }
 
@@ -314,8 +323,17 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
         grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
         grid.SetUseGrid( view.GetGAL()->GetGridSnapping() && !evt->DisableGridSnapping() );
         VECTOR2I cursorPos = evt->HasPosition() ? evt->Position() : controls.GetMousePosition();
-        cursorPos = grid.BestSnapAnchor( cursorPos, nullptr );
-        controls.ForceCursorPosition( true, cursorPos );
+
+        if( !evt->IsActivate() && !evt->IsCancelInteractive() )
+        {
+            // If we are switching, the canvas may not be valid any more
+            cursorPos = grid.BestSnapAnchor( cursorPos, nullptr );
+            controls.ForceCursorPosition( true, cursorPos );
+        }
+        else
+        {
+            grid.FullReset();
+        }
 
         if( evt->IsCancelInteractive() )
         {
@@ -371,22 +389,10 @@ int PCB_VIEWER_TOOLS::MeasureTool( const TOOL_EVENT& aEvent )
         // move or drag when origin set updates rules
         else if( originSet && ( evt->IsMotion() || evt->IsDrag( BUT_LEFT ) ) )
         {
-            auto snap = LEADER_MODE::DIRECT;
-
-            if( frame()->IsType( FRAME_PCB_EDITOR ) )
-            {
-                snap = GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" )->m_AngleSnapMode;
-            }
-            else if( frame()->IsType( FRAME_FOOTPRINT_EDITOR ) )
-            {
-                snap = GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" )->m_AngleSnapMode;
-            }
-            else
-            {
-                snap = frame()->GetViewerSettingsBase()->m_ViewersDisplay.m_AngleSnapMode;
-            }
-
-            twoPtMgr.SetAngleSnap( snap );
+            // The measurement tool always measures in a direct line; holding Shift
+            // constrains to 45° increments for convenience.
+            twoPtMgr.SetAngleSnap( evt->Modifier( MD_SHIFT ) ? LEADER_MODE::DEG45
+                                                              : LEADER_MODE::DIRECT );
             twoPtMgr.SetEnd( cursorPos );
 
             view.SetVisible( &ruler, true );

@@ -146,6 +146,7 @@ public:
 
     void SetHatchingDirty()                    { m_hatchingDirty = true; }
     const SHAPE_POLY_SET& GetHatching() const  { return m_hatching; }
+    const std::vector<SEG>& GetHatchLines() const { return m_hatchLines; }
 
     bool IsClosed() const;
 
@@ -441,6 +442,11 @@ protected:
         m_fill = aFlag ? FILL_T::FILLED_SHAPE : FILL_T::NO_FILL;
     }
 
+    virtual SHAPE_POLY_SET getHatchingKnockouts() const
+    {
+        return SHAPE_POLY_SET();
+    }
+
     void move( const VECTOR2I& aMoveVector );
     void rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle );
     void flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection );
@@ -496,6 +502,7 @@ protected:
     COLOR4D                m_fillColor;
 
     mutable SHAPE_POLY_SET m_hatching;
+    mutable std::vector<SEG> m_hatchLines;
     mutable bool           m_hatchingDirty;
 
     long long int          m_rectangleHeight;
@@ -524,3 +531,4 @@ DECLARE_ENUM_TO_WXANY( SHAPE_T );
 DECLARE_ENUM_TO_WXANY( LINE_STYLE );
 DECLARE_ENUM_TO_WXANY( UI_FILL_MODE );
 #endif
+

@@ -27,6 +27,7 @@
 
 #include <wx/settings.h>
 
+#include <core/throttle.h>
 #include <pgm_base.h>
 #include <project/project_file.h>
 #include <lib_symbol_library_manager.h>
@@ -39,8 +40,7 @@
 
 
 wxObjectDataPtr<LIB_TREE_MODEL_ADAPTER>
-SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Create( SYMBOL_EDIT_FRAME* aParent,
-                                           SYMBOL_LIBRARY_MANAGER* aLibMgr )
+SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Create( SYMBOL_EDIT_FRAME* aParent, SYMBOL_LIBRARY_MANAGER* aLibMgr )
 {
     auto* adapter = new SYMBOL_TREE_SYNCHRONIZING_ADAPTER( aParent, aLibMgr );
     return wxObjectDataPtr<LIB_TREE_MODEL_ADAPTER>( adapter );
@@ -71,12 +71,10 @@ bool SYMBOL_TREE_SYNCHRONIZING_ADAPTER::IsContainer( const wxDataViewItem& aItem
 }
 
 
-#define PROGRESS_INTERVAL_MILLIS 120
-
 void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Sync( const wxString& aForceRefresh,
                                               std::function<void( int, int, const wxString& )> aProgressCallback )
 {
-    wxLongLong nextUpdate = wxGetUTCTimeMillis() + (PROGRESS_INTERVAL_MILLIS / 2);
+    THROTTLE progressThrottle( std::chrono::milliseconds( 120 ) );
 
     m_lastSyncHash = m_libMgr->GetHash();
     int i = 0, max = GetLibrariesCount();
@@ -88,18 +86,27 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Sync( const wxString& aForceRefresh,
     {
         const wxString& name = it->get()->m_Name;
 
-        if( wxGetUTCTimeMillis() > nextUpdate )
-        {
+        if( progressThrottle.Ready() )
             aProgressCallback( i, max, name );
-            nextUpdate = wxGetUTCTimeMillis() + PROGRESS_INTERVAL_MILLIS;
-        }
 
-        // There is a bug in SYMBOL_LIBRARY_MANAGER::LibraryExists() that uses the buffered
-        // modified libraries before the symbol library table which prevents the library from
-        // being removed from the tree control.
-        if( !m_libMgr->LibraryExists( name, true )
-          || !adapter->HasLibrary( name, true )
-          || ( *adapter->GetRow( name ) )->Hidden()
+        // Check the table row directly rather than adapter->HasLibrary(), which requires the
+        // library to be fully loaded. After table reloads (e.g. adding a new library), all
+        // previously loaded libraries are cleared and not yet reloaded, so HasLibrary() would
+        // return false and incorrectly remove them from the tree.
+        //
+        // However, we must still remove nodes for libraries that failed to load (e.g. the
+        // library file was deleted), otherwise stale symbols remain because updateLibrary()
+        // skips re-enumeration when the URI-based hash is unchanged.
+        std::optional<LIBRARY_TABLE_ROW*> optRow = adapter->GetRow( name );
+        std::optional<LIB_STATUS> libStatus = adapter->GetLibraryStatus( name );
+
+        bool loadFailed = libStatus.has_value()
+                          && libStatus->load_status == LOAD_STATUS::LOAD_ERROR;
+
+        if( !optRow.has_value()
+          || ( *optRow )->Disabled()
+          || ( *optRow )->Hidden()
+          || loadFailed
           || name == aForceRefresh )
         {
             it = deleteLibrary( it );
@@ -126,11 +133,8 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Sync( const wxString& aForceRefresh,
 
         if( m_libHashes.count( libName ) == 0 )
         {
-            if( wxGetUTCTimeMillis() > nextUpdate )
-            {
+            if( progressThrottle.Ready() )
                 aProgressCallback( i++, max, libName );
-                nextUpdate = wxGetUTCTimeMillis() + PROGRESS_INTERVAL_MILLIS;
-            }
 
             auto optRow = adapter->GetRow( libName );
             wxCHECK2( optRow.has_value(), continue );
@@ -138,8 +142,7 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::Sync( const wxString& aForceRefresh,
             bool pinned = alg::contains( cfg->m_Session.pinned_symbol_libs, libName )
                             || alg::contains( project.m_PinnedSymbolLibs, libName );
 
-            LIB_TREE_NODE_LIBRARY& lib_node = DoAddLibraryNode( libName, ( *optRow )->Description(),
-                                                                pinned );
+            LIB_TREE_NODE_LIBRARY& lib_node = DoAddLibraryNode( libName, ( *optRow )->Description(), pinned );
 
             updateLibrary( lib_node );
         }
@@ -206,6 +209,11 @@ void SYMBOL_TREE_SYNCHRONIZING_ADAPTER::updateLibrary( LIB_TREE_NODE_LIBRARY& aL
         for( LIB_SYMBOL* symbol : symbols )
             aLibNode.AddItem( symbol );
     }
+
+    SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() );
+
+    for( const wxString& column : adapter->GetAvailableExtraFields( aLibNode.m_Name ) )
+        addColumnIfNecessary( column );
 
     aLibNode.AssignIntrinsicRanks( m_shownColumns );
     m_libHashes[aLibNode.m_Name] = m_libMgr->GetLibraryHash( aLibNode.m_Name );

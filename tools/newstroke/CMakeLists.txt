@@ -1,5 +1,5 @@
 
-find_package(KicadCli)
+find_package(TraceCli)
 
 #
 # List of all newstroke symbol files that define the newstroke font
@@ -49,14 +49,14 @@ add_custom_target(
 )
 
 
-if (NOT KICAD_CLI)
-    message(STATUS "Cannot create newstroke_upgrade_syms target (kicad-cli not found)")
+if (NOT TRACE_CLI)
+    message(STATUS "Cannot create newstroke_upgrade_syms target (trace-cli not found)")
 else()
     add_custom_target(newstroke_upgrade_syms
         COMMENT "Running format update on all newstroke .kicad_sym files"
     )
 
-    KICAD_CLI_UPGRADE_SYMS(
+    TRACE_CLI_UPGRADE_SYMS(
         TARGET newstroke_upgrade_syms
         FILES ${NEWSTROKE_SOURCE_FILES}
     )

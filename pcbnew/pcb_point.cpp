@@ -36,6 +36,8 @@
 #include <settings/color_settings.h>
 #include <settings/settings_manager.h>
 #include <view/view.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 
 static const double DEFAULT_PT_SIZE_MM = 1.0;
@@ -54,6 +56,27 @@ PCB_POINT::PCB_POINT( BOARD_ITEM* aParent, const VECTOR2I& aPos, int aSize ) :
     m_pos( aPos ),
     m_size( aSize )
 {
+}
+
+
+bool PCB_POINT::cmp_points::operator()( const PCB_POINT* a, const PCB_POINT* b ) const
+{
+    if( a->GetLayer() != b->GetLayer() )
+        return a->GetLayer() < b->GetLayer();
+
+    if( a->GetPosition().x != b->GetPosition().x )
+        return a->GetPosition().x < b->GetPosition().x;
+
+    if( a->GetPosition().y != b->GetPosition().y )
+        return a->GetPosition().y < b->GetPosition().y;
+
+    if( a->GetSize() != b->GetSize() )
+        return a->GetSize() < b->GetSize();
+
+    if( a->m_Uuid != b->m_Uuid )
+        return a->m_Uuid < b->m_Uuid;
+
+    return a < b;
 }
 
 

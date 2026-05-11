@@ -177,6 +177,28 @@ wxString PYTHON_MANAGER::FindPythonInterpreter()
         return pythonExe.GetFullPath();
 #else
     wxFileName pythonExe;
+
+    // When running from an AppImage (or any self-contained bundle), prefer the
+    // Python interpreter shipped alongside the executable.  This prevents using
+    // the host's Python, whose version may differ from the bundled stdlib and
+    // cause _sre.MAGIC / ABI mismatches.
+    {
+        wxString exeDir = Pgm().GetExecutablePath();
+
+        wxFileName bundled( exeDir, wxT( "python3" ) );
+        if( bundled.IsFileExecutable() )
+            return bundled.GetFullPath();
+
+        // sharun layout: real binaries are in shared/bin/, hardlinks in bin/.
+        // Walk up and check the sibling bin/ directory.
+        wxFileName siblingBin( exeDir );
+        siblingBin.RemoveLastDir();
+        siblingBin.AppendDir( wxT( "bin" ) );
+        siblingBin.SetFullName( wxT( "python3" ) );
+
+        if( siblingBin.IsFileExecutable() )
+            return siblingBin.GetFullPath();
+    }
 #endif
 
     // In case one is forced with cmake

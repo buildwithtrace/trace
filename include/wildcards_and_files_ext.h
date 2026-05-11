@@ -5,6 +5,7 @@
  * Copyright (C) 2007-2012 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -130,6 +131,7 @@ public:
     static const std::string CadstarSchematicFileExtension;
     static const std::string CadstarPartsLibraryFileExtension;
     static const std::string KiCadSchematicFileExtension;
+    static const std::string TraceSchematicFileExtension;
     static const std::string IbisFileExtension;
     static const std::string SpiceFileExtension;
     static const std::string SpiceModelFileExtension;
@@ -153,6 +155,7 @@ public:
     static const std::string EaglePcbFileExtension;
     static const std::string CadstarPcbFileExtension;
     static const std::string KiCadPcbFileExtension;
+    static const std::string TracePcbFileExtension;
     #define PcbFileExtension    KiCadPcbFileExtension       // symlink choice
     static const std::string KiCadSymbolLibFileExtension;
     static const std::string DrawingSheetFileExtension;
@@ -252,6 +255,8 @@ public:
     static wxString CadstarArchiveFilesWildcard();
     static wxString AltiumProjectFilesWildcard();
     static wxString EagleFilesWildcard();
+    static wxString PADSProjectFilesWildcard();
+    static wxString GedaProjectFilesWildcard();
     static wxString EasyEdaArchiveWildcard();
     static wxString EasyEdaProFileWildcard();
     static wxString PdfFileWildcard();
@@ -286,6 +291,7 @@ public:
     static wxString WorkbookFileWildcard();
     static wxString PngFileWildcard();
     static wxString JpegFileWildcard();
+    static wxString ImageFileWildcard();
     static wxString HotkeyFileWildcard();
     static wxString JobsetFileWildcard();
 

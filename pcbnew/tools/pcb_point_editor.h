@@ -28,6 +28,7 @@
 #define PCB_POINT_EDITOR_H
 
 #include <tool/tool_interactive.h>
+#include <tools/pcb_selection.h>
 #include "tool/edit_points.h"
 #include <pcbnew_settings.h>
 #include <status_popup.h>
@@ -39,6 +40,7 @@ namespace KIGFX { namespace PREVIEW { class ANGLE_ITEM; } }
 
 class PCB_SELECTION_TOOL;
 class POINT_EDIT_BEHAVIOR;
+class RECT_RADIUS_TEXT_ITEM;
 class SHAPE_POLY_SET;
 
 /**
@@ -68,6 +70,21 @@ public:
     bool HasPoint()    { return m_editedPoint != nullptr; }
     bool HasMidpoint() { return HasPoint() && dynamic_cast<EDIT_LINE*>( m_editedPoint ); }
     bool HasCorner()   { return HasPoint() && !HasMidpoint() && ( !m_editPoints || m_editPoints->GetParent()->Type() != PCB_GROUP_T ); }
+
+    /**
+     * Check if a corner can be added to the given item (zones, polys, segments, arcs).
+     */
+    static bool CanAddCorner( const EDA_ITEM& aItem );
+
+    /**
+     * Check if a corner of the given item can be chamfered (zones, polys only).
+     */
+    static bool CanChamferCorner( const EDA_ITEM& aItem );
+
+    /**
+     * Condition to display "Remove Corner" context menu entry.
+     */
+    bool CanRemoveCorner( const SELECTION& aSelection );
 
 private:
     ///< Set up handlers for various events.
@@ -110,9 +127,6 @@ private:
     ///< Return a point that should be used as a constrainer for 45 degrees mode.
     EDIT_POINT get45DegConstrainer() const;
 
-    ///< Condition to display "Remove corner" context menu entry.
-    bool removeCornerCondition( const SELECTION& aSelection );
-
     /// TOOL_ACTION handlers
     int movePoint( const TOOL_EVENT& aEvent );
     int addCorner( const TOOL_EVENT& aEvent );
@@ -137,6 +151,7 @@ private:
     ARC_EDIT_MODE                 m_arcEditMode;
 
     PCB_SELECTION                 m_preview;
+    RECT_RADIUS_TEXT_ITEM*        m_radiusHelper;
 
     // Alternative constraint, enabled while a modifier key is held
     std::shared_ptr<EDIT_CONSTRAINT<EDIT_POINT>> m_altConstraint;

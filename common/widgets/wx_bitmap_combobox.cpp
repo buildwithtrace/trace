@@ -38,13 +38,36 @@ wxSize WX_BITMAP_COMBOBOX::DoGetBestSize() const
     wxSize size = wxBitmapComboBox::DoGetBestSize();
 
 #ifdef __WXGTK__
-    // wxWidgets has a bug on GTK where the wxBitmapComboBox doesn't scale correctly with fontsize.
-    // The following hack is incomplete, but gets around the worst of it.  The hack can be removed
-    // once https://github.com/wxWidgets/wxWidgets/issues/25468 is fixed.
+    wxSize bmpSize = GetBitmapSize();
+
+    if( bmpSize.y > 0 )
+    {
+        // wxBitmapComboBox::DoGetBestSize on GTK only adjusts the height when the bitmap is
+        // taller than the text (GetCharHeight). When the text is taller, it skips the bitmap
+        // adjustment entirely. But on some GTK themes (Plasma/Breeze), the cell renderer
+        // padding around the bitmap means the combo still needs extra height beyond what the
+        // text-only calculation provides. Ensure the combo is at least tall enough for the
+        // bitmap plus the non-content overhead (borders, frame, focus ring).
+        int overhead = size.y - GetCharHeight();
+        size.y = std::max( size.y, bmpSize.y + overhead + 4 );
+    }
+
+    if( bmpSize.x > 0 )
+    {
+        // The width calculation in wxBitmapComboBox::DoGetBestSize on GTK is derived from the
+        // text-only wxComboBox best size and does not account for the pixbuf cell renderer.
+        // Add the bitmap width plus padding to prevent horizontal clipping.
+        size.x += bmpSize.x + 4;
+    }
+
+#if !wxCHECK_VERSION( 3, 2, 9 )
+    // wxWidgets had a bug on GTK where the wxBitmapComboBox doesn't scale correctly with fontsize.
+    // Fixed upstream in wxWidgets 3.2.9: https://github.com/wxWidgets/wxWidgets/issues/25468
     wxTextCtrl dummyCtrl( m_parent, wxID_ANY );
     int        dummyWidth = 100;
 
     size.y = std::max( size.y, dummyCtrl.GetBestHeight( dummyWidth ) + 4 );
+#endif
 #endif
 
     return size;

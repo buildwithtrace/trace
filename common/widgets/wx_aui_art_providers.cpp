@@ -29,6 +29,7 @@
 #include <settings/common_settings.h>
 #include <widgets/panel_notebook_base.h>
 #include <widgets/wx_aui_art_providers.h>
+#include <gal/color4d.h>
 
 #if wxCHECK_VERSION( 3, 3, 0 )
 wxSize WX_AUI_TOOLBAR_ART::GetToolSize( wxReadOnlyDC& aDc, wxWindow* aWindow,
@@ -39,16 +40,12 @@ wxSize WX_AUI_TOOLBAR_ART::GetToolSize( wxDC& aDc, wxWindow* aWindow,
 #endif
 {
     // Based on the upstream wxWidgets implementation, but simplified for our application
-    int size = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
-
-#ifdef __WXMSW__
-    size *= KIPLATFORM::UI::GetContentScaleFactor( aWindow );
-#endif
+    int size = aWindow->FromDIP( Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size );
 
     int width = size;
     int height = size;
 
-    if( m_flags & wxAUI_TB_TEXT )
+    if( ( m_flags & wxAUI_TB_TEXT ) && !aItem.GetLabel().empty() )
     {
         aDc.SetFont( m_font );
         int tx, ty;
@@ -64,7 +61,7 @@ wxSize WX_AUI_TOOLBAR_ART::GetToolSize( wxDC& aDc, wxWindow* aWindow,
                 width = wxMax( width, tx + aWindow->FromDIP( 6 ) );
             }
         }
-        else if( m_textOrientation == wxAUI_TBTOOL_TEXT_RIGHT && !aItem.GetLabel().empty() )
+        else if( m_textOrientation == wxAUI_TBTOOL_TEXT_RIGHT )
         {
             width += aWindow->FromDIP( 3 ); // space between left border and bitmap
             width += aWindow->FromDIP( 3 ); // space between bitmap and text
@@ -91,52 +88,46 @@ wxSize WX_AUI_TOOLBAR_ART::GetToolSize( wxDC& aDc, wxWindow* aWindow,
 void WX_AUI_TOOLBAR_ART::DrawButton( wxDC& aDc, wxWindow* aWindow, const wxAuiToolBarItem& aItem,
                                      const wxRect& aRect )
 {
-    // Taken from upstream implementation; modified to respect tool size
-    wxSize bmpSize = GetToolSize( aDc, aWindow, aItem );
-
-    int textWidth = 0, textHeight = 0;
-
-    if( m_flags & wxAUI_TB_TEXT )
-    {
-        aDc.SetFont( m_font );
-
-        int tx, ty;
-
-        aDc.GetTextExtent( wxT( "ABCDHgj" ), &tx, &textHeight );
-        textWidth = 0;
-        aDc.GetTextExtent( aItem.GetLabel(), &textWidth, &ty );
-    }
-
+    // Based on upstream implementation
     int bmpX = 0, bmpY = 0;
     int textX = 0, textY = 0;
 
-    double scale = KIPLATFORM::UI::GetPixelScaleFactor( aWindow );
-    const wxBitmapBundle& bundle = ( aItem.GetState() & wxAUI_BUTTON_STATE_DISABLED )
-                                   ? aItem.GetDisabledBitmapBundle()
-                                   : aItem.GetBitmapBundle();
-    wxBitmap bmp = bundle.GetBitmap( bmpSize * scale );
+    const wxBitmap& bmp = aItem.GetCurrentBitmapFor( aWindow );
+    const wxSize    bmpSize = bmp.IsOk() ? bmp.GetLogicalSize() : wxSize( 0, 0 );
 
-    // wxBitmapBundle::GetBitmap thinks we need this rescaled to match the base size, which we don't
-    if( bmp.IsOk() )
-        bmp.SetScaleFactor( scale );
+    if( ( m_flags & wxAUI_TB_TEXT ) && !aItem.GetLabel().empty() )
+    {
+        aDc.SetFont( m_font );
 
-    if( m_textOrientation == wxAUI_TBTOOL_TEXT_BOTTOM )
+        int textWidth = 0, textHeight = 0;
+        int tx, ty;
+
+        aDc.GetTextExtent( wxT( "ABCDHgj" ), &tx, &textHeight );
+        aDc.GetTextExtent( aItem.GetLabel(), &textWidth, &ty );
+
+        if( m_textOrientation == wxAUI_TBTOOL_TEXT_BOTTOM )
+        {
+            bmpX = aRect.x + ( aRect.width / 2 ) - ( bmpSize.x / 2 );
+
+            bmpY = aRect.y + ( ( aRect.height - textHeight ) / 2 ) - ( bmpSize.y / 2 );
+
+            textX = aRect.x + ( aRect.width / 2 ) - ( textWidth / 2 ) + 1;
+            textY = aRect.y + aRect.height - textHeight - 1;
+        }
+        else if( m_textOrientation == wxAUI_TBTOOL_TEXT_RIGHT )
+        {
+            bmpX = aRect.x + aWindow->FromDIP( 3 );
+
+            bmpY = aRect.y + ( aRect.height / 2 ) - ( bmpSize.y / 2 );
+
+            textX = bmpX + aWindow->FromDIP( 3 ) + bmpSize.x;
+            textY = aRect.y + ( aRect.height / 2 ) - ( textHeight / 2 );
+        }
+    }
+    else
     {
         bmpX = aRect.x + ( aRect.width / 2 ) - ( bmpSize.x / 2 );
-
-        bmpY = aRect.y + ( ( aRect.height - textHeight ) / 2 ) - ( bmpSize.y / 2 );
-
-        textX = aRect.x + ( aRect.width / 2 ) - ( textWidth / 2 ) + 1;
-        textY = aRect.y + aRect.height - textHeight - 1;
-    }
-    else if( m_textOrientation == wxAUI_TBTOOL_TEXT_RIGHT )
-    {
-        bmpX = aRect.x + aWindow->FromDIP( 3 );
-
         bmpY = aRect.y + ( aRect.height / 2 ) - ( bmpSize.y / 2 );
-
-        textX = bmpX + aWindow->FromDIP( 3 ) + bmpSize.x;
-        textY = aRect.y + ( aRect.height / 2 ) - ( textHeight / 2 );
     }
 
     bool isThemeDark = KIPLATFORM::UI::IsDarkTheme();
@@ -187,6 +178,129 @@ void WX_AUI_TOOLBAR_ART::DrawButton( wxDC& aDc, wxWindow* aWindow, const wxAuiTo
     {
         aDc.DrawText( aItem.GetLabel(), textX, textY );
     }
+}
+
+
+void WX_AUI_TOOLBAR_ART::saturateHighlightColor()
+{
+#ifdef __WXOSX__
+    // Use a slightly stronger highlight colour over grey toolbar backgrounds
+    KIGFX::COLOR4D highlight( m_highlightColour );
+    m_highlightColour = highlight.Saturate( 0.6 ).ToColour();
+#endif
+}
+
+
+void WX_AUI_TOOLBAR_ART::UpdateColoursFromSystem()
+{
+    wxAuiDefaultToolBarArt::UpdateColoursFromSystem();
+    saturateHighlightColor();
+}
+
+
+class ToolbarCommandCapture : public wxEvtHandler
+{
+public:
+    ToolbarCommandCapture() { m_lastId = 0; }
+    int GetCommandId() const { return m_lastId; }
+
+    bool ProcessEvent( wxEvent& evt ) override
+    {
+        if( evt.GetEventType() == wxEVT_MENU )
+        {
+            m_lastId = evt.GetId();
+            return true;
+        }
+
+        if( GetNextHandler() )
+            return GetNextHandler()->ProcessEvent( evt );
+
+        return false;
+    }
+
+private:
+    int m_lastId;
+};
+
+
+int WX_AUI_TOOLBAR_ART::ShowDropDown( wxWindow* wnd, const wxAuiToolBarItemArray& items )
+{
+    wxMenu menuPopup;
+    bool   skipNextSeparator = true;
+
+    size_t i, count = items.GetCount();
+    for( i = 0; i < count; ++i )
+    {
+        wxAuiToolBarItem& item = items.Item( i );
+
+        if( item.GetKind() == wxITEM_SEPARATOR )
+        {
+            if( !skipNextSeparator )
+            {
+                menuPopup.AppendSeparator();
+                skipNextSeparator = true;
+            }
+        }
+        else if( item.GetKind() == wxITEM_NORMAL || item.GetKind() == wxITEM_CHECK || item.GetKind() == wxITEM_RADIO )
+        {
+            wxString text = item.GetShortHelp();
+
+            if( text.empty() )
+                text = item.GetLabel();
+
+            if( text.empty() )
+                text = wxT( " " );
+
+            wxString firstLine = text.BeforeFirst( '\n' );
+            wxString accel;
+            wxString label = firstLine.BeforeFirst( '\t', &accel );
+
+            text = label;
+
+            if( !accel.empty() )
+            {
+                // Remove brackets from accelerator string so it's recognized
+                if( accel.starts_with( "(" ) && accel.ends_with( ")" ) )
+                    accel = accel.Mid( 1, accel.size() - 2 );
+
+                text << "\t" << accel;
+            }
+
+            bool       checked = item.GetState() & wxAUI_BUTTON_STATE_CHECKED;
+            wxItemKind menuKind = wxITEM_NORMAL;
+
+            if( ( item.GetKind() == wxITEM_CHECK || item.GetKind() == wxITEM_RADIO ) && checked )
+                menuKind = static_cast<wxItemKind>( item.GetKind() );
+
+            wxMenuItem* m = new wxMenuItem( &menuPopup, item.GetId(), text, item.GetShortHelp(), menuKind );
+
+            if( !m->IsCheckable() )
+                m->SetBitmap( item.GetBitmapBundle() );
+
+            menuPopup.Append( m );
+
+            if( m->IsCheckable() )
+                m->Check( checked );
+
+            skipNextSeparator = false;
+        }
+    }
+
+    // find out where to put the popup menu of window items
+    wxPoint pt = ::wxGetMousePosition();
+    pt = wnd->ScreenToClient( pt );
+
+    // find out the screen coordinate at the bottom of the tab ctrl
+    wxRect cli_rect = wnd->GetClientRect();
+    pt.y = cli_rect.y + cli_rect.height;
+
+    ToolbarCommandCapture* cc = new ToolbarCommandCapture;
+    wnd->PushEventHandler( cc );
+    wnd->PopupMenu( &menuPopup, pt );
+    int command = cc->GetCommandId();
+    wnd->PopEventHandler( true );
+
+    return command;
 }
 
 

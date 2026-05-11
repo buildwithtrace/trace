@@ -46,15 +46,8 @@ std::optional<TOOLBAR_CONFIGURATION> SYMBOL_VIEWER_TOOLBAR_SETTINGS::DefaultTool
         return std::nullopt;
 
     case TOOLBAR_LOC::TOP_MAIN:
-        /* TODO (ISM): Move these to actions
-        m_tbTopMain->AddTool( ID_LIBVIEW_PREVIOUS, wxEmptyString,
-            KiScaledBitmap( BITMAPS::lib_previous, this ),
-            _( "Display previous symbol" ) );
-
-        m_tbTopMain->AddTool( ID_LIBVIEW_NEXT, wxEmptyString,
-                KiScaledBitmap( BITMAPS::lib_next, this ),
-                _( "Display next symbol" ) );
-        */
+        config.AppendAction( SCH_ACTIONS::previousSymbol )
+              .AppendAction( SCH_ACTIONS::nextSymbol );
 
         config.AppendSeparator()
               .AppendAction( ACTIONS::zoomRedraw )
@@ -91,31 +84,43 @@ void SYMBOL_VIEWER_FRAME::configureToolbars()
 
     // Toolbar widget for selecting the unit to show in the symbol viewer
     auto unitChoiceFactory =
-        [this]( ACTION_TOOLBAR* aToolbar )
-        {
-            if( !m_unitChoice )
+            [this]( ACTION_TOOLBAR* aToolbar )
             {
-                m_unitChoice = new wxChoice( m_tbTopMain, ID_LIBVIEW_SELECT_UNIT_NUMBER,
-                                             wxDefaultPosition, wxSize( 150, -1 ) );
-            }
+                if( !m_unitChoice )
+                {
+                    m_unitChoice = new wxChoice( m_tbTopMain, ID_LIBVIEW_SELECT_UNIT_NUMBER,
+                                                 wxDefaultPosition, wxSize( 150, -1 ) );
+                }
 
-            aToolbar->Add( m_unitChoice );
-        };
+                aToolbar->Add( m_unitChoice );
+            };
 
     auto bodyChoiceFactory =
-        [this]( ACTION_TOOLBAR* aToolbar )
-        {
-            if( !m_bodyStyleChoice )
+            [this]( ACTION_TOOLBAR* aToolbar )
             {
-                m_bodyStyleChoice = new wxChoice( m_tbTopMain, ID_LIBVIEW_SELECT_BODY_STYLE,
-                                                  wxDefaultPosition, wxSize( 150, -1 ) );
-            }
+                if( !m_bodyStyleChoice )
+                {
+                    m_bodyStyleChoice = new wxChoice( m_tbTopMain, ID_LIBVIEW_SELECT_BODY_STYLE,
+                                                      wxDefaultPosition, wxSize( 150, -1 ) );
+                }
 
-            aToolbar->Add( m_bodyStyleChoice );
-        };
+                aToolbar->Add( m_bodyStyleChoice );
+            };
 
     RegisterCustomToolbarControlFactory( ACTION_TOOLBAR_CONTROLS::unitSelector, unitChoiceFactory );
     RegisterCustomToolbarControlFactory( ACTION_TOOLBAR_CONTROLS::bodyStyleSelector, bodyChoiceFactory );
+}
+
+
+void SYMBOL_VIEWER_FRAME::ClearToolbarControl( int aId )
+{
+    SCH_BASE_FRAME::ClearToolbarControl( aId );
+
+    switch( aId )
+    {
+    case ID_LIBVIEW_SELECT_UNIT_NUMBER: m_unitChoice = nullptr;      break;
+    case ID_LIBVIEW_SELECT_BODY_STYLE:  m_bodyStyleChoice = nullptr; break;
+    }
 }
 
 

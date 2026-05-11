@@ -25,6 +25,7 @@
 #include <sch_line.h>
 #include <dialog_line_properties.h>
 #include <dialogs/dialog_color_picker.h>
+#include <settings/color_settings.h>
 #include <settings/settings_manager.h>
 #include <sch_edit_frame.h>
 #include <stroke_params.h>
@@ -129,7 +130,10 @@ bool DIALOG_LINE_PROPERTIES::TransferDataFromWindow()
 
     for( SCH_LINE* line : m_lines )
     {
-        commit.Modify( line, m_frame->GetScreen() );
+        // Commit the change only if the line is not new. If new this is useless
+        // and can create dangling pointers if the line creation is aborted
+        if( !line->HasFlag( IS_NEW ) )
+            commit.Modify( line, m_frame->GetScreen() );
 
         if( !m_width.IsIndeterminate() )
             line->SetLineWidth( std::max( 0, m_width.GetIntValue() ) );

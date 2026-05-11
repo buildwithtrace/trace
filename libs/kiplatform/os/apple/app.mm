@@ -28,6 +28,9 @@ bool KIPLATFORM::APP::Init()
 {
     // KiCad relies on showing the file type selector in a few places; force it to be shown
     wxSystemOptions::SetOption( wxS( "osx.openfiledialog.always-show-types" ), 1 );
+
+    // wxLog trace setup is now handled centrally by TRACE_MANAGER::InitLogging()
+
     return true;
 }
 

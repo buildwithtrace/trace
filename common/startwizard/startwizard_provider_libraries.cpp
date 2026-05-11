@@ -23,6 +23,7 @@
 #include <bitmaps/bitmap_types.h>
 #include <dialogs/panel_startwizard_libraries_base.h>
 #include <libraries/library_manager.h>
+#include <paths.h>
 #include <startwizard/startwizard.h>
 #include <startwizard/startwizard_provider_libraries.h>
 #include <startwizard/startwizard_provider_settings.h>
@@ -37,6 +38,7 @@ public:
             m_model( aModel ),
             m_wizard( aWizard )
     {
+        wxWindowBase::SetMaxSize( { FromDIP( 640 ), -1 } );
         m_bmpWarning->SetBitmap( KiBitmapBundle( BITMAPS::dialog_warning ) );
         m_sizerWarning->Layout();
 
@@ -88,7 +90,8 @@ public:
             }
         }
 
-        m_sizerWarning->Hide( !m_showWarning );
+        m_bmpWarning->Show( m_showWarning );
+        m_stWarning->Show( m_showWarning );
 
         return true;
     }
@@ -100,7 +103,7 @@ public:
 
         for( const LIBRARY_TABLE_TYPE& type : m_model->missing_tables )
         {
-            if( !LIBRARY_MANAGER::IsTableValid( LIBRARY_MANAGER::DefaultGlobalTablePath( type ) ) )
+            if( !LIBRARY_MANAGER::IsTableValid( LIBRARY_MANAGER::StockTablePath( type ) ) )
                 m_showWarning = true;
 
             switch( type )
@@ -123,6 +126,13 @@ public:
         }
 
         m_stRequiredTables->SetLabel( missingTablesText.BeforeLast( '\n' ) );
+    }
+
+    void OnSize( wxSizeEvent& aEvt ) override
+    {
+        aEvt.Skip();
+        m_stIntro->Wrap( GetClientSize().x - FromDIP( 20 ) );
+        m_stWarning->Wrap( GetClientSize().x - m_bmpWarning->GetSize().x - FromDIP( 28 ) );
     }
 
 private:

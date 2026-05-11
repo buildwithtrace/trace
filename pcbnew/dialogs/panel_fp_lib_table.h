@@ -43,6 +43,7 @@ public:
     bool TransferDataFromWindow() override;
 
     void AddTable( LIBRARY_TABLE* table, const wxString& aTitle, bool aClosable );
+    void OpenTable( const std::shared_ptr<LIBRARY_TABLE>& table, const wxString& aTitle );
 
 private:
     /**
@@ -63,6 +64,7 @@ private:
     void onPageChange( wxAuiNotebookEvent& event ) override;
     void onReset( wxCommandEvent& event ) override;
 
+    void onNotebookPageChangeRequest( wxAuiNotebookEvent& aEvent );
     void onNotebookPageCloseRequest( wxAuiNotebookEvent& aEvent );
 
     void adjustPathSubsGridColumns( int aWidth );
@@ -81,10 +83,13 @@ private:
 private:
     PROJECT*                    m_project;
     DIALOG_EDIT_LIBRARY_TABLES* m_parent;
+    bool                        m_suppressNotebookPageEvents;
     wxArrayString               m_pluginChoices;
 
     wxString                    m_lastProjectLibDir;   //< Transient (unsaved) last browsed folder when adding a
                                                        // project level library.
+
+    std::vector<std::shared_ptr<LIBRARY_TABLE>> m_nestedTables;
 
     std::map<PCB_IO_MGR::PCB_FILE_T, IO_BASE::IO_FILE_DESC> m_supportedFpFiles;
 };

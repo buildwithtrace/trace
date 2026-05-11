@@ -1,0 +1,6 @@
+{
+  "manufacturers": [
+    { "id": "pcbway", "display_name": "PCBWay", "file": "pcbway.json" },
+    { "id": "pikkolo", "display_name": "Pikkolo Assembly", "file": "pikkolo.json" }
+  ]
+}

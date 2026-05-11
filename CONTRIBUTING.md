@@ -1,39 +1,145 @@
+# Contributing to Trace
 
-## Joining the development team
+Thank you for your interest in contributing to Trace! We welcome contributions from the community.
 
-To begin contributing to KiCad, you should first join the [KiCad Developers mailing list](https://groups.google.com/a/kicad.org/g/devlist). This mailing list is used for announcements about development progress (milestones, deadlines, new releases, etc.), discussing the implementation of new features, and for asking general questions about the KiCad codebase.
+## Join Our Discord Community
 
-New developers are encouraged to start small with their contribution, and gradually work their way up to larger changes as they gain knowledge in the codebase. The development team labels issues in the [issue tracker](https://gitlab.com/kicad/code/kicad/-/issues) with "[starter](https://gitlab.com/kicad/code/kicad/-/issues?scope=all&utf8=%E2%9C%93&state=opened&label_name[]=starter)" when the issue or feature being requested is a good way for a new person to contribute to KiCad. Alternately, you can search through the issue tracker for any issues that look interesting and leave a comment saying you are interested in working on it. If you have any questions while working on these issues, please leave a comment in the issue with the question or comment so other developers can help you.
+**Discord is our primary community hub** for all discussions, questions, and announcements:
 
-Developing any larger change, such as a new feature, should be discussed on the developers mailing list before substantial work is done. This allows for input from the lead development team to ensure the feature is aligned with the current development goals, and to prevent duplication of work by contributors.
+- **[Join us on Discord](https://discord.gg/UNUvQxneCr)** - This is where we discuss features, answer questions, and make announcements about development progress (milestones, deadlines, new releases, etc.)
+- **Report bugs** - Share issues and get help from the community
+- **Discuss features** - Propose new ideas and discuss implementation
+- **Ask questions** - Get help with the codebase or development setup
+- **Stay updated** - Get notified about releases and important updates
 
+**For larger changes or new features, please discuss on Discord before starting substantial work.** This ensures alignment with development goals and prevents duplicate work.
 
-## Submitting merge requests
-KiCad welcomes contributions via merge requests on GitLab. Here are some tips to help make sure your contribution can be accepted quickly:
+## Important Notes
 
-### General Guidelines:
-1. Always create a new branch for merge requests instead of using your fork's master branch.
-2. Make sure your code submission follows the [KiCad Code Style Guide](https://dev-docs.kicad.org/en/rules-guidelines/code-style/), see below for some details.
-3. Make sure all User Interface changes follow the [User Interface Guidelines](https://dev-docs.kicad.org/en/rules-guidelines/ui/).
-4. If you are planning a large change or new feature, be sure to ask on the [developer mailing list](https://groups.google.com/a/kicad.org/g/devlist) before you begin your work to see if anyone else is working on it and to ensure that it fits into the overall development plans.
-5. Give merge requests a short and descriptive title that summarizes the major changes it contains. A longer description of the changes should be contained inside the description of the merge request.
+- **Trace is a fork of KiCad**: This project is based on the KiCad EDA software
+- **License**: All contributions must be compatible with GNU GPLv3
+- **Copyright**: By contributing, you agree to license your code under GPLv3
+- **Upstream**: Consider contributing improvements to [KiCad upstream](https://gitlab.com/kicad/code/kicad) when applicable
 
-### Code style and formatting
+## Getting Started
 
-Make sure to read the [KiCad Code Style Guide](https://dev-docs.kicad.org/en/rules-guidelines/code-style/) if you haven't already. You can use the `clang-format` tool to check many, but not all, of these style requirements. When you create a merge request, one of the CI pipeline steps will be to run a formatting check on your contribution. This automatic check is not always 100% correct. Some tips to interpreting the results of automatic format checks:
+Trace is a fork of KiCad, and we maintain compatibility with KiCad file formats and many of its architectural decisions. Developers familiar with KiCad will find the codebase familiar.
 
-1. Some of our formatting guidelines have exceptions, or only apply to certain situations. `clang-format` doesn't know about these nuances, so it will sometimes suggest that you make sweeping format changes to areas of a file near your code (even if you didn't change that code). Keep in mind Rule 7 of the style guide: when there is flexibility or doubt, follow the existing formatting of the file you are editing, rather than rigidly following `clang-format`.
+**New developers are encouraged to:**
+- Start small with contributions and gradually work up to larger changes
+- Check the [issue tracker](https://github.com/buildwithtrace/trace/issues) for issues labeled "good first issue"
+- Search through issues and leave a comment if you're interested in working on something
+- Ask questions in Discord or on the issue itself - other developers are happy to help!
 
-2. `clang-format` doesn't know about our desire for nice column-formatting where applicable (Rule 4.1.2)
+**For larger changes:**
+- Discuss on Discord or GitHub Discussions before substantial work
+- This allows input from the development team to ensure alignment with goals
+- Prevents duplication of work by contributors
 
-3. `clang-format` doesn't support our preferred lambda format (Rule 4.10)
+## Development Guidelines
 
-4. `clang-format` suggests that you alphabetize any `#include` directives at the top of a file. Please do not do this for existing files unless you are making sweeping changes to the list of `#include`s anyway.
+### Code Style
 
-### GitLab settings
+Make sure to read the [Trace Code Style Guide](https://docs.buildwithtrace.com/contributing/code-style/), which is based on the KiCad style guide with some modifications. You can use the `clang-format` tool to check many, but not all, of these style requirements. When you create a pull request, one of the CI pipeline steps will be to run a formatting check on your contribution.
 
-Please configure your personal fork of the KiCad project with the following settings:
+**Important notes about automatic format checks:**
 
-1. Settings->General->Visibility->CI/CD should be enabled and set to "Everyone with access".
-2. Settings->CI/CD->General pipelines Timeout should be set to 3 hours or longer.
-3. The "Allow commits from members who can merge to the target branch." option check box at the bottom of your merge request must be checked.
+1. Some of our formatting guidelines have exceptions, or only apply to certain situations. `clang-format` doesn't know about these nuances, so it will sometimes suggest that you make sweeping format changes to areas of a file near your code (even if you didn't change that code). **When there is flexibility or doubt, follow the existing formatting of the file you are editing, rather than rigidly following `clang-format`.**
+
+2. `clang-format` doesn't know about our desire for nice column-formatting where applicable.
+
+3. `clang-format` doesn't support our preferred lambda format.
+
+**Key style points:**
+1. Always create a new branch for PRs instead of using your fork's main branch
+2. Follow the Trace Code Style Guide for C++ code
+3. Make sure UI changes follow the [User Interface Guidelines](https://docs.buildwithtrace.com/contributing/ui/)
+4. When in doubt, follow the existing formatting of the file you're editing
+
+### Pull Request Process
+
+Trace welcomes contributions via pull requests on GitHub. Here are some tips to help make sure your contribution can be accepted quickly:
+
+1. **Fork the repository** and create a feature branch (never use your fork's master branch)
+2. **Make your changes** with clear, atomic commits
+3. **Test thoroughly** - build and run on your platform
+4. **Write a clear PR description** - Give pull requests a short and descriptive title that summarizes the major changes. A longer description of the changes should be contained inside the description of the pull request.
+5. **Reference issues** if your PR fixes or relates to any
+6. **Check GitHub settings** - Make sure "Allow edits by maintainers" is checked at the bottom of your pull request
+
+### Commit Messages
+
+Use clear, descriptive commit messages:
+```
+fix: resolve crash when opening large schematics
+feat: add AI component suggestion for resistor values
+docs: update build instructions for macOS
+```
+
+### Testing
+
+- **Build locally** before submitting
+- **Test your changes** in the UI
+- **Check for regressions** in related features
+- **Include test files** if applicable (example schematics/PCBs)
+
+## Types of Contributions
+
+### Bug Fixes
+Found a bug? Please:
+1. Check if it exists in upstream KiCad too
+2. If KiCad bug: consider reporting there as well
+3. If Trace-specific: fix it and submit a PR
+
+### Features
+New features should:
+- Fit Trace's vision of AI-enhanced PCB design
+- Not break existing functionality
+- Be documented in code comments
+- Consider UI/UX implications
+
+### Documentation
+Help improve:
+- Code comments and docstrings
+- README and guides
+- Build instructions
+- API documentation
+
+## AI Features
+
+If contributing to Trace's AI integration (`trace/` directory):
+- Test with the backend API (contact us for dev access)
+- Follow patterns in existing AI tool code
+- Consider token usage and rate limits
+- Document any new AI capabilities
+
+## License & Copyright
+
+By submitting a contribution, you certify that:
+- You wrote the code, or have the right to submit it
+- You agree to license your contribution under GPLv3
+- You understand Trace is open source (others can use/modify your code)
+- Your contribution doesn't violate any patents or copyrights
+
+Add your copyright to files you substantially modify:
+```cpp
+* Copyright (C) 2026 Your Name <your@email.com>
+* Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+```
+
+## Getting Help
+
+- **Discord**: [Join our community](https://discord.gg/p4TtrQf9) - Primary place for questions, discussions, and help
+- **GitHub Issues**: https://github.com/buildwithtrace/trace/issues - For bug reports and feature requests
+- **Email**: hello@buildwithtrace.com - For private inquiries
+- **KiCad Docs** (for core EDA features): https://docs.kicad.org/
+
+## Code of Conduct
+
+Be respectful, constructive, and professional. We want Trace's development community to be welcoming to all contributors.
+
+---
+
+**Thank you for contributing to Trace!**
+
+Every contribution, whether code, documentation, or bug reports, helps make Trace better for everyone.

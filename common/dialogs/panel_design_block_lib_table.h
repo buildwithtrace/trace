@@ -43,6 +43,7 @@ public:
     bool TransferDataFromWindow() override;
 
     void AddTable( LIBRARY_TABLE* table, const wxString& aTitle, bool aClosable );
+    void OpenTable( const std::shared_ptr<LIBRARY_TABLE>& table, const wxString& aTitle );
 
 private:
     /**
@@ -60,6 +61,7 @@ private:
     void onMigrateLibraries( wxCommandEvent& event ) override;
     void onSizeGrid( wxSizeEvent& event ) override;
 
+    void onNotebookPageChangeRequest( wxAuiNotebookEvent& aEvent );
     void onNotebookPageCloseRequest( wxAuiNotebookEvent& aEvent );
 
     void adjustPathSubsGridColumns( int aWidth );
@@ -78,10 +80,13 @@ private:
 private:
     PROJECT*                    m_project;
     DIALOG_EDIT_LIBRARY_TABLES* m_parent;
+    bool                        m_suppressNotebookPageEvents;
     wxArrayString               m_pluginChoices;
 
     wxString                    m_lastProjectLibDir;   //< Transient (unsaved) last browsed folder when adding a
                                                        // project level library.
+
+    std::vector<std::shared_ptr<LIBRARY_TABLE>> m_nestedTables;
 
     std::map<DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_T, IO_BASE::IO_FILE_DESC> m_supportedDesignBlockFiles;
 };

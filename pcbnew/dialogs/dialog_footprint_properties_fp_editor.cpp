@@ -27,6 +27,7 @@
 #include "dialog_footprint_properties_fp_editor.h"
 
 #include <wx/debug.h>
+#include <wx/tokenzr.h>
 
 #include <3d_rendering/opengl/3d_model.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
@@ -41,6 +42,7 @@
 #include <filename_resolver.h>
 #include <footprint.h>
 #include <footprint_edit_frame.h>
+#include <pad.h>
 #include <footprint_editor_settings.h>
 #include <grid_layer_box_helpers.h>
 #include <layer_utils.h>
@@ -57,6 +59,7 @@
 #include <widgets/std_bitmap_button.h>
 #include <widgets/text_ctrl_eval.h>
 #include <widgets/wx_grid.h>
+#include <zone.h>
 
 #include <footprint_library_adapter.h>
 #include <project_pcb.h>
@@ -160,8 +163,7 @@ DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR( FO
         m_initialized( false ),
         m_netClearance( aParent, m_NetClearanceLabel, m_NetClearanceCtrl, m_NetClearanceUnits ),
         m_solderMask( aParent, m_SolderMaskMarginLabel, m_SolderMaskMarginCtrl, m_SolderMaskMarginUnits ),
-        m_solderPaste( aParent, m_SolderPasteMarginLabel, m_SolderPasteMarginCtrl, m_SolderPasteMarginUnits ),
-        m_solderPasteRatio( aParent, m_PasteMarginRatioLabel, m_PasteMarginRatioCtrl, m_PasteMarginRatioUnits )
+        m_solderPaste( aParent, m_SolderPasteMarginLabel, m_SolderPasteMarginCtrl, m_SolderPasteMarginUnits )
 {
     SetEvtHandlerEnabled( false );
 
@@ -261,10 +263,17 @@ DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR( FO
         SetInitialFocus( m_NetClearanceCtrl );
     }
 
-    m_solderPaste.SetNegativeZero();
+    // Update label text and tooltip for combined offset + ratio field
+    m_SolderPasteMarginLabel->SetLabel( _( "Solder paste clearance:" ) );
+    m_SolderPasteMarginLabel->SetToolTip( _( "Local solder paste clearance for this footprint.\n"
+                                             "Enter an absolute value (e.g., -0.1mm), a percentage "
+                                             "(e.g., -5%), or both (e.g., -0.1mm - 5%).\n"
+                                             "If blank, the global value is used." ) );
 
-    m_solderPasteRatio.SetUnits( EDA_UNITS::PERCENT );
-    m_solderPasteRatio.SetNegativeZero();
+    // Hide the old ratio controls - they're no longer needed
+    m_PasteMarginRatioLabel->Show( false );
+    m_PasteMarginRatioCtrl->Show( false );
+    m_PasteMarginRatioUnits->Show( false );
 
     // Configure button logos
     m_bpAdd->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
@@ -331,7 +340,11 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
 
     // Footprint Fields
     for( PCB_FIELD* field : m_footprint->GetFields() )
+    {
+        wxCHECK2( field, continue );
+
         m_fields->push_back( *field );
+    }
 
     // Notify the grid
     wxGridTableMessage tmsg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_APPENDED, m_fields->GetNumberRows() );
@@ -405,15 +418,8 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataToWindow()
     else
         m_solderMask.SetValue( wxEmptyString );
 
-    if( m_footprint->GetLocalSolderPasteMargin().has_value() )
-        m_solderPaste.SetValue( m_footprint->GetLocalSolderPasteMargin().value() );
-    else
-        m_solderPaste.SetValue( wxEmptyString );
-
-    if( m_footprint->GetLocalSolderPasteMarginRatio().has_value() )
-        m_solderPasteRatio.SetDoubleValue( m_footprint->GetLocalSolderPasteMarginRatio().value() * 100.0 );
-    else
-        m_solderPasteRatio.SetValue( wxEmptyString );
+    m_solderPaste.SetOffsetValue( m_footprint->GetLocalSolderPasteMargin() );
+    m_solderPaste.SetRatioValue( m_footprint->GetLocalSolderPasteMarginRatio() );
 
     m_noCourtyards->SetValue( m_footprint->AllowMissingCourtyard() );
     m_allowBridges->SetValue( m_footprint->AllowSolderMaskBridges() );
@@ -541,7 +547,8 @@ LSET DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::getCustomLayersFromControls() const
     }
     else
     {
-        userLayers |= LSET{ F_Cu, In1_Cu, B_Cu };
+        userLayers |= LSET{ F_Cu, B_Cu };
+        userLayers |= LSET::InternalCuMask();
         userLayers |= LSET::UserDefinedLayersMask( 4 );
     }
 
@@ -730,6 +737,8 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
     // Find any files referenced in the old fields that are not in the new fields
     for( PCB_FIELD* field : m_footprint->GetFields() )
     {
+        wxCHECK2( field, continue );
+
         if( field->GetText().StartsWith( FILEEXT::KiCadUriPrefix ) )
         {
             if( files.find( field->GetText() ) == files.end() )
@@ -833,15 +842,8 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
     else
         m_footprint->SetLocalSolderMaskMargin( m_solderMask.GetValue() );
 
-    if( m_solderPaste.IsNull() )
-        m_footprint->SetLocalSolderPasteMargin( {} );
-    else
-        m_footprint->SetLocalSolderPasteMargin( m_solderPaste.GetValue() );
-
-    if( m_solderPasteRatio.IsNull() )
-        m_footprint->SetLocalSolderPasteMarginRatio( {} );
-    else
-        m_footprint->SetLocalSolderPasteMarginRatio( m_solderPasteRatio.GetDoubleValue() / 100.0 );
+    m_footprint->SetLocalSolderPasteMargin( m_solderPaste.GetOffsetValue() );
+    m_footprint->SetLocalSolderPasteMarginRatio( m_solderPaste.GetRatioValue() );
 
     switch( m_ZoneConnectionChoice->GetSelection() )
     {
@@ -864,20 +866,39 @@ bool DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::TransferDataFromWindow()
 
     m_footprint->SetDuplicatePadNumbersAreJumpers( m_cbDuplicatePadsAreJumpers->GetValue() );
 
-    std::vector<std::set<wxString>>& jumpers = m_footprint->JumperPadGroups();
-    jumpers.clear();
+    std::set<wxString> availablePads;
+
+    for( const PAD* pad : m_footprint->Pads() )
+        availablePads.insert( pad->GetNumber() );
+
+    std::vector<std::set<wxString>> newJumpers;
 
     for( int ii = 0; ii < m_jumperGroupsGrid->GetNumberRows(); ++ii )
     {
         wxStringTokenizer tokenizer( m_jumperGroupsGrid->GetCellValue( ii, 0 ), ", \t\r\n", wxTOKEN_STRTOK );
-        std::set<wxString>& group = jumpers.emplace_back();
+        std::set<wxString>& group = newJumpers.emplace_back();
 
         while( tokenizer.HasMoreTokens() )
         {
-            if( wxString token = tokenizer.GetNextToken(); !token.IsEmpty() )
-                group.insert( token );
+            wxString token = tokenizer.GetNextToken();
+
+            if( token.IsEmpty() )
+                continue;
+
+            if( !availablePads.count( token ) )
+            {
+                wxString msg;
+                msg.Printf( _( "Pad '%s' in jumper pad group %d does not exist in this footprint." ),
+                             token, ii + 1 );
+                DisplayErrorMessage( this, msg );
+                return false;
+            }
+
+            group.insert( token );
         }
     }
+
+    m_footprint->JumperPadGroups() = std::move( newJumpers );
 
     // Copy the models from the panel to the footprint
     std::vector<FP_3DMODEL>& panelList = m_3dPanel->GetModelList();
@@ -977,7 +998,7 @@ std::pair<int, int> DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::onLayerGridRowAddUser
     aGrid.ProcessTableMessage( msg );
     OnModify();
 
-    return { aGridTable.size() - 1, 0 };
+    return { aGridTable.size() - 1, -1 };
 }
 
 

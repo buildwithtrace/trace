@@ -1,7 +1,8 @@
 {
   "ERC": {
     "crossprobe": true,
-    "scroll_on_crossprobe": true
+    "scroll_on_crossprobe": true,
+    "show_all_errors": false
   },
   "annotation": {
     "automatic": true,
@@ -9,6 +10,7 @@
     "method": 0,
     "options": 0,
     "recursive": true,
+    "regroup_units": false,
     "scope": 0,
     "sort_order": 0
   },
@@ -48,10 +50,6 @@
     "design_blocks_panel_float_height": -1,
     "design_blocks_panel_float_width": -1,
     "design_blocks_show": false,
-    "remote_symbol_panel_docked_width": -1,
-    "remote_symbol_panel_float_height": -1,
-    "remote_symbol_panel_float_width": -1,
-    "remote_symbol_show": false,
     "float_net_nav_panel": false,
     "hierarchy_panel_docked_height": -1,
     "hierarchy_panel_docked_width": -1,
@@ -72,6 +70,10 @@
     "net_nav_search_mode_wildcard": true,
     "properties_panel_width": -1,
     "properties_splitter_proportion": 0.5,
+    "remote_symbol_panel_docked_width": -1,
+    "remote_symbol_panel_float_height": -1,
+    "remote_symbol_panel_float_width": -1,
+    "remote_symbol_show": false,
     "schematic_hierarchy_float": false,
     "search_panel_dock_direction": 3,
     "search_panel_height": -1,
@@ -174,6 +176,7 @@
     "scope": 0,
     "selection_mode": 0,
     "sidebar_collapsed": false,
+    "variant_sash_pos": 500,
     "width": 0
   },
   "find_replace": {
@@ -342,13 +345,24 @@
     "actions": []
   },
   "printing": {
+    "as_item_checkboxes": false,
     "background": false,
     "color_theme": "",
+    "drill_marks": 1,
+    "edge_cuts_on_all_pages": true,
     "layers": [],
+    "mirror": false,
     "monochrome": true,
+    "pagination": 1,
     "scale": 1.0,
     "title_block": false,
     "use_theme": false
+  },
+  "remote_symbols": {
+    "add_to_global_table": false,
+    "destination_dir": "${KIPRJMOD}/RemoteLibrary",
+    "library_prefix": "remote",
+    "user_ids": {}
   },
   "search_pane": {
     "search_hidden_fields": true,

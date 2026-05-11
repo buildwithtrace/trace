@@ -34,6 +34,7 @@
 #include <versionhelpers.h>
 #include <iostream>
 #include <cstdio>
+#include <trace_helpers.h>
 
 #if defined( _MSC_VER )
 #include <werapi.h>     // issues on msys2
@@ -105,12 +106,17 @@ bool KIPLATFORM::APP::Init()
     // Moves the CWD to the end of the search list for spawning processes
     SetSearchPathMode( BASE_SEARCH_PATH_ENABLE_SAFE_SEARCHMODE | BASE_SEARCH_PATH_PERMANENT );
 
+    // Initialize trace manager early for category setup
+    TRACE_MANAGER::Instance();
+
+#ifndef KICAD_DIAGNOSTIC_LOGGING
     // In order to support GUI and CLI
     // Let's attach to console when it's possible, or allocate if requested.
     AttachConsole( wxGetEnv( wxS( "KICAD_ALLOC_CONSOLE" ), nullptr ) );
+#endif
 
-    // It may be useful to log up to traces in a console, but in Release builds the log level changes to Info
-    // Also we have to force the active target to stderr or else it goes to the void
+    // wxLog trace setup is now handled centrally by TRACE_MANAGER::InitLogging()
+    // Support legacy env var for explicit stderr logging
     bool forceLog = wxGetEnv( wxS( "KICAD_FORCE_CONSOLE_TRACE" ), nullptr );
 
     if( forceLog )

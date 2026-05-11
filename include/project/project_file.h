@@ -245,6 +245,12 @@ public:
 
     struct IP2581_BOM             m_IP2581Bom;      /// IPC-2581 BOM settings
 
+    /**
+     * Manufacturing params
+     */
+
+    wxString m_PreferredManufacturer;  /// Preferred manufacturer slug (e.g. "pcbway", "pikkolo")
+
 private:
     /**
      * Schema version 2: Bump for KiCad 9 layer numbering changes.

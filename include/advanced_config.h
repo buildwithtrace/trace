@@ -452,15 +452,6 @@ public:
     bool m_HideVersionFromTitle;
 
     /**
-     * Enable showing schematic repair output.
-     *
-     * Setting name: "ShowRepairSchematic"
-     * Valid values: 0 or 1
-     * Default value: 0
-     */
-    bool m_ShowRepairSchematic;
-
-    /**
      * Shows debugging event counters in various places.
      *
      * Setting name: "ShowEventCounters"
@@ -833,14 +824,6 @@ public:
     int m_GitIconRefreshInterval;
 
     /**
-     * Enable the UI to configure toolbars.
-     *
-     * Setting name: "ConfigurableToolbars"
-     * Default value: false
-     */
-    bool m_ConfigurableToolbars;
-
-    /**
      * Set the maximum number of characters that can be pasted without warning.  Long
      * text strings can cause the application to freeze for a long time and are probably
      * not what the user intended.
@@ -860,6 +843,18 @@ public:
     int m_PNSProcessClusterTimeout;
 
     /**
+     * Timeout for the PNS router's followBranch path search, in milliseconds.
+     *
+     * This limits how long the router will spend searching for the longest path
+     * through a complex track topology before returning the best path found so far.
+     *
+     * Setting name: "FollowBranchTimeoutMs"
+     * Valid values: 50 to 5000
+     * Default value: 500
+     */
+    int m_FollowBranchTimeout;
+
+    /**
      * Skip importing component bodies when importing some format files, such as Altium.
      *
      * This can be used to drastically speed up the import when testing
@@ -870,6 +865,18 @@ public:
      * Default value: 0
      */
     bool m_ImportSkipComponentBodies;
+
+    /**
+     * Skip the layer mapping step when importing.
+     *
+     * This can be convenient to speed up imports when testing other aspects of the import,
+     * as you don't need to interact with the layer mapping dialog.
+     *
+     * Setting name: "ImportSkipLayerMapping"
+     * Valid values: 0 or 1
+     * Default value: 0
+     */
+    bool m_ImportSkipLayerMapping;
 
     /**
      * Screen DPI setting for display calculations.
@@ -884,22 +891,12 @@ public:
     int m_ScreenDPI;
 
     /**
-     * Enable access to the variants user interface.
-     *
-     * Setting name: "EnableVariantsUI"
-     * Valid values: 0 or 1
-     * Default value: 0
-     */
-    bool m_EnableVariantsUI;
-
-    /**
      * Enable use Aui Perspective to store/load geometry of main editor frames.
      * the saved prms are position/size of toolbars and some other widgets
-     * Currently (october 12 2025) use only to test this code, nom sutbale for users
      *
      * Setting name: "EnableUseAuiPerspective"
      * Valid values: 0 or 1
-     * Default value: 0
+     * Default value: 1
      */
     bool m_EnableUseAuiPerspective;
 
@@ -915,6 +912,80 @@ public:
      * Default value: 300 (5 minutes)
      */
     int m_HistoryLockStaleTimeout;
+
+    /**
+     * PADS text height scale factor for PCB imports.
+     * PADS text height includes leading/descender; multiply by this to get
+     * character cell height.
+     *
+     * Setting name: "PadsPcbTextHeightScale"
+     * Valid values: 0.1 to 1.0
+     * Default value: 0.69
+     */
+    double m_PadsPcbTextHeightScale;
+
+    /**
+     * PADS text width scale factor for PCB imports.
+     *
+     * Setting name: "PadsPcbTextWidthScale"
+     * Valid values: 0.1 to 1.0
+     * Default value: 0.64
+     */
+    double m_PadsPcbTextWidthScale;
+
+    /**
+     * PADS text height scale factor for schematic imports.
+     *
+     * Setting name: "PadsSchTextHeightScale"
+     * Valid values: 0.1 to 1.0
+     * Default value: 0.50
+     */
+    double m_PadsSchTextHeightScale;
+
+    /**
+     * PADS text width scale factor for schematic imports.
+     *
+     * Setting name: "PadsSchTextWidthScale"
+     * Valid values: 0.1 to 1.0
+     * Default value: 0.46
+     */
+    double m_PadsSchTextWidthScale;
+
+    /**
+     * PADS text anchor offset in nanometers for PCB imports.
+     * Compensates for the difference between PADS and KiCad text anchor positions.
+     *
+     * Setting name: "PadsTextAnchorOffsetNm"
+     * Valid values: 0 to 1000000
+     * Default value: 350000
+     */
+    int m_PadsTextAnchorOffsetNm;
+
+    /**
+     * Minimum object size in nanometers for PCB imports.
+     * Any dimension (pad size, track width, via size, circle radius) that would be
+     * smaller than this value is clamped to it, preventing zero-size objects that
+     * can crash the renderer or cause division-by-zero in DRC.
+     *
+     * Setting name: "PcbImportMinObjectSizeNm"
+     * Valid values: 100 to 1000000
+     * Default value: 1000
+     */
+    int m_PcbImportMinObjectSizeNm;
+
+    /**
+     * Enable iterative zone filling to handle isolated islands in higher priority zones.
+     *
+     * When enabled, zones are filled in priority batches. After each batch, isolated islands
+     * are identified and removed, then lower priority zones are refilled to occupy the newly
+     * available space. This fixes issue 21746 where lower priority zones incorrectly knock
+     * out areas that should fill after higher priority zone islands are removed.
+     *
+     * Setting name: "ZoneFillIterativeRefill"
+     * Valid values: true or false
+     * Default value: true
+     */
+    bool m_ZoneFillIterativeRefill;
 
     wxString m_traceMasks; ///< Trace masks for wxLogTrace, loaded from the config file.
     ///@}

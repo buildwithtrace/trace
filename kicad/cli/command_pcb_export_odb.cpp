@@ -53,6 +53,8 @@ CLI::PCB_EXPORT_ODB_COMMAND::PCB_EXPORT_ODB_COMMAND() :
             .default_value( std::string( "mm" ) )
             .help( std::string( "Units" ) )
             .choices( "mm", "in" );
+
+    addVariantsArg();
 }
 
 
@@ -64,6 +66,9 @@ int CLI::PCB_EXPORT_ODB_COMMAND::doPerform( KIWAY& aKiway )
     job->SetConfiguredOutputPath( m_argOutput );
     job->m_drawingSheet = m_argDrawingSheet;
     job->SetVarOverrides( m_argDefineVars );
+
+    if( !m_argVariantNames.empty() )
+        job->m_variant = m_argVariantNames.front();
 
     if( !wxFile::Exists( job->m_filename ) )
     {

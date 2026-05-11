@@ -38,6 +38,8 @@
 #include <settings/color_settings.h>
 #include <connection_graph.h>
 #include <string_utils.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 
 SCH_JUNCTION::SCH_JUNCTION( const VECTOR2I& aPosition, int aDiameter, SCH_LAYER_ID aLayer ) :
@@ -256,6 +258,9 @@ void SCH_JUNCTION::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPT
 
     if( color == COLOR4D::UNSPECIFIED )
         color = settings->GetLayerColor( GetLayer() );
+
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
 
     aPlotter->SetColor( color );
 

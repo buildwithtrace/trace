@@ -1,16 +1,22 @@
+# Add all the warnings to the files
+if( COMPILER_SUPPORTS_WARNINGS )
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${WARN_FLAGS_CXX}")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${WARN_FLAGS_C}")
+endif()
+
 add_compile_definitions( PCBNEW )
 
 add_subdirectory(connectivity)
 
 add_subdirectory(router)
 
-# psnrouter depends on make_lexer outputs in common (bug #1285878 )
+#psnrouter depends on make_lexer outputs in common( bug #1285878 )
 add_dependencies( pnsrouter pcbcommon )
 
 
 file( MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/swig )
 
-# Infrequently needed headers go at end of search paths, append to INC_AFTER
+#Infrequently needed headers go at end of search paths, append to INC_AFTER
 set( INC_AFTER ${INC_AFTER} python/scripting )
 set( INC_AFTER ${INC_AFTER} ${CMAKE_SOURCE_DIR}/common/swig )
 
@@ -69,6 +75,7 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_exchange_footprints_base.cpp
     dialogs/dialog_export_2581.cpp
     dialogs/dialog_export_2581_base.cpp
+    dialogs/dialog_send_to_manufacturer.cpp
     dialogs/dialog_export_idf.cpp
     dialogs/dialog_export_idf_base.cpp
     dialogs/dialog_export_step.cpp
@@ -108,6 +115,7 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_reference_image_properties_base.cpp
     dialogs/dialog_import_settings.cpp
     dialogs/dialog_import_settings_base.cpp
+    dialogs/dialog_items_list.cpp
     dialogs/dialog_imported_layers_base.cpp
     dialogs/dialog_map_layers.cpp
     dialogs/dialog_rule_area_properties.cpp
@@ -174,6 +182,8 @@ set( PCBNEW_DIALOGS
     dialogs/panel_fp_editor_field_defaults_base.cpp
     dialogs/panel_fp_editor_graphics_defaults.cpp
     dialogs/panel_fp_editor_graphics_defaults_base.cpp
+    dialogs/panel_fp_user_layer_names.cpp
+    dialogs/panel_fp_user_layer_names_base.cpp
     dialogs/panel_fp_properties_3d_model.cpp
     dialogs/panel_fp_properties_3d_model_base.cpp
     dialogs/panel_pcbnew_action_plugins.cpp
@@ -259,9 +269,8 @@ set( PCBNEW_EXPORTERS
     exporters/u3d/writer.cpp
     exporters/exporter_vrml.cpp
     exporters/place_file_exporter.cpp
-    exporters/gen_drill_report_files.cpp
-    exporters/gendrill_Excellon_writer.cpp
-    exporters/gendrill_file_writer_base.cpp
+    exporters/gendrill_excellon_writer.cpp
+    exporters/gendrill_writer_base.cpp
     exporters/gendrill_gerber_writer.cpp
     exporters/gerber_jobfile_writer.cpp
     exporters/gerber_placefile_writer.cpp
@@ -310,6 +319,38 @@ set( PCBNEW_DRC_SRCS
     drc/drc_test_provider_diff_pair_coupling.cpp
     drc/drc_test_provider_sliver_checker.cpp
     drc/drc_test_provider_text_mirroring.cpp
+
+    drc/rule_editor/drc_rule_editor_utils.cpp
+    drc/rule_editor/drc_re_panel_matcher.cpp
+    drc/rule_editor/drc_re_rule_loader.cpp
+    drc/rule_editor/drc_re_rule_saver.cpp
+    drc/rule_editor/dialog_drc_rule_editor.cpp
+    drc/rule_editor/panel_drc_rule_editor_base.cpp
+    drc/rule_editor/panel_drc_rule_editor.cpp
+    drc/rule_editor/drc_re_bitmap_overlay_panel.cpp
+    drc/rule_editor/drc_re_object_selector_panel.cpp
+    drc/rule_editor/drc_re_overlay_field.cpp
+    drc/rule_editor/drc_re_routing_width_overlay_panel.cpp
+    drc/rule_editor/drc_re_rtg_diff_pair_overlay_panel.cpp
+    drc/rule_editor/drc_re_min_txt_ht_th_overlay_panel.cpp
+    drc/rule_editor/drc_re_abs_length_two_overlay_panel.cpp
+    drc/rule_editor/drc_re_matched_length_diff_pair_overlay_panel.cpp
+    drc/rule_editor/drc_re_via_style_overlay_panel.cpp
+    drc/rule_editor/drc_re_numeric_input_overlay_panel.cpp
+    drc/rule_editor/drc_re_bool_input_overlay_panel.cpp
+    drc/rule_editor/drc_re_vias_under_smd_overlay_panel.cpp
+    drc/rule_editor/drc_re_permitted_layers_overlay_panel.cpp
+    drc/rule_editor/drc_re_allowed_orientation_overlay_panel.cpp
+    drc/rule_editor/drc_re_condition_row_panel.cpp
+    drc/rule_editor/drc_re_condition_group_panel.cpp
+    drc/rule_editor/drc_re_custom_rule_panel.cpp
+    drc/rule_editor/panel_drc_group_header_base.cpp
+    drc/rule_editor/panel_drc_group_header.cpp
+    drc/rule_editor/drc_re_validator_checkbox_list.cpp
+    drc/rule_editor/drc_re_validator_combo_ctrl.cpp
+    drc/rule_editor/drc_re_validator_min_max_ctrl.cpp
+    drc/rule_editor/drc_re_validator_min_preferred_max_ctrl.cpp
+    drc/rule_editor/drc_re_validator_numeric_ctrl.cpp
     )
 
 set( PCBNEW_NETLIST_SRCS
@@ -378,6 +419,7 @@ set( PCBNEW_CLASS_SRCS
     pcb_layer_box_selector.cpp
     pcb_edit_frame.cpp
     pcb_plotter.cpp
+    pcb_signal_path_tracer.cpp
     pcbnew_config.cpp
     pcbnew_jobs_handler.cpp
     pcbnew_printout.cpp
@@ -435,6 +477,7 @@ set( PCBNEW_CLASS_SRCS
     tools/generator_tool.cpp
     tools/generator_tool_pns_proxy.cpp
     tools/multichannel_tool.cpp
+    tools/drc_rule_editor_tool.cpp
 
     footprint_preview_panel.cpp
     footprint_tree_pane.cpp
@@ -452,6 +495,7 @@ set( PCBNEW_CLASS_SRCS
     widgets/net_inspector_panel.cpp
     widgets/pcb_net_inspector_panel.cpp
     widgets/vertex_editor_pane.cpp
+    widgets/ai_chat_panel.cpp
 
     component_classes/component_class.cpp
     component_classes/component_class_cache_proxy.cpp
@@ -471,7 +515,7 @@ set( PCBNEW_SRCS
     ${PCBNEW_GIT_SRCS}
     )
 
-# extra sources from common
+#extra sources from common
 set( PCBNEW_COMMON_SRCS
     )
 
@@ -491,22 +535,11 @@ if( KICAD_IPC_API )
         )
 endif()
 
-
-if( COMPILER_SUPPORTS_WARNINGS )
-    # Only compile our source files with the warnings, since the SWIG generated
-    # files contain a lot of warnings, we just ignore it.
-    set_source_files_properties(
-        ${PCBNEW_SRCS} ${PCBNEW_COMMON_SRCS} ${PCBNEW_SCRIPTING_PYTHON_HELPERS}
-        PROPERTIES COMPILE_FLAGS ${WARN_FLAGS_CXX}
-    )
-endif()
-
-
-# Disable all warnings for the SWIG file
+#Disable all warnings for the SWIG file
 if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
     if( MSYS )
-        # For some reason the .cxx file generated by SWIG cannot be linked if compiled with debug options:
-        # it creates a *lot* of not found symbols. So compile it with release mode
+#For some reason the.cxx file generated by SWIG cannot be linked if compiled with debug options:
+#it creates a* lot* of not found symbols.So compile it with release mode
         set_source_files_properties( pcbnew_wrap.cxx PROPERTIES COMPILE_FLAGS "-O2 -w" )
     else()
         set_source_files_properties( pcbnew_wrap.cxx PROPERTIES COMPILE_FLAGS "-w" )
@@ -533,22 +566,22 @@ if( DEBUG )
     set( SWIG_FLAGS ${SWIG_FLAGS} -DDEBUG )
 endif()
 
-# collect CFLAGS , and pass them to swig later
+#collect CFLAGS, and pass them to swig later
 get_directory_property( DirDefs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} COMPILE_DEFINITIONS )
 foreach( d ${DirDefs} )
     set( SWIG_FLAGS ${SWIG_FLAGS} -D${d} )
 endforeach()
 
 
-# We deliberately do not use the CMake support for swig here,
-# i.e. swig_add_footprint()) because we want full control.
+#We deliberately do not use the CMake support for swig here,
+#i.e.swig_add_footprint() ) because we want full       control.
 
-# Avoid threading in SWIG (breaks threads in pcbnew)
+#Avoid threading in SWIG( breaks threads in pcbnew )
 set( SWIG_OPTS -python -c++ -nothreads -fastdispatch -fvirtual )
 
 set( SWIG_OPTS ${SWIG_OPTS} -outdir ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/ ${SWIG_FLAGS} )
 
-# Avoid "nothing known about base class" warning output
+#Avoid "nothing known about base class" warning output
 set( SWIG_OPTS ${SWIG_OPTS} -w401 -w402 )
 
 if( EXISTS ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/doxygen-xml )
@@ -571,11 +604,11 @@ add_custom_command( OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/pcb
     COMMAND ${SWIG_EXECUTABLE}
         ${SWIG_OPTS} -MMD -MF ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/pcbnew_wrap.d -MT pcbnew/pcbnew_wrap.cxx -o ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/pcbnew_wrap.cxx ${CMAKE_SOURCE_DIR}/pcbnew/python/swig/pcbnew.i
 
-    # was needed only with SWIG version < 4 to disable a python section "def swig_import_helper()"
-    # found in pcbnew.py but not existing in SWIG version >= 4
-    # So it is left here for documentation purpose
-    #COMMAND ${PYTHON_EXECUTABLE}
-    #    ${CMAKE_SOURCE_DIR}/tools/build/fix_swig_imports.py ${CMAKE_CURRENT_BINARY_DIR}/pcbnew.py
+#was needed only with SWIG version < 4 to disable a python section "def swig_import_helper()"
+#found in pcbnew.py but not existing in SWIG version >= 4
+#So it is left                               here for documentation purpose
+#COMMAND ${ PYTHON_EXECUTABLE }
+#${ CMAKE_SOURCE_DIR } / tools / build / fix_swig_imports.py ${ CMAKE_CURRENT_BINARY_DIR } / pcbnew.py
 
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     )
@@ -586,11 +619,11 @@ endif()
 
 
 ###
-# Doxygen python documentation
+#Doxygen python documentation
 ###
 
 if( DOXYGEN_FOUND )
-    # create XML files from doxygen parsing
+#create XML files from doxygen parsing
     add_custom_target( doxygen-python-xml
         ${CMAKE_COMMAND} -E remove_directory doxygen-python-xml
         COMMAND SOURCES_DIR=${CMAKE_SOURCE_DIR} ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile_xml
@@ -601,7 +634,7 @@ if( DOXYGEN_FOUND )
 
     add_dependencies( doxygen-python-xml version_header )
 
-    # create .i files from XML doxygen parsing, docstrings.i will include all of them
+#create.i files from XML doxygen parsing, docstrings.i will include all of them
     add_custom_target( xml-to-docstrings
         COMMAND ${CMAKE_COMMAND} -E remove_directory docstrings
         COMMAND ${CMAKE_COMMAND} -E make_directory docstrings
@@ -614,16 +647,16 @@ if( DOXYGEN_FOUND )
 
     add_dependencies( xml-to-docstrings doxygen-python-xml )
 
-    # The sources to give to the Python Doxygen target
+#The sources to give to the Python Doxygen target
     set( DOXYGEN_PYTHON_SOURCES
         ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/pcbnew.py
         ${CMAKE_CURRENT_SOURCE_DIR}/${KICMAKE_CFG_INTDIR}/python/plugins/FootprintWizardBase.py
         ${CMAKE_CURRENT_SOURCE_DIR}/${KICMAKE_CFG_INTDIR}/python/plugins/PadArray.py )
 
-    # The Doxyfile expects a space-separated list in the env var
+#The Doxyfile expects a space - separated list in the env var
     string(REPLACE ";" " " DOXYGEN_PYTHON_SOURCES_STR "${DOXYGEN_PYTHON_SOURCES}")
 
-    # Create doxygen-python html
+#Create doxygen - python html
     add_custom_target( doxygen-python
         ${CMAKE_COMMAND} -E remove_directory doxygen-python
         COMMAND ${CMAKE_COMMAND} -E env
@@ -641,7 +674,7 @@ endif()
 
 if( WIN32 )
     if( MINGW )
-        # PCBNEW_RESOURCES variable is set by the macro.
+#PCBNEW_RESOURCES variable is set by the macro.
         mingw_resource_compiler( pcbnew )
     else()
         set( PCBNEW_RESOURCES ${CMAKE_SOURCE_DIR}/resources/msw/pcbnew.rc )
@@ -649,7 +682,7 @@ if( WIN32 )
 endif()
 
 
-# Function to process a markdown (.md) file into a header (.h) file
+#Function to process a markdown(.md ) file into a header(.h ) file
 function(callMrkdn2C inFile outFile)
     add_custom_command(
         OUTPUT "${outFile}"
@@ -659,27 +692,32 @@ function(callMrkdn2C inFile outFile)
     )
 endfunction()
 
-# Locate all .md files in the specified directory
-file(GLOB markdownFiles ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/panel_setup_rules_help_*.md)
+#Locate all.md files in the specified directory
+file(GLOB markdownFiles ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/panel_setup_rules_help_*.md ${CMAKE_CURRENT_SOURCE_DIR}/dialogs/panel_setup_condition_help_*.md )
 
-# Create a custom target to generate all .h files
+#Create a custom target to generate all.h files
 add_custom_target(generate_headers ALL)
 
-# Loop over all .md files and convert them into .h files in the same directory as the .md files
+#Loop over all.md files and convert them into.h files in the same directory as the.md files
+
 foreach(file ${markdownFiles})
-    # Extract the filename without extension and define output path in the same folder as the .md file
+#Extract the filename without extension and define output path in the same folder as the.md file
     get_filename_component(filename "${file}" NAME_WE)
     set(outputHeader "${CMAKE_CURRENT_SOURCE_DIR}/dialogs/${filename}.h")
 
-    # Call the custom function to process the file
+    message(VERBOSE "Processing markdown file: ${file}")
+    message(VERBOSE "Output header will be: ${outputHeader}")
+
+#Call the custom function to process the file
     callMrkdn2C("${file}" "${outputHeader}")
 
-    # Create a per-file custom target and add it as a dependency
+#Create a per - file custom target and add it as a dependency
     add_custom_target(${filename}_gen DEPENDS "${outputHeader}")
     add_dependencies(generate_headers ${filename}_gen)
 
-    # Mark the output header as a dependency of the source file
+#Mark the output header as a dependency of the source file
     get_source_file_property(existing_depends dialogs/panel_setup_rules.cpp OBJECT_DEPENDS)
+    message(VERBOSE "Existing OBJECT_DEPENDS for dialogs/panel_setup_rules.cpp: ${existing_depends}")
     if(NOT existing_depends OR existing_depends STREQUAL "NOTFOUND")
         set(existing_depends "")
     else()
@@ -687,10 +725,41 @@ foreach(file ${markdownFiles})
     endif()
     set_source_files_properties(dialogs/panel_setup_rules.cpp
         PROPERTIES OBJECT_DEPENDS "${existing_depends}${outputHeader}")
+#Print out the new OBJECT_DEPENDS property for verification
+    get_source_file_property(new_depends dialogs/panel_setup_rules.cpp OBJECT_DEPENDS)
+    message(VERBOSE "New OBJECT_DEPENDS for dialogs/panel_setup_rules.cpp: ${new_depends}")
 endforeach()
 
+# Generate pcb_text_help_md.h from pcb_text_help.md for text variable syntax help
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h
+    COMMAND ${CMAKE_COMMAND}
+        -DinputFile=${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help.md
+        -DoutputFile=${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h
+        -P ${KICAD_CMAKE_MODULE_PATH}/BuildSteps/markdown2C.cmake
+    DEPENDS ${KICAD_CMAKE_MODULE_PATH}/BuildSteps/markdown2C.cmake ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help.md
+    COMMENT "creating pcb_text_help_md.h from pcb_text_help.md"
+)
+
+add_custom_target(pcb_text_help_md_gen DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h)
+
+# pcbcommon compiles pcb_text.cpp which includes pcb_text_help_md.h
+add_dependencies( pcbcommon pcb_text_help_md_gen )
+
+# Add pcb_text_help_md.h as a dependency for source files that will include it
+set_source_files_properties(pcb_text.cpp
+    PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h)
+set_source_files_properties(dialogs/dialog_text_properties.cpp
+    PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h)
+set_source_files_properties(dialogs/dialog_textbox_properties.cpp
+    PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h)
+set_source_files_properties(dialogs/dialog_table_properties.cpp
+    PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h)
+set_source_files_properties(dialogs/dialog_tablecell_properties.cpp
+    PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pcb_text_help_md.h)
+
 if( APPLE )
-    # setup bundle
+#setup bundle
     set( PCBNEW_RESOURCES pcbnew.icns pcbnew_doc.icns fpedit.icns fpedit_doc.icns )
     set_source_files_properties(
         "${CMAKE_CURRENT_SOURCE_DIR}/pcbnew.icns"
@@ -706,6 +775,7 @@ endif()
 
 
 add_subdirectory( pcb_io/pcad )
+add_subdirectory( pcb_io/allegro )
 add_subdirectory( pcb_io/altium )
 add_subdirectory( pcb_io/cadstar )
 add_subdirectory( pcb_io/easyeda )
@@ -713,17 +783,20 @@ add_subdirectory( pcb_io/easyedapro )
 add_subdirectory( pcb_io/fabmaster )
 add_subdirectory( pcb_io/ipc2581 )
 add_subdirectory( pcb_io/odbpp )
+add_subdirectory( pcb_io/pads )
 
-set( PCBNEW_IO_LIBRARIES pcad2kicadpcb altium2pcbnew cadstar2pcbnew easyeda easyedapro fabmaster ipc2581 odbpp CACHE INTERNAL "")
+set( PCBNEW_IO_LIBRARIES pcad2kicadpcb allegro2pcbnew altium2pcbnew cadstar2pcbnew easyeda easyedapro fabmaster ipc2581 odbpp pads2pcbnew CACHE INTERNAL "")
 
-# a very small program launcher for pcbnew_kiface
+#a very small program launcher for pcbnew_kiface
 add_executable( pcbnew WIN32 MACOSX_BUNDLE
     ${CMAKE_SOURCE_DIR}/common/single_top.cpp
     ${PCBNEW_RESOURCES}
     )
-set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp pcbnew.cpp PROPERTIES
+
+set_source_files_properties( ${CMAKE_SOURCE_DIR}/common/single_top.cpp PROPERTIES
     COMPILE_DEFINITIONS "TOP_FRAME=FRAME_PCB_EDITOR;PGM_DATA_FILE_EXT=\"kicad_pcb\";BUILD_KIWAY_DLL"
     )
+
 target_link_libraries( pcbnew
     kicommon
     ${wxWidgets_LIBRARIES}
@@ -733,27 +806,29 @@ target_link_options( pcbnew PRIVATE
     $<$<BOOL:${KICAD_MAKE_LINK_MAPS}>:-Wl,--cref,-Map=pcbnew.map>
     )
 
-# the main pcbnew program, in DSO form.
+#the main pcbnew program, in DSO form.
 add_library( pcbnew_kiface_objects OBJECT
-    pcbnew.cpp
     ${PCBNEW_SRCS}
     ${PCBNEW_COMMON_SRCS}
     ${PCBNEW_SCRIPTING_SRCS}
     )
 
-if( KICAD_USE_PCH AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+if( KICAD_USE_PCH )
     target_precompile_headers( pcbnew_kiface_objects
         PRIVATE
             <vector>
             <map>
             <memory>
             <unordered_map>
-            "board.h"
-            "footprint.h"
-            <macros.h> )
+            <pcb_edit_frame.h>
+            <board.h>
+            <footprint.h>
+            <macros.h>
+            <pgm_base.h>
+            <wx/wx.h> )
 endif()
 
-# auto-generate specctra_lexer.h and specctra_keywords.cpp
+#auto - generate specctra_lexer.h and specctra_keywords.cpp
 make_lexer(
     pcbnew_kiface_objects
     specctra_import_export/specctra.keywords
@@ -775,11 +850,13 @@ target_link_libraries( pcbnew_kiface_objects
         ${OCC_LIBRARIES}
     )
 
-add_library( pcbnew_kiface MODULE )
+add_library( pcbnew_kiface MODULE
+    pcbnew.cpp
+    )
 
 set_target_properties( pcbnew_kiface PROPERTIES
-    # Decorate OUTPUT_NAME with PREFIX and SUFFIX, creating something like
-    # _pcbnew.so, _pcbnew.dll, or _pcbnew.kiface
+#Decorate OUTPUT_NAME with PREFIX and SUFFIX, creating something like
+#_pcbnew.so, _pcbnew.dll, or _pcbnew.kiface
     OUTPUT_NAME     pcbnew
     PREFIX          ${KIFACE_PREFIX}
     SUFFIX          ${KIFACE_SUFFIX}
@@ -823,8 +900,8 @@ target_link_libraries( pcbnew_kiface
         ${PCBNEW_KIFACE_LIBRARIES}
     )
 
+#The KIFACE is in pcbnew.cpp, export it:
 set_source_files_properties( pcbnew.cpp PROPERTIES
-    # The KIFACE is in pcbnew.cpp, export it:
     COMPILE_DEFINITIONS     "BUILD_KIWAY_DLL;COMPILING_DLL"
     )
 
@@ -832,11 +909,11 @@ target_link_options( pcbnew_kiface PRIVATE
     $<$<BOOL:${KICAD_MAKE_LINK_MAPS}>:-Wl,--cref,-Map=_pcbnew.kiface.map>
     )
 
-# if building pcbnew, then also build pcbnew_kiface if out of date.
+#if building pcbnew, then also build pcbnew_kiface if out of date.
 add_dependencies( pcbnew pcbnew_kiface )
 
 if( WIN32 )
-    # Copy dynamic lib dependency to build dir to allow running directly
+#Copy dynamic lib dependency to build dir to allow running directly
     add_custom_command( TARGET pcbnew POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3dsg>" "$<TARGET_FILE_DIR:pcbnew>"
         )
@@ -845,13 +922,13 @@ if( WIN32 )
         )
 endif()
 
-# these 2 binaries are a matched set, keep them together:
+#these 2 binaries are a matched set, keep them together:
 if( APPLE )
     set_target_properties( pcbnew PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST ${PROJECT_BINARY_DIR}/pcbnew/Info.plist
         )
 
-    # puts binaries into the *.app bundle while linking
+#puts binaries into the*.app bundle while linking
     set_target_properties( pcbnew_kiface PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY ${OSX_BUNDLE_BUILD_KIFACE_DIR}
         )
@@ -863,8 +940,8 @@ if( APPLE )
             "@executable_path/../Frameworks;@executable_path/../Frameworks/Python.framework" )
     set_target_properties( pcbnew_kiface PROPERTIES BUILD_WITH_INSTALL_RPATH 1 )
 
-    # put individual bundle outside of main bundle as a first step
-    # will be pulled into the main bundle when creating main bundle
+#put individual bundle outside of main bundle as a first step
+#will be pulled into the main bundle when creating main bundle
     install( TARGETS pcbnew
         DESTINATION ${KICAD_BIN}
         COMPONENT binary
@@ -881,7 +958,7 @@ if( APPLE )
     install( CODE [[
         include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/InstallMacOS.cmake )
 
-        # Install any dependencies
+#Install any dependencies
         install_runtime_deps( "${KICAD_BIN}/pcbnew.app/Contents/MacOS/pcbnew"
             "${OSX_BUNDLE_BUILD_KIFACE_DIR}/_pcbnew.kiface"
             ""
@@ -903,7 +980,7 @@ else()
 endif()
 
 if( KICAD_WIN32_INSTALL_PDBS )
-    # Get the PDBs to copy over for MSVC
+#Get the PDBs to copy over for MSVC
     install(FILES $<TARGET_PDB_FILE:pcbnew> DESTINATION ${KICAD_BIN})
     install(FILES $<TARGET_PDB_FILE:pcbnew_kiface> DESTINATION ${KICAD_KIFACE})
 endif()
@@ -911,7 +988,7 @@ endif()
 if( NOT APPLE )
     install( FILES ${CMAKE_BINARY_DIR}/pcbnew/pcbnew.py DESTINATION ${PYTHON_DEST} )
 else()
-    # put into bundle at build time, it is relocated at install
+#put into bundle at build time, it is relocated at install
     add_custom_target( ScriptingPcbnewPyCopy ALL
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/pcbnew/pcbnew.py" "${PYTHON_DEST}/"
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/pcbnew.py
@@ -920,21 +997,21 @@ else()
     add_dependencies( ScriptingPcbnewPyCopy ScriptingPythonDirectoryCreation )
 endif()
 
-# python plugins
+#python plugins
 install( DIRECTORY ${PROJECT_SOURCE_DIR}/pcbnew/python/plugins/
     DESTINATION ${KICAD_DATA}/scripting/plugins
     FILE_PERMISSIONS OWNER_EXECUTE OWNER_READ OWNER_WRITE GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
 )
 
 
-# Here is built the _pcbnew.{so,pyd} which is the native part of the pcbnew Python library
-# when Python is used from the command line.
+#Here is built the                    _pcbnew.{ so, pyd } which is the native part of the pcbnew Python library
+#when Python is used from the command line.
 
 if( WIN32 )
     install( FILES ${CMAKE_BINARY_DIR}/pcbnew/_pcbnew.pyd DESTINATION ${PYTHON_DEST} )
     set( PYMOD_EXT "pyd" )
 elseif( APPLE )
-     # put everything into bundle at build time, it is relocated at install
+#put everything into bundle at build time, it is relocated at install
     add_custom_target( ScriptingModulesPcbnewSoCopy ALL
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/${KICMAKE_CFG_INTDIR}//pcbnew/_pcbnew.so" "${PYTHON_DEST}/"
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/_pcbnew.so
@@ -943,7 +1020,7 @@ elseif( APPLE )
     add_dependencies( ScriptingModulesPcbnewSoCopy ScriptingPythonDirectoryCreation )
     set( PYMOD_EXT "so" )
 else()
-    # Linux is the remaining platform, and all that has to be installed is the created symlink.
+#Linux is the remaining platform, and all that has to be installed is the created symlink.
     set( PYMOD_EXT "so" )
 
     install( FILES ${CMAKE_CURRENT_BINARY_DIR}/${KICMAKE_CFG_INTDIR}/python/_pcbnew.${PYMOD_EXT} DESTINATION ${PYTHON_DEST} )
@@ -1004,7 +1081,7 @@ add_custom_target(
 
 
 if( APPLE )
-    # If we don't have wxPython, then we must create the site-packages directory
+#If we don't have wxPython, then we must create the site-packages directory
     add_custom_target( ScriptingPythonDirectoryCreation ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "${PYTHON_DEST}"
         COMMENT "Creating Python library directory ${PYTHON_DEST}"

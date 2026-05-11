@@ -20,8 +20,10 @@
     * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
     */
 
-#include <drc/drc_creepage_utils.h>
+#include "drc/drc_creepage_utils.h"
+
 #include <geometry/intersection.h>
+#include <pcb_track.h>
 #include <thread_pool.h>
 
 
@@ -33,27 +35,36 @@ bool segmentIntersectsArc( const VECTOR2I& p1, const VECTOR2I& p2, const VECTOR2
     VECTOR2I  startPoint( radius * cos( startAngle.AsRadians() ), radius * sin( startAngle.AsRadians() ) );
     SHAPE_ARC arc( center, startPoint + center, endAngle - startAngle );
 
+    VECTOR2I arcStart = arc.GetP0();
+    VECTOR2I arcEnd = arc.GetP1();
+
     INTERSECTABLE_GEOM geom1 = segment;
     INTERSECTABLE_GEOM geom2 = arc;
 
+    std::vector<VECTOR2I> rawPoints;
+    INTERSECTION_VISITOR  visitor( geom2, rawPoints );
+    std::visit( visitor, geom1 );
+
+    // Filter out intersections where a segment endpoint coincides with an
+    // arc endpoint, matching the endpoint exclusion in segments_intersect.
+    std::vector<VECTOR2I> filtered;
+
+    for( const VECTOR2I& ip : rawPoints )
+    {
+        bool atSharedEndpoint = ( ip == arcStart || ip == arcEnd )
+                                && ( ip == p1 || ip == p2 );
+
+        if( !atSharedEndpoint )
+            filtered.push_back( ip );
+    }
+
     if( aIntersectionPoints )
     {
-        size_t startCount = aIntersectionPoints->size();
-
-        INTERSECTION_VISITOR visitor( geom2, *aIntersectionPoints );
-        std::visit( visitor, geom1 );
-
-        return aIntersectionPoints->size() > startCount;
+        for( const VECTOR2I& ip : filtered )
+            aIntersectionPoints->push_back( ip );
     }
-    else
-    {
-        std::vector<VECTOR2I> intersectionPoints;
 
-        INTERSECTION_VISITOR visitor( geom2, intersectionPoints );
-        std::visit( visitor, geom1 );
-
-        return intersectionPoints.size() > 0;
-    }
+    return !filtered.empty();
 }
 
 
@@ -523,32 +534,41 @@ void CREEPAGE_GRAPH::TransformEdgeToCreepShapes()
         case SHAPE_T::SEGMENT:
         {
             BE_SHAPE_POINT* a = new BE_SHAPE_POINT( d->GetStart() );
+            a->SetParent( d );
             m_shapeCollection.push_back( a );
             a = new BE_SHAPE_POINT( d->GetEnd() );
+            a->SetParent( d );
             m_shapeCollection.push_back( a );
             break;
         }
+
         case SHAPE_T::RECTANGLE:
         {
             BE_SHAPE_POINT* a = new BE_SHAPE_POINT( d->GetStart() );
+            a->SetParent( d );
             m_shapeCollection.push_back( a );
             a = new BE_SHAPE_POINT( d->GetEnd() );
+            a->SetParent( d );
             m_shapeCollection.push_back( a );
             a = new BE_SHAPE_POINT( VECTOR2I( d->GetEnd().x, d->GetStart().y ) );
+            a->SetParent( d );
             m_shapeCollection.push_back( a );
             a = new BE_SHAPE_POINT( VECTOR2I( d->GetStart().x, d->GetEnd().y ) );
+            a->SetParent( d );
             m_shapeCollection.push_back( a );
             break;
         }
+
         case SHAPE_T::POLY:
-        {
             for( const VECTOR2I& p : d->GetPolyPoints() )
             {
                 BE_SHAPE_POINT* a = new BE_SHAPE_POINT( p );
+                a->SetParent( d );
                 m_shapeCollection.push_back( a );
             }
+
             break;
-        }
+
         case SHAPE_T::CIRCLE:
         {
             BE_SHAPE_CIRCLE* a = new BE_SHAPE_CIRCLE( d->GetCenter(), d->GetRadius() );
@@ -575,7 +595,9 @@ void CREEPAGE_GRAPH::TransformEdgeToCreepShapes()
             m_shapeCollection.push_back( a );
             break;
         }
-        default: break;
+
+        default:
+            break;
         }
     }
 }
@@ -1579,8 +1601,6 @@ std::vector<PATH_CONNECTION> CU_SHAPE_ARC::Paths( const BE_SHAPE_POINT& aS2, dou
         CU_SHAPE_CIRCLE circle( nearestPoint, width / 2 );
         return circle.Paths( aS2, aMaxWeight, aMaxSquaredWeight );
     }
-
-    return result;
 }
 
 
@@ -1681,8 +1701,7 @@ bool SegmentIntersectsBoard( const VECTOR2I& aP1, const VECTOR2I& aP2,
         {
         case SHAPE_T::SEGMENT:
         {
-            bool intersects = segments_intersect( aP1, aP2, d->GetStart(), d->GetEnd(),
-                                                  intersectionPoints );
+            bool intersects = segments_intersect( aP1, aP2, d->GetStart(), d->GetEnd(), intersectionPoints );
 
             if( intersects && !TestGrooveWidth )
                 return false;
@@ -1761,8 +1780,8 @@ bool SegmentIntersectsBoard( const VECTOR2I& aP1, const VECTOR2I& aP2,
             break;
         }
 
-
-        default: break;
+        default:
+            break;
         }
     }
 
@@ -2043,6 +2062,7 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
         newshape = dynamic_cast<CREEP_SHAPE*>( cuseg );
         break;
     }
+
     case SH_CIRCLE:
     {
         const SHAPE_CIRCLE& circle = dynamic_cast<const SHAPE_CIRCLE&>( aShape );
@@ -2050,6 +2070,7 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
         newshape = dynamic_cast<CREEP_SHAPE*>( cucircle );
         break;
     }
+
     case SH_ARC:
     {
         const SHAPE_ARC& arc = dynamic_cast<const SHAPE_ARC&>( aShape );
@@ -2079,6 +2100,7 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
         newshape = dynamic_cast<CREEP_SHAPE*>( cuarc );
         break;
     }
+
     case SH_COMPOUND:
     {
         int nbShapes = static_cast<const SHAPE_COMPOUND*>( &aShape )->Shapes().size();
@@ -2093,6 +2115,7 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
         }
         break;
     }
+
     case SH_POLY_SET:
     {
         const SHAPE_POLY_SET& polySet = dynamic_cast<const SHAPE_POLY_SET&>( aShape );
@@ -2105,6 +2128,7 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
         }
         break;
     }
+
     case SH_LINE_CHAIN:
     {
         const SHAPE_LINE_CHAIN& lineChain = dynamic_cast<const SHAPE_LINE_CHAIN&>( aShape );
@@ -2120,6 +2144,7 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
 
         break;
     }
+
     case SH_RECT:
     {
         const SHAPE_RECT& rect = dynamic_cast<const SHAPE_RECT&>( aShape );
@@ -2135,7 +2160,9 @@ void CREEPAGE_GRAPH::Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>&
         Addshape( SHAPE_SEGMENT( point3, point0 ), aConnectTo, aParent );
         break;
     }
-    default: break;
+
+    default:
+        break;
     }
 
     if( !newshape )
@@ -2175,6 +2202,33 @@ void CREEPAGE_GRAPH::GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer )
     std::mutex                               nodes_lock;
     thread_pool&                             tp = GetKiCadThreadPool();
 
+    TRACK_RTREE trackIndex;
+    std::vector<CREEPAGE_TRACK_ENTRY*> trackEntries; // For cleanup
+
+    if( aLayer != Edge_Cuts )
+    {
+        for( PCB_TRACK* track : m_board.Tracks() )
+        {
+            if( track && track->Type() == KICAD_T::PCB_TRACE_T && track->IsOnLayer( aLayer ) )
+            {
+                std::shared_ptr<SHAPE> sh = track->GetEffectiveShape();
+
+                if( sh && sh->Type() == SHAPE_TYPE::SH_SEGMENT )
+                {
+                    CREEPAGE_TRACK_ENTRY* entry = new CREEPAGE_TRACK_ENTRY();
+                    entry->segment = SEG( track->GetStart(), track->GetEnd() );
+                    entry->layer = aLayer;
+
+                    BOX2I bbox = track->GetBoundingBox();
+                    int   minCoords[2] = { bbox.GetX(), bbox.GetY() };
+                    int   maxCoords[2] = { bbox.GetRight(), bbox.GetBottom() };
+                    trackIndex.Insert( minCoords, maxCoords, entry );
+                    trackEntries.push_back( entry );
+                }
+            }
+        }
+    }
+
     std::copy_if( m_nodes.begin(), m_nodes.end(), std::back_inserter( nodes ),
             [&]( const std::shared_ptr<GRAPH_NODE>& gn )
             {
@@ -2189,7 +2243,9 @@ void CREEPAGE_GRAPH::GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer )
             } );
 
     // Build parent -> net -> nodes mapping for efficient filtering
+    // Also cache bounding boxes for early spatial filtering
     std::unordered_map<const BOARD_ITEM*, std::unordered_map<int, std::vector<std::shared_ptr<GRAPH_NODE>>>> parent_net_groups;
+    std::unordered_map<const BOARD_ITEM*, BOX2I> parent_bboxes;
     std::vector<const BOARD_ITEM*> parent_keys;
 
     for( const auto& gn : nodes )
@@ -2197,51 +2253,209 @@ void CREEPAGE_GRAPH::GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer )
         const BOARD_ITEM* parent = gn->m_parent->GetParent();
 
         if( parent_net_groups[parent].empty() )
+        {
             parent_keys.push_back( parent );
+            if( parent )
+                parent_bboxes[parent] = parent->GetBoundingBox();
+        }
 
         parent_net_groups[parent][gn->m_net].push_back( gn );
     }
 
-    // Generate work items: compare nodes between different parents only
+    // Generate work items using parent-level spatial indexing
     std::vector<std::pair<std::shared_ptr<GRAPH_NODE>, std::shared_ptr<GRAPH_NODE>>> work_items;
 
-    for( size_t i = 0; i < parent_keys.size(); ++i )
+    // Use RTree for spatial indexing of parent bounding boxes
+    // Expand each bbox by maxWeight to find potentially overlapping parents
+
+    int64_t maxDist = static_cast<int64_t>( aMaxWeight );
+
+    struct ParentEntry
     {
-        for( size_t j = i + 1; j < parent_keys.size(); ++j )
+        const BOARD_ITEM* parent;
+        BOX2I             bbox;
+    };
+
+    RTree<ParentEntry*, int, 2, double> parentIndex;
+    std::vector<ParentEntry>            parentEntries;
+
+    // Build list of non-null parents first
+    for( const auto* parent : parent_keys )
+    {
+        if( parent )
         {
-            const auto& group1_nets = parent_net_groups[parent_keys[i]];
-            const auto& group2_nets = parent_net_groups[parent_keys[j]];
+            ParentEntry entry;
+            entry.parent = parent;
+            entry.bbox = parent_bboxes[parent];
+            parentEntries.push_back( entry );
+        }
+    }
 
-            for( const auto& [net1, nodes1] : group1_nets )
-            {
-                for( const auto& [net2, nodes2] : group2_nets )
+    // Insert into RTree
+    for( ParentEntry& entry : parentEntries )
+    {
+        int minCoords[2] = { entry.bbox.GetLeft(), entry.bbox.GetTop() };
+        int maxCoords[2] = { entry.bbox.GetRight(), entry.bbox.GetBottom() };
+        parentIndex.Insert( minCoords, maxCoords, &entry );
+    }
+
+    // Parallelize parent pair search using thread pool
+    std::mutex work_items_lock;
+
+    auto searchParent = [&]( size_t i ) -> bool
+    {
+        const ParentEntry& entry1 = parentEntries[i];
+        const BOARD_ITEM*  parent1 = entry1.parent;
+        BOX2I              bbox1 = entry1.bbox;
+
+        std::vector<std::pair<std::shared_ptr<GRAPH_NODE>, std::shared_ptr<GRAPH_NODE>>> localWorkItems;
+
+        // Search for parents within maxDist of bbox1
+        int searchMin[2] = { bbox1.GetLeft() - (int) maxDist, bbox1.GetTop() - (int) maxDist };
+        int searchMax[2] = { bbox1.GetRight() + (int) maxDist, bbox1.GetBottom() + (int) maxDist };
+
+        parentIndex.Search( searchMin, searchMax,
+                [&]( ParentEntry* entry2 ) -> bool
                 {
-                    // Skip if same net and both nets have only conductive nodes
-                    if( net1 == net2 )
+                    const BOARD_ITEM* parent2 = entry2->parent;
+
+                    // Only process if parent1 < parent2 to avoid duplicates
+                    if( parent1 >= parent2 )
+                        return true;
+
+                    // Precise bbox distance check
+                    BOX2I bbox2 = entry2->bbox;
+
+                    int64_t bboxDistX = 0;
+                    if( bbox2.GetLeft() > bbox1.GetRight() )
+                        bboxDistX = bbox2.GetLeft() - bbox1.GetRight();
+                    else if( bbox1.GetLeft() > bbox2.GetRight() )
+                        bboxDistX = bbox1.GetLeft() - bbox2.GetRight();
+
+                    int64_t bboxDistY = 0;
+                    if( bbox2.GetTop() > bbox1.GetBottom() )
+                        bboxDistY = bbox2.GetTop() - bbox1.GetBottom();
+                    else if( bbox1.GetTop() > bbox2.GetBottom() )
+                        bboxDistY = bbox1.GetTop() - bbox2.GetBottom();
+
+                    int64_t bboxDistSq = bboxDistX * bboxDistX + bboxDistY * bboxDistY;
+                    if( bboxDistSq > maxDist * maxDist )
+                        return true;
+
+                    // Get nodes for both parents (thread-safe reads from const map)
+                    auto it1 = parent_net_groups.find( parent1 );
+                    auto it2 = parent_net_groups.find( parent2 );
+
+                    if( it1 == parent_net_groups.end() || it2 == parent_net_groups.end() )
+                        return true;
+
+                    for( const auto& [net1, nodes1] : it1->second )
                     {
-                        bool all_conductive_1 = std::all_of( nodes1.begin(), nodes1.end(),
-                                []( const auto& n )
-                                {
-                                    return n->m_parent->IsConductive();
-                                } );
+                        for( const auto& [net2, nodes2] : it2->second )
+                        {
+                            // Skip same net if both are conductive
+                            if( net1 == net2 && !nodes1.empty() && !nodes2.empty() )
+                            {
+                                if( nodes1[0]->m_parent->IsConductive()
+                                    && nodes2[0]->m_parent->IsConductive() )
+                                    continue;
+                            }
 
-                        bool all_conductive_2 = std::all_of( nodes2.begin(), nodes2.end(),
-                                []( const auto& n )
+                            for( const auto& gn1 : nodes1 )
+                            {
+                                for( const auto& gn2 : nodes2 )
                                 {
-                                    return n->m_parent->IsConductive();
-                                } );
+                                    VECTOR2I pos1 = gn1->m_parent->GetPos();
+                                    VECTOR2I pos2 = gn2->m_parent->GetPos();
+                                    int      r1 = gn1->m_parent->GetRadius();
+                                    int      r2 = gn2->m_parent->GetRadius();
 
-                        if( all_conductive_1 && all_conductive_2 )
-                            continue;
+                                    int64_t centerDistSq = ( pos1 - pos2 ).SquaredEuclideanNorm();
+                                    double  threshold = aMaxWeight + r1 + r2;
+                                    double  thresholdSq = threshold * threshold;
+
+                                    if( (double) centerDistSq > thresholdSq )
+                                        continue;
+
+                                    localWorkItems.push_back( { gn1, gn2 } );
+                                }
+                            }
+                        }
                     }
 
-                    // Add all node pairs from these net groups
-                    for( const auto& gn1 : nodes1 )
-                    {
-                        for( const auto& gn2 : nodes2 )
-                            work_items.push_back( { gn1, gn2 } );
-                    }
+                    return true;
+                } );
+
+        // Merge local results into global
+        if( !localWorkItems.empty() )
+        {
+            std::lock_guard<std::mutex> lock( work_items_lock );
+            work_items.insert( work_items.end(), localWorkItems.begin(), localWorkItems.end() );
+        }
+
+        return true;
+    };
+
+    // Use thread pool if there are enough parents
+    if( parentEntries.size() > 100 && tp.get_tasks_total() < tp.get_thread_count() - 4 )
+    {
+        auto ret = tp.submit_loop( 0, parentEntries.size(), searchParent );
+
+        for( auto& r : ret )
+        {
+            if( r.valid() )
+                r.wait();
+        }
+    }
+    else
+    {
+        for( size_t i = 0; i < parentEntries.size(); ++i )
+            searchParent( i );
+    }
+
+    // Generate work items for same-parent node pairs. The cross-parent search above
+    // skips pairs where parent1 == parent2, but creepage paths between different edge
+    // segments of the same slot (which share a footprint grandparent) are needed for
+    // the path to navigate around the slot geometry. Also handles null-parent nodes
+    // (e.g. NPTH pad shapes) which were excluded from the RTree search entirely.
+    for( const auto& [parent, net_groups] : parent_net_groups )
+    {
+        std::vector<std::shared_ptr<GRAPH_NODE>> sameParentNodes;
+
+        for( const auto& [net, nodeList] : net_groups )
+            sameParentNodes.insert( sameParentNodes.end(), nodeList.begin(), nodeList.end() );
+
+        for( size_t i = 0; i < sameParentNodes.size(); i++ )
+        {
+            for( size_t j = i + 1; j < sameParentNodes.size(); j++ )
+            {
+                auto& gn1 = sameParentNodes[i];
+                auto& gn2 = sameParentNodes[j];
+
+                // ConnectChildren already handles nodes on the same CREEP_SHAPE
+                if( gn1->m_parent == gn2->m_parent )
+                    continue;
+
+                // Skip same-net conductive pairs
+                if( gn1->m_parent->IsConductive() && gn2->m_parent->IsConductive()
+                    && gn1->m_net == gn2->m_net )
+                {
+                    continue;
                 }
+
+                VECTOR2I pos1 = gn1->m_parent->GetPos();
+                VECTOR2I pos2 = gn2->m_parent->GetPos();
+                int      r1 = gn1->m_parent->GetRadius();
+                int      r2 = gn2->m_parent->GetRadius();
+
+                int64_t centerDistSq = ( pos1 - pos2 ).SquaredEuclideanNorm();
+                double  threshold = aMaxWeight + r1 + r2;
+                double  thresholdSq = threshold * threshold;
+
+                if( (double) centerDistSq > thresholdSq )
+                    continue;
+
+                work_items.push_back( { gn1, gn2 } );
             }
         }
     }
@@ -2251,15 +2465,34 @@ void CREEPAGE_GRAPH::GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer )
             {
                 auto& [gn1, gn2] = work_items[idx];
 
-                for( const PATH_CONNECTION& pc : GetPaths( gn1->m_parent, gn2->m_parent, aMaxWeight ) )
-                {
-                    std::vector<const BOARD_ITEM*> IgnoreForTest =
-                    {
-                        gn1->m_parent->GetParent(), gn2->m_parent->GetParent()
-                    };
+                // Distance filtering already done during work item creation
+                CREEP_SHAPE* shape1 = gn1->m_parent;
+                CREEP_SHAPE* shape2 = gn2->m_parent;
 
-                    if( !pc.isValid( m_board, aLayer, m_boardEdge, IgnoreForTest, m_boardOutline,
-                                     { false, true }, m_minGrooveWidth ) )
+                for( const PATH_CONNECTION& pc : GetPaths( shape1, shape2, aMaxWeight ) )
+                {
+                    std::vector<const BOARD_ITEM*> IgnoreForTest;
+
+                    // Both segments_intersect and segmentIntersectsArc exclude
+                    // shared-endpoint intersections, so POINT and ARC shapes don't
+                    // need their parent skipped during board edge intersection
+                    // testing. Only CIRCLE shapes need parent suppression because
+                    // segmentIntersectsCircle has no endpoint exclusion.
+                    //
+                    // Previously both parents were always added, which caused paths
+                    // between corners of different Edge.Cuts rectangles to skip both
+                    // rectangles entirely, allowing invalid paths through slot
+                    // interiors.
+                    if( shape1->GetType() == CREEP_SHAPE::TYPE::CIRCLE )
+                        IgnoreForTest.push_back( shape1->GetParent() );
+
+                    if( shape2->GetType() == CREEP_SHAPE::TYPE::CIRCLE )
+                        IgnoreForTest.push_back( shape2->GetParent() );
+
+                    bool valid = pc.isValid( m_board, aLayer, m_boardEdge, IgnoreForTest, m_boardOutline,
+                                     { false, true }, m_minGrooveWidth, &trackIndex );
+
+                    if( !valid )
                     {
                         continue;
                     }
@@ -2322,6 +2555,10 @@ void CREEPAGE_GRAPH::GeneratePaths( double aMaxWeight, PCB_LAYER_ID aLayer )
             while( r.wait_for( std::chrono::milliseconds( 100 ) ) != std::future_status::ready ){}
         }
     }
+
+    // Clean up track entries
+    for( CREEPAGE_TRACK_ENTRY* entry : trackEntries )
+        delete entry;
 }
 
 

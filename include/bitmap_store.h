@@ -66,13 +66,33 @@ public:
      * some icons may be reused between controls at different intended sizes.
      */
     wxBitmapBundle GetBitmapBundle( BITMAPS aBitmapId, int aMinHeight = -1 );
-     
+
+    /**
+     * Constructs and returns a bitmap bundle for the given icon ID, with the default
+     * bitmap size being aDefHeight. Rescaling is applied if no bitmap of that size
+     * is available.
+     * @param aBitmapId is from the BITMAPS enum in bitmaps_list.h
+     * @param aDefHeight is the desired height of the default bitmap in the bundle.
+     */
+    wxBitmapBundle GetBitmapBundleDef( BITMAPS aBitmapId, int aDefHeight );
+
     /**
      * Constructs and returns a bitmap bundle for the given icon ID, with the bitmaps
      * converted to disabled state according to the current UI theme.
      * @param aBitmapId is from the BITMAPS enum in bitmaps_list.h
+     * @param aMinHeight is the minimum height of the bitmaps to include in the bundle.
      */
-    wxBitmapBundle GetDisabledBitmapBundle( BITMAPS aBitmapId );
+    wxBitmapBundle GetDisabledBitmapBundle( BITMAPS aBitmapId, int aMinHeight = -1 );
+
+    /**
+     * Constructs and returns a bitmap bundle for the given icon ID, with the bitmaps
+     * converted to disabled state according to the current UI theme and the default
+     * bitmap size being aDefHeight. Rescaling is applied if no bitmap of that size
+     * is available.
+     * @param aBitmapId is from the BITMAPS enum in bitmaps_list.h
+     * @param aDefHeight is the desired height of the default bitmap in the bundle.
+     */
+    wxBitmapBundle GetDisabledBitmapBundleDef( BITMAPS aBitmapId, int aDefHeight );
 
     /**
      * Retrieves a bitmap from the given bitmap id, scaled to a given factor.
@@ -96,7 +116,7 @@ public:
      */
     void ThemeChanged();
 
-    bool IsDarkTheme() const { return m_theme == wxT( "dark" ); }
+    bool IsDarkTheme() const { return m_theme == BITMAP_INFO::THEME::DARK; }
 
 private:
 
@@ -114,7 +134,7 @@ private:
 
     std::unordered_map<BITMAPS, std::vector<BITMAP_INFO>> m_bitmapInfoCache;
 
-    wxString m_theme;
+    BITMAP_INFO::THEME m_theme;
 };
 
 #endif // KICAD_BITMAP_STORE_H

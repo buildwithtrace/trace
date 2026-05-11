@@ -26,11 +26,16 @@
 #include "dialog_board_reannotate.h"
 
 #include <algorithm>
+
+#include <wx/tokenzr.h>
+#include <wx/valtext.h>
+
 #include <base_units.h>
 #include <bitmaps.h>
 #include <board_commit.h>
 #include <confirm.h>
 #include <ctype.h>
+#include <footprint.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <string_utils.h>  // StrNumCmp
 #include <kiface_base.h>
@@ -39,7 +44,6 @@
 #include <richio.h>
 #include <tool/grid_menu.h>
 #include <widgets/wx_html_report_panel.h>
-#include <wx/valtext.h>
 
 
 bool g_SortYFirst;
@@ -114,7 +118,7 @@ DIALOG_BOARD_REANNOTATE::DIALOG_BOARD_REANNOTATE( PCB_EDIT_FRAME* aParentFrame )
                             { wxID_CANCEL, _( "Close" )          } } );
 
     wxArrayString gridslist;
-    GRID_MENU::BuildChoiceList( &gridslist, m_frame->config(), aParentFrame );
+    GRID_MENU::BuildChoiceList( &gridslist, m_frame->GetWindowSettings( m_frame->config() ), aParentFrame );
 
     m_GridChoice->Set( gridslist );
 
@@ -190,7 +194,7 @@ REFDES_PREFIX_INFO* DIALOG_BOARD_REANNOTATE::GetOrBuildRefDesInfo( const wxStrin
     // Wasn't in the info array so add it
     REFDES_PREFIX_INFO newtype;
     newtype.RefDesPrefix = aRefDesPrefix;
-    newtype.LastUsedRefDes = aStartRefDes - 1;
+    newtype.LastUsedRefDes = std::max( aStartRefDes - 1, 0 );
     m_refDesPrefixInfos.push_back( newtype );
 
     return &m_refDesPrefixInfos.back();

@@ -214,6 +214,25 @@ protected:
      */
     virtual void TearDownQuasiModal() {}
 
+    /**                                                                                                               
+     * Reset undo/redo tracking after dynamically replacing child panels.
+     *                                                                                                                
+     * Clears the undo/redo stacks and current value baselines, then registers
+     * undo/redo event handlers on the new children.
+     *
+     * @param aChildren The child window list of the newly created panel.
+     */
+    void resetUndoRedoForNewContent( wxWindowList& aChildren ); 
+
+    /**                                                                                                                   
+     * Remove UNIT_BINDER registrations for a window and all its descendants.
+     *
+     * Call before destroying a panel whose children have registered unit binders.
+     *
+     * @param aWindow The root window whose subtree should be unregistered.
+     */
+    void unregisterUnitBinders( wxWindow* aWindow );
+
 private:
     /**
      * Properly handle the wxCloseEvent when in the quasimodal mode when not calling
@@ -233,6 +252,13 @@ private:
     void onChildSetFocus( wxFocusEvent& aEvent );
 
     void onInitDialog( wxInitDialogEvent& aEvent );
+
+    /**
+     * Set focus back to the parent frame's tool canvas if available, otherwise to the
+     * parent window. Prevents focus from landing on auxiliary panels like the properties
+     * panel when the mouse happens to hover over them at dialog close time.
+     */
+    void focusParentCanvas();
 
     std::string generateKey( const wxWindow* aWin ) const;
 
@@ -296,6 +322,7 @@ protected:
     std::vector<UNDO_STEP>            m_redoStack;
     std::map<wxWindow*, wxVariant>    m_currentValues;
     bool                              m_handlingUndoRedo;
+    bool                              m_childReleased;
 };
 
 #endif  // DIALOG_SHIM_

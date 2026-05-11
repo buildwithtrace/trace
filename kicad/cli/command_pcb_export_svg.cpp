@@ -36,7 +36,7 @@
 #define ARG_MODE_MULTI "--mode-multi"
 
 CLI::PCB_EXPORT_SVG_COMMAND::PCB_EXPORT_SVG_COMMAND() :
-        PCB_EXPORT_BASE_COMMAND( "svg", false, true )
+        PCB_EXPORT_BASE_COMMAND( "svg", IO_TYPE::FILE, IO_TYPE::DIRECTORY )
 {
     m_argParser.add_description( UTF8STDSTR( _( "Generate SVG outputs of a given layer list" ) ) );
 
@@ -116,10 +116,6 @@ CLI::PCB_EXPORT_SVG_COMMAND::PCB_EXPORT_SVG_COMMAND() :
                                   "which files may be output." ) ) )
             .flag();
 
-    m_argParser.add_argument( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT )
-            .help( UTF8STDSTR( _( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_DESC ) ) )
-            .flag();
-
     m_argParser.add_argument( ARG_SCALE )
             .help( UTF8STDSTR( _( ARG_SCALE_DESC ) ) )
             .scan<'g', double>()
@@ -129,6 +125,8 @@ CLI::PCB_EXPORT_SVG_COMMAND::PCB_EXPORT_SVG_COMMAND() :
     m_argParser.add_argument( ARG_CHECK_ZONES )
             .help( UTF8STDSTR( _( ARG_CHECK_ZONES_DESC ) ) )
             .flag();
+
+    addVariantsArg();
 }
 
 
@@ -140,6 +138,8 @@ int CLI::PCB_EXPORT_SVG_COMMAND::doPerform( KIWAY& aKiway )
     svgJob->m_blackAndWhite = m_argParser.get<bool>( ARG_BLACKANDWHITE );
     svgJob->m_negative = m_argParser.get<bool>( ARG_NEGATIVE );
     svgJob->m_sketchPadsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_PADS_ON_FAB_LAYERS );
+    if( svgJob->m_sketchPadsOnFabLayers )
+        svgJob->m_plotPadNumbers = true;
     svgJob->m_hideDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_HIDE_DNP_FPS_ON_FAB_LAYERS );
     svgJob->m_sketchDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_DNP_FPS_ON_FAB_LAYERS );
     svgJob->m_crossoutDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_CROSSOUT_DNP_FPS_ON_FAB_LAYERS );
@@ -149,9 +149,6 @@ int CLI::PCB_EXPORT_SVG_COMMAND::doPerform( KIWAY& aKiway )
     svgJob->m_subtractSolderMaskFromSilk = m_argParser.get<bool>( ARG_SUBTRACT_SOLDERMASK );
     svgJob->m_scale = m_argParser.get<double>( ARG_SCALE );
     svgJob->m_checkZonesBeforePlot = m_argParser.get<bool>( ARG_CHECK_ZONES );
-
-    if( m_argParser.get<bool>( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT ) )
-        wxFprintf( stdout, DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_WARNING );
 
     svgJob->m_fitPageToBoard = m_argParser.get<bool>( ARG_FIT_PAGE_TO_BOARD );
 
@@ -177,6 +174,9 @@ int CLI::PCB_EXPORT_SVG_COMMAND::doPerform( KIWAY& aKiway )
     svgJob->m_colorTheme = From_UTF8( m_argParser.get<std::string>( ARG_THEME ).c_str() );
     svgJob->m_plotDrawingSheet = !m_argParser.get<bool>( ARG_EXCLUDE_DRAWING_SHEET );
     svgJob->SetVarOverrides( m_argDefineVars );
+
+    if( !m_argVariantNames.empty() )
+        svgJob->m_variant = m_argVariantNames.front();
 
     svgJob->m_argLayers = From_UTF8( m_argParser.get<std::string>( ARG_LAYERS ).c_str() );
     svgJob->m_argCommonLayers = From_UTF8( m_argParser.get<std::string>( ARG_COMMON_LAYERS ).c_str() );

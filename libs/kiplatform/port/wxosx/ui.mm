@@ -22,6 +22,7 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <wx/dialog.h>
 #include <wx/nonownedwnd.h>
 #include <wx/toplevel.h>
 #include <wx/button.h>
@@ -236,4 +237,26 @@ void KIPLATFORM::UI::SetFloatLevel( wxWindow* aWindow )
 {
     // On OSX we need to forcefully give the focus to the window
     [[aWindow->GetHandle() window] setLevel:NSFloatingWindowLevel];
+}
+
+void KIPLATFORM::UI::ReleaseChildWindow( wxNonOwnedWindow* aWindow )
+{
+    if( wxTopLevelWindow* parent = static_cast<wxTopLevelWindow*>(
+            wxGetTopLevelParent( aWindow->GetParent() ) ) )
+    {
+        NSWindow* parentWindow = parent->GetWXWindow();
+        NSWindow* theWindow = aWindow->GetWXWindow();
+
+        if( parentWindow && theWindow )
+        {
+            [parentWindow removeChildWindow:theWindow];
+            [theWindow setLevel:NSFloatingWindowLevel];
+        }
+    }
+}
+
+
+void KIPLATFORM::UI::AllowNetworkFileSystems( wxDialog* aDialog )
+{
+    // Not needed on macOS - file dialogs show network filesystems by default
 }

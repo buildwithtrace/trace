@@ -230,12 +230,29 @@ wxString LSET::Name( PCB_LAYER_ID aLayerId )
         else if( static_cast<int>( aLayerId ) & 1 )
         {
             int offset = ( aLayerId - Rescue ) / 2;
-            txt = wxString::Format( wxT( "User.%d" ), offset );
+
+#if wxUSE_UNICODE_WCHAR
+            std::wstring offsetStr = std::to_wstring( offset );
+#else
+            std::string offsetStr = std::to_string( offset );
+#endif
+
+            txt = wxS( "User." );
+            txt << offsetStr;
         }
         else
         {
             int offset = ( aLayerId - B_Cu ) / 2;
-            txt = wxString::Format( wxT( "In%d.Cu" ), offset );
+
+#if wxUSE_UNICODE_WCHAR
+            std::wstring offsetStr = std::to_wstring( offset );
+#else
+            std::string offsetStr = std::to_string( offset );
+#endif
+
+            txt = wxS( "In" );
+            txt << offsetStr;
+            txt << wxS( ".Cu" );
         }
     }
 
@@ -588,7 +605,7 @@ LSET LSET::AllCuMask( int aCuLayerCount )
 }
 
 
-LSET LSET::AllCuMask()
+const LSET& LSET::AllCuMask()
 {
     static LSET s_savedMax = allCuMask( MAX_CU_LAYERS );
 

@@ -25,6 +25,7 @@
 
 #include <plotters/plotter.h>
 #include <pcbplot.h>
+#include <common.h>
 #include <base_units.h>
 #include <lset.h>
 #include <locale_io.h>
@@ -438,7 +439,7 @@ bool PLOT_CONTROLLER::OpenPlotfile( const wxString& aSuffix, PLOT_FORMAT aFormat
 
     wxString outputDirName = GetPlotOptions().GetOutputDirectory();
     outputDirName = ExpandTextVars( outputDirName, &textResolver );
-    outputDirName = ExpandEnvVarSubstitutions( outputDirName, nullptr );
+    outputDirName = ExpandEnvVarSubstitutions( outputDirName, m_board->GetProject() );
 
     wxFileName   outputDir = wxFileName::DirName( outputDirName );
     wxString     boardFilename = m_board->GetFileName();

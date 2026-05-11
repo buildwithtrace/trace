@@ -23,6 +23,8 @@
 
 #include "pcbexpr_evaluator.h"
 
+#include <inspectable_impl.h>
+
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -528,9 +530,14 @@ LIBEVAL::VALUE* PCBEXPR_TYPE_REF::GetValue( LIBEVAL::CONTEXT* aCtx )
 
 LIBEVAL::FUNC_CALL_REF PCBEXPR_UCODE::CreateFuncCall( const wxString& aName )
 {
+    wxString nameLower = aName.Lower();
+
     PCBEXPR_BUILTIN_FUNCTIONS& registry = PCBEXPR_BUILTIN_FUNCTIONS::Instance();
 
-    return registry.Get( aName.Lower() );
+    if( registry.IsGeometryDependent( nameLower ) )
+        m_hasGeometryDependentFunctions = true;
+
+    return registry.Get( nameLower );
 }
 
 

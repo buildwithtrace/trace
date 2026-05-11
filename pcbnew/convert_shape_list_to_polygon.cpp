@@ -293,7 +293,9 @@ static void processShapeSegment( PCB_SHAPE* aShape, SHAPE_LINE_CHAIN& aContour,
 
         if( !close_enough( aPrevPt, pstart, aChainingEpsilon ) )
         {
-            wxASSERT( close_enough( aPrevPt, aShape->GetEnd(), aChainingEpsilon ) );
+            if( !close_enough( aPrevPt, aShape->GetEnd(), aChainingEpsilon ) )
+                return;
+
             std::swap( pstart, pend );
         }
 
@@ -373,6 +375,9 @@ static std::map<int, std::vector<int>> buildContourHierarchy( const std::vector<
 
     for( size_t ii = 0; ii < aContours.size(); ++ii )
     {
+        if( aContours[ii].PointCount() < 1 )  // malformed/empty SHAPE_LINE_CHAIN
+            continue;
+
         VECTOR2I         firstPt = aContours[ii].GetPoint( 0 );
         std::vector<int> parents;
 
@@ -428,28 +433,60 @@ static bool addOutlinesToPolygon( const std::vector<SHAPE_LINE_CHAIN>& aContours
     return true;
 }
 
-static void addHolesToPolygon( const std::vector<SHAPE_LINE_CHAIN>& aContours,
+static void addHolesToPolygon( const std::vector<SHAPE_LINE_CHAIN>&   aContours,
                                const std::map<int, std::vector<int>>& aContourHierarchy,
-                               const std::map<int, int>& aContourToOutlineIdxMap,
-                               SHAPE_POLY_SET& aPolygons )
+                               const std::map<int, int>& aContourToOutlineIdxMap, SHAPE_POLY_SET& aPolygons,
+                               bool aAllowUseArcsInPolygons, bool aHasMalformedOverlap )
 {
-    for( const auto& [ contourIndex, parentIndexes ] : aContourHierarchy )
+    if( aAllowUseArcsInPolygons || !aHasMalformedOverlap )
     {
-        if( parentIndexes.size() % 2 == 1 )
+        for( const auto& [contourIndex, parentIndexes] : aContourHierarchy )
         {
-            // Odd number of parents; we're a hole in the parent which has one fewer parents
-            const SHAPE_LINE_CHAIN& hole = aContours[ contourIndex ];
-
-            for( int parentContourIdx : parentIndexes )
+            if( parentIndexes.size() % 2 == 1 )
             {
-                if( aContourHierarchy.at( parentContourIdx ).size() == parentIndexes.size() - 1 )
+                // Odd number of parents; we're a hole in the parent which has one fewer parents
+                const SHAPE_LINE_CHAIN& hole = aContours[contourIndex];
+
+                for( int parentContourIdx : parentIndexes )
                 {
-                    int outlineIdx = aContourToOutlineIdxMap.at( parentContourIdx );
-                    aPolygons.AddHole( hole, outlineIdx );
-                    break;
+                    if( aContourHierarchy.at( parentContourIdx ).size() == parentIndexes.size() - 1 )
+                    {
+                        int outlineIdx = aContourToOutlineIdxMap.at( parentContourIdx );
+                        aPolygons.AddHole( hole, outlineIdx );
+                        break;
+                    }
                 }
             }
         }
+
+        return;
+    }
+
+    // Malformed overlapping contours in the polygonized path.
+    SHAPE_POLY_SET cutoutCandidates;
+    SHAPE_POLY_SET islandCandidates;
+
+    for( const auto& [contourIndex, parentIndexes] : aContourHierarchy )
+    {
+        if( parentIndexes.empty() )
+            continue;
+
+        if( parentIndexes.size() % 2 == 1 )
+            cutoutCandidates.AddOutline( aContours[contourIndex] );
+        else
+            islandCandidates.AddOutline( aContours[contourIndex] );
+    }
+
+    if( cutoutCandidates.OutlineCount() )
+    {
+        cutoutCandidates.Simplify();
+        aPolygons.BooleanSubtract( cutoutCandidates );
+    }
+
+    if( islandCandidates.OutlineCount() )
+    {
+        islandCandidates.Simplify();
+        aPolygons.BooleanAdd( islandCandidates );
     }
 }
 
@@ -566,6 +603,24 @@ static PCB_SHAPE* findNext( PCB_SHAPE* aShape, const VECTOR2I& aPoint, const KDT
 
     return closest_graphic;
 }
+
+
+static bool hasOverlappingClosedContours( const std::vector<SHAPE_LINE_CHAIN>& aContours )
+{
+    for( size_t ii = 0; ii < aContours.size(); ++ii )
+    {
+        for( size_t jj = ii + 1; jj < aContours.size(); ++jj )
+        {
+            SHAPE_LINE_CHAIN::INTERSECTIONS intersections;
+
+            if( aContours[ii].Intersect( aContours[jj], intersections, true ) != 0 )
+                return true;
+        }
+    }
+
+    return false;
+}
+
 
 bool doConvertOutlineToPolygon( std::vector<PCB_SHAPE*>& aShapeList, SHAPE_POLY_SET& aPolygons,
                                 int aErrorMax, int aChainingEpsilon, bool aAllowDisjoint,
@@ -762,7 +817,7 @@ bool doConvertOutlineToPolygon( std::vector<PCB_SHAPE*>& aShapeList, SHAPE_POLY_
                         return;
 
                     const double query_pt[2] = { static_cast<double>( pt.x ), static_cast<double>( pt.y ) };
-                    uint32_t    indices[2];
+                    uint32_t    indices[2] = { 0, 0 };      // make gcc quiet
                     double      dists[2];
 
                     // Find the two closest items to the given point using kdtree
@@ -817,16 +872,19 @@ bool doConvertOutlineToPolygon( std::vector<PCB_SHAPE*>& aShapeList, SHAPE_POLY_
     // Build contour hierarchy
     auto contourHierarchy = buildContourHierarchy( contours );
 
+    bool hasMalformedOverlap = !aAllowUseArcsInPolygons && hasOverlappingClosedContours( contours );
+
     // Add outlines to polygon set
     std::map<int, int> contourToOutlineIdxMap;
-    if( !addOutlinesToPolygon( contours, contourHierarchy, aPolygons, aAllowDisjoint,
-                               aErrorHandler, fetchOwner, contourToOutlineIdxMap ) )
+    if( !addOutlinesToPolygon( contours, contourHierarchy, aPolygons, aAllowDisjoint, aErrorHandler, fetchOwner,
+                               contourToOutlineIdxMap ) )
     {
         return false;
     }
 
     // Add holes to polygon set
-    addHolesToPolygon( contours, contourHierarchy, contourToOutlineIdxMap, aPolygons );
+    addHolesToPolygon( contours, contourHierarchy, contourToOutlineIdxMap, aPolygons, aAllowUseArcsInPolygons,
+                       hasMalformedOverlap );
 
     // Check for self-intersections
     return checkSelfIntersections( aPolygons, aErrorHandler, fetchOwner );
@@ -961,13 +1019,70 @@ bool TestBoardOutlinesGraphicItems( BOARD* aBoard, int aMinDist,
         }
     }
 
+    std::vector<std::pair<PCB_SHAPE*, SHAPE_LINE_CHAIN>> closedContours;
+    closedContours.reserve( shapeList.size() );
+
+    for( PCB_SHAPE* shape : shapeList )
+    {
+        if( shape->GetShape() != SHAPE_T::POLY && shape->GetShape() != SHAPE_T::CIRCLE
+            && shape->GetShape() != SHAPE_T::RECTANGLE )
+        {
+            continue;
+        }
+
+        SHAPE_LINE_CHAIN                                    contour;
+        std::map<std::pair<VECTOR2I, VECTOR2I>, PCB_SHAPE*> shapeOwners;
+
+        processClosedShape( shape, contour, shapeOwners, shape->GetMaxError(), true );
+        closedContours.emplace_back( shape, std::move( contour ) );
+    }
+
+    for( size_t ii = 0; ii < closedContours.size(); ++ii )
+    {
+        const SHAPE_LINE_CHAIN& contourA = closedContours[ii].second;
+
+        for( size_t jj = ii + 1; jj < closedContours.size(); ++jj )
+        {
+            const SHAPE_LINE_CHAIN&         contourB = closedContours[jj].second;
+            SHAPE_LINE_CHAIN::INTERSECTIONS intersections;
+
+            // Ignore touching-only cases; report only real overlap/crossing.
+            if( contourA.Intersect( contourB, intersections, true ) == 0 )
+                continue;
+
+            success = false;
+
+            if( aErrorHandler )
+            {
+                PCB_SHAPE* shapeA = closedContours[ii].first;
+                PCB_SHAPE* shapeB = closedContours[jj].first;
+
+                VECTOR2I               midpoint = intersections.front().p;
+                std::shared_ptr<SHAPE> effectiveShapeA = shapeA->GetEffectiveShape();
+                std::shared_ptr<SHAPE> effectiveShapeB = shapeB->GetEffectiveShape();
+
+                if( effectiveShapeA && effectiveShapeB )
+                {
+                    BOX2I bboxA = effectiveShapeA->BBox();
+                    BOX2I bboxB = effectiveShapeB->BBox();
+                    BOX2I overlapBox = bboxA.Intersect( bboxB );
+
+                    if( overlapBox.GetWidth() > 0 && overlapBox.GetHeight() > 0 )
+                        midpoint = overlapBox.Centre();
+                }
+
+                ( *aErrorHandler )( _( "(self-intersecting)" ), shapeA, shapeB, midpoint );
+            }
+        }
+    }
+
     return success;
 }
 
 
 bool BuildBoardPolygonOutlines( BOARD* aBoard, SHAPE_POLY_SET& aOutlines, int aErrorMax,
-                                int aChainingEpsilon, OUTLINE_ERROR_HANDLER* aErrorHandler,
-                                bool aAllowUseArcsInPolygons )
+                                int aChainingEpsilon, bool aInferOutlineIfNecessary,
+                                OUTLINE_ERROR_HANDLER* aErrorHandler, bool aAllowUseArcsInPolygons )
 {
     PCB_TYPE_COLLECTOR items;
     SHAPE_POLY_SET     fpHoles;
@@ -1001,9 +1116,10 @@ bool BuildBoardPolygonOutlines( BOARD* aBoard, SHAPE_POLY_SET& aOutlines, int aE
             SHAPE_POLY_SET fpOutlines;
             success = doConvertOutlineToPolygon( fpSegList, fpOutlines, aErrorMax, aChainingEpsilon,
                                                  false,
-                                                 // don't report errors here; the second pass also
-                                                 // gets an opportunity to use these segments
-                                                 nullptr, aAllowUseArcsInPolygons, cleaner );
+                                                 nullptr, // don't report errors here; the second pass also
+                                                          // gets an opportunity to use these segments
+                                                 aAllowUseArcsInPolygons,
+                                                 cleaner );
 
             // Test to see if we should make holes or outlines.  Holes are made if the footprint
             // has copper outside of a single, closed outline.  If there are multiple outlines,
@@ -1045,7 +1161,7 @@ bool BuildBoardPolygonOutlines( BOARD* aBoard, SHAPE_POLY_SET& aOutlines, int aE
                                              aErrorHandler, aAllowUseArcsInPolygons, cleaner );
     }
 
-    if( !success || !aOutlines.OutlineCount() )
+    if( ( !success || !aOutlines.OutlineCount() ) && aInferOutlineIfNecessary )
     {
         // Couldn't create a valid polygon outline.  Use the board edge cuts bounding box to
         // create a rectangular outline, or, failing that, the bounding box of the items on
@@ -1054,7 +1170,7 @@ bool BuildBoardPolygonOutlines( BOARD* aBoard, SHAPE_POLY_SET& aOutlines, int aE
 
         // If null area, uses the global bounding box.
         if( ( bbbox.GetWidth() ) == 0 || ( bbbox.GetHeight() == 0 ) )
-            bbbox = aBoard->ComputeBoundingBox( false );
+            bbbox = aBoard->ComputeBoundingBox( false, true );
 
         // Ensure non null area. If happen, gives a minimal size.
         if( ( bbbox.GetWidth() ) == 0 || ( bbbox.GetHeight() == 0 ) )
@@ -1095,6 +1211,7 @@ bool BuildBoardPolygonOutlines( BOARD* aBoard, SHAPE_POLY_SET& aOutlines, int aE
     }
     else
     {
+        fpHoles.Simplify();
         aOutlines.BooleanSubtract( fpHoles );
     }
 
@@ -1121,7 +1238,7 @@ void buildBoardBoundingBoxPoly( const BOARD* aBoard, SHAPE_POLY_SET& aOutline )
 
     // If null area, uses the global bounding box.
     if( ( bbbox.GetWidth() ) == 0 || ( bbbox.GetHeight() == 0 ) )
-        bbbox = aBoard->ComputeBoundingBox( false );
+        bbbox = aBoard->ComputeBoundingBox( false, true );
 
     // Ensure non null area. If happen, gives a minimal size.
     if( ( bbbox.GetWidth() ) == 0 || ( bbbox.GetHeight() == 0 ) )

@@ -34,6 +34,8 @@
 #include <wx/log.h>
 #include <sch_table.h>
 #include <geometry/geometry_utils.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 
 SCH_TABLE::SCH_TABLE( int aLineWidth ) :
@@ -112,6 +114,9 @@ void SCH_TABLE::SetPosition( const VECTOR2I& aPos )
 
 VECTOR2I SCH_TABLE::GetPosition() const
 {
+    if( m_cells.empty() )
+        return VECTOR2I( 0, 0 );  // Return origin if table has no cells
+
     return m_cells[0]->GetPosition();
 }
 
@@ -158,6 +163,10 @@ void SCH_TABLE::Normalize()
             int colWidth = m_colWidths[col];
 
             SCH_TABLECELL* cell = GetCell( row, col );
+
+            if( !cell )
+                continue;  // Skip if cell doesn't exist (shouldn't happen, but be defensive)
+
             VECTOR2I       pos( x, y );
 
             RotatePoint( pos, GetPosition(), cell->GetTextAngle() );
@@ -234,10 +243,10 @@ bool SCH_TABLE::operator<( const SCH_ITEM& aItem ) const
         return m_cells.size() < other.m_cells.size();
 
     if( GetPosition().x != other.GetPosition().x )
-        return GetPosition().x < GetPosition().x;
+        return GetPosition().x < other.GetPosition().x;
 
-    if( GetPosition().y != GetPosition().y )
-        return GetPosition().y < GetPosition().y;
+    if( GetPosition().y != other.GetPosition().y )
+        return GetPosition().y < other.GetPosition().y;
 
     return m_cells[0] < other.m_cells[0];
 }
@@ -252,7 +261,9 @@ void SCH_TABLE::RunOnChildren( const std::function<void( SCH_ITEM* )>& aFunction
 
 const BOX2I SCH_TABLE::GetBoundingBox() const
 {
-    // Note: a table with no cells is not allowed
+    if( m_cells.empty() )
+        return BOX2I();
+
     BOX2I bbox = m_cells[0]->GetBoundingBox();
 
     bbox.Merge( m_cells[m_cells.size() - 1]->GetBoundingBox() );
@@ -437,6 +448,9 @@ void SCH_TABLE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
 
                 if( !aPlotter->GetColorMode() || color == COLOR4D::UNSPECIFIED )
                     color = settings->GetLayerColor( m_layer );
+
+                if( color.m_text && Schematic() )
+                    color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
 
                 if( lineStyle == LINE_STYLE::DEFAULT )
                     lineStyle = LINE_STYLE::SOLID;

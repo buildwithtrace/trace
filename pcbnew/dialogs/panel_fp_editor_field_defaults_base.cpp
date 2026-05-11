@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6a-dirty)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -136,9 +136,6 @@ PANEL_FP_EDITOR_FIELD_DEFAULTS_BASE::PANEL_FP_EDITOR_FIELD_DEFAULTS_BASE( wxWind
 
 
 	bSizerMargins->Add( defaultTextItemsSizer, 1, wxEXPAND, 20 );
-
-
-	bSizerMargins->Add( 5, 25, 0, wxEXPAND, 5 );
 
 
 	bSizerMain->Add( bSizerMargins, 1, wxEXPAND, 5 );

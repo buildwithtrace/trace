@@ -124,6 +124,22 @@ enum class PAD_PROP
 };
 
 
+enum class UNCONNECTED_LAYER_MODE
+{
+    KEEP_ALL,
+    START_END_ONLY,
+    REMOVE_ALL,
+    REMOVE_EXCEPT_START_AND_END
+};
+
+
+enum class CUSTOM_SHAPE_ZONE_MODE
+{
+    OUTLINE,
+    CONVEXHULL
+};
+
+
 /**
  * A PADSTACK defines the characteristics of a single or multi-layer pad, in the IPC sense of
  * the word.  This means that a PCB_PAD has a padstack, but also a PCB_VIA.  The padstack for
@@ -164,20 +180,6 @@ public:
     static constexpr PCB_LAYER_ID INNER_LAYERS = In1_Cu;
 
     ///! Whether or not to remove the copper shape for unconnected layers
-    enum class UNCONNECTED_LAYER_MODE
-    {
-        KEEP_ALL,
-        START_END_ONLY,
-        REMOVE_ALL,
-        REMOVE_EXCEPT_START_AND_END
-    };
-
-    enum class CUSTOM_SHAPE_ZONE_MODE
-    {
-        OUTLINE,
-        CONVEXHULL
-    };
-
     ///! The set of properties that define a pad's shape on a given layer
     struct SHAPE_PROPS
     {
@@ -206,6 +208,7 @@ public:
 
         SHAPE_PROPS();
         bool operator==( const SHAPE_PROPS& aOther ) const;
+        int Compare( const SHAPE_PROPS& aOther ) const;
     };
 
     /**
@@ -236,6 +239,9 @@ public:
         std::vector<std::shared_ptr<PCB_SHAPE>> custom_shapes;
 
         bool operator==( const COPPER_LAYER_PROPS& aOther ) const;
+        int Compare( const COPPER_LAYER_PROPS& aOther ) const;
+
+        double Similarity( const COPPER_LAYER_PROPS& aOther ) const;
     };
 
     ///! The features of a padstack that can vary on outer layers.
@@ -252,20 +258,22 @@ public:
         std::optional<bool> has_plugging; ///< True if the drill hole should be plugged on this side
 
         bool operator==( const MASK_LAYER_PROPS& aOther ) const;
+        int Compare( const MASK_LAYER_PROPS& aOther ) const;
     };
 
     ///! The properties of a padstack drill.  Drill position is always the pad position (origin).
     struct DRILL_PROPS
     {
-        VECTOR2I size;  ///< Drill diameter (x == y) or slot dimensions (x != y)
-        PAD_DRILL_SHAPE shape;
-        PCB_LAYER_ID start;
-        PCB_LAYER_ID end;
+        VECTOR2I        size;                            ///< Drill diameter (x == y) or slot dimensions (x != y)
+        PAD_DRILL_SHAPE shape = PAD_DRILL_SHAPE::UNDEFINED;
+        PCB_LAYER_ID    start = UNDEFINED_LAYER;
+        PCB_LAYER_ID    end   = UNDEFINED_LAYER;
 
         std::optional<bool> is_filled; ///< True if the drill hole should be filled completely
         std::optional<bool> is_capped; ///< True if the drill hole should be capped
 
         bool operator==( const DRILL_PROPS& aOther ) const;
+        int Compare( const DRILL_PROPS& aOther ) const;
     };
 
     struct POST_MACHINING_PROPS
@@ -276,6 +284,7 @@ public:
         int angle = 0;
 
         bool operator==( const POST_MACHINING_PROPS& aOther ) const;
+        int Compare( const POST_MACHINING_PROPS& aOther ) const;
     };
 
 public:
@@ -299,6 +308,12 @@ public:
     static int Compare( const PADSTACK* aPadstackRef, const PADSTACK* aPadstackCmp );
 
     /**
+     * Check if the padstack has an explicit definition for the given layer.
+     * This is useful for detecting if a layer removal will cause data loss.
+     */
+    bool HasExplicitDefinitionForLayer( PCB_LAYER_ID aLayer ) const;
+
+    /**
      * Return a measure of how likely the other object is to represent the same
      * object.  The scale runs from 0.0 (definitely different objects) to 1.0 (same)
      */
@@ -312,7 +327,7 @@ public:
      * Flips the padstack layers in the case that the pad's parent footprint is flipped to the
      * other side of the board.
      */
-    void FlipLayers( int aCopperLayerCount );
+    void FlipLayers( BOARD* aBoard );
 
     PCB_LAYER_ID StartLayer() const;
     PCB_LAYER_ID EndLayer() const;
@@ -556,7 +571,7 @@ private:
 
 #ifndef SWIG
 DECLARE_ENUM_TO_WXANY( PAD_DRILL_POST_MACHINING_MODE );
-DECLARE_ENUM_TO_WXANY( PADSTACK::UNCONNECTED_LAYER_MODE );
+DECLARE_ENUM_TO_WXANY( UNCONNECTED_LAYER_MODE );
 DECLARE_ENUM_TO_WXANY( BACKDRILL_MODE );
 #endif
 

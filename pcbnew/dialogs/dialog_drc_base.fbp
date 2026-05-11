@@ -251,7 +251,7 @@
               </object>
             </object>
             <object class="gbsizeritem" expanded="true">
-              <property name="border">5</property>
+              <property name="border">10</property>
               <property name="colspan">1</property>
               <property name="column">2</property>
               <property name="flag">wxALIGN_CENTER_VERTICAL|wxRIGHT</property>
@@ -300,7 +300,7 @@
                 <property name="maximum_size"></property>
                 <property name="min_size"></property>
                 <property name="minimize_button">0</property>
-                <property name="minimum_size">30,30</property>
+                <property name="minimum_size">-1,-1</property>
                 <property name="moveable">1</property>
                 <property name="name">m_bMenu</property>
                 <property name="pane_border">1</property>
@@ -888,7 +888,7 @@
                             <property name="minimum_size">-1,320</property>
                             <property name="name">bSizerViolationsBox</property>
                             <property name="orient">wxVERTICAL</property>
-                            <property name="permission">none</property>
+                            <property name="permission">protected</property>
                             <object class="sizeritem" expanded="false">
                               <property name="border">5</property>
                               <property name="flag">wxALL|wxEXPAND</property>

@@ -30,6 +30,7 @@
 #include <widgets/color_swatch.h>
 #include <widgets/wx_combobox.h>
 #include <settings/color_settings.h>
+#include <widgets/wx_infobar.h>
 #include <sch_textbox.h>
 #include <confirm.h>
 #include <schematic.h>
@@ -215,6 +216,7 @@ DIALOG_TEXT_PROPERTIES::DIALOG_TEXT_PROPERTIES( SCH_BASE_FRAME* aParent, SCH_ITE
 DIALOG_TEXT_PROPERTIES::~DIALOG_TEXT_PROPERTIES()
 {
     delete m_scintillaTricks;
+    m_scintillaTricks = nullptr;
 
     if( m_helpWindow )
         m_helpWindow->Destroy();
@@ -478,22 +480,7 @@ bool DIALOG_TEXT_PROPERTIES::TransferDataFromWindow()
     text.Replace( "\r", "" );
 #endif
 
-    if( m_currentItem->Type() == SCH_TEXTBOX_T )
-    {
-        // Textboxes have a defined extent and so are allowed to be empty
-        m_currentText->SetText( text );
-    }
-    else if( !text.IsEmpty() )
-    {
-        m_currentText->SetText( text );
-    }
-    else
-    {
-        // Other text items do not have defined extents, and so will disappear if empty
-        DisplayError( this, _( "Text can not be empty." ) );
-        return false;
-    }
-
+    m_currentText->SetText( text );
     m_currentItem->SetExcludedFromSim( m_excludeFromSim->GetValue() );
 
     if( SYMBOL_EDIT_FRAME* symbolEditor = dynamic_cast<SYMBOL_EDIT_FRAME*>( m_frame ) )
@@ -524,14 +511,10 @@ bool DIALOG_TEXT_PROPERTIES::TransferDataFromWindow()
     }
 
     if( m_currentText->GetTextWidth() != m_textSize.GetValue() )
-        m_currentText->SetTextSize( VECTOR2I( m_textSize.GetIntValue(),
-                                              m_textSize.GetIntValue() ) );
+        m_currentText->SetTextSize( VECTOR2I( m_textSize.GetIntValue(), m_textSize.GetIntValue() ) );
 
     if( m_fontCtrl->HaveFontSelection() )
-    {
-        m_currentText->SetFont( m_fontCtrl->GetFontSelection( m_bold->IsChecked(),
-                                                              m_italic->IsChecked() ) );
-    }
+        m_currentText->SetFont( m_fontCtrl->GetFontSelection( m_bold->IsChecked(), m_italic->IsChecked() ) );
 
     // Must come after SetTextSize()
     m_currentText->SetBold( m_bold->IsChecked() );
@@ -581,9 +564,31 @@ bool DIALOG_TEXT_PROPERTIES::TransferDataFromWindow()
 
         textBox->SetStroke( stroke );
 
-        textBox->SetFillMode( m_filledCtrl->GetValue() ? FILL_T::FILLED_WITH_COLOR
-                                                       : FILL_T::NO_FILL );
+        textBox->SetFillMode( m_filledCtrl->GetValue() ? FILL_T::FILLED_WITH_COLOR : FILL_T::NO_FILL );
         textBox->SetFillColor( m_fillColorSwatch->GetSwatchColor() );
+
+        textBox->ClearBoundingBoxCache();
+        textBox->ClearRenderCache();
+
+        VECTOR2I minBoxSize = textBox->GetMinSize();
+        VECTOR2I start = textBox->GetStart();
+        VECTOR2I end = textBox->GetEnd();
+        bool expanded = false;
+
+        if( minBoxSize.x > 0 && std::abs( end.x - start.x ) < minBoxSize.x )
+        {
+            end.x = ( end.x >= start.x ) ? start.x + minBoxSize.x : start.x - minBoxSize.x;
+            expanded = true;
+        }
+
+        if( minBoxSize.y > 0 && std::abs( end.y - start.y ) < minBoxSize.y )
+        {
+            end.y = ( end.y >= start.y ) ? start.y + minBoxSize.y : start.y - minBoxSize.y;
+            expanded = true;
+        }
+
+        if( expanded )
+            textBox->SetEnd( end );
     }
 
     if( !commit.Empty() )

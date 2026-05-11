@@ -33,6 +33,7 @@
 
 #include <project/project_file.h>
 #include <sch_edit_frame.h>
+#include <widgets/wx_infobar.h>
 #include <kiway.h>
 #include <confirm.h>
 #include <bitmaps.h>
@@ -419,7 +420,7 @@ void SIMULATOR_FRAME::StartSimulation()
 
         if( tranSpicePlot.IsEmpty() )
         {
-            DisplayErrorMessage( this, _( "You must run a TRAN simulation first; its results"
+            DisplayErrorMessage( this, _( "You must run a TRAN simulation first; its results "
                                           "will be used for the fast Fourier transform." ) );
         }
         else

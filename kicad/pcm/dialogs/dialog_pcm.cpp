@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2021 Andrew Lutsenko, anlutsenko at gmail dot com
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,6 +37,7 @@
 #include "widgets/wx_grid.h"
 
 #include <fstream>
+#include <kiplatform/ui.h>
 #include <launch_ext.h>
 #include <sstream>
 #include <vector>
@@ -259,7 +261,7 @@ void DIALOG_PCM::OnManageRepositoriesClicked( wxCommandEvent& event )
         dialog_data = dialog->GetData();
         m_pcm->SetRepositoryList( dialog_data );
 
-        if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+        if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
             cfg->m_PcmRepositories = std::move( dialog_data );
 
         setRepositoryListFromPcm();
@@ -302,6 +304,8 @@ void DIALOG_PCM::OnInstallFromFileClicked( wxCommandEvent& event )
 {
     wxFileDialog open_file_dialog( this, _( "Install Package" ), wxEmptyString, wxEmptyString,
                                    wxT( "Zip files (*.zip)|*.zip" ), wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &open_file_dialog );
 
     if( open_file_dialog.ShowModal() == wxID_CANCEL )
         return;
@@ -346,6 +350,9 @@ void DIALOG_PCM::setRepositoryData( const wxString& aRepositoryId )
 
         for( const PCM_PACKAGE& pkg : packages )
         {
+            if( pkg.type == PT_INVALID )
+                continue;
+
             PACKAGE_VIEW_DATA package_data( pkg );
 
             if( m_packageBitmaps.count( package_data.package.identifier ) > 0 )

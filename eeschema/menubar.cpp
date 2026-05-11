@@ -4,6 +4,7 @@
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2009 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * Copyright (C) 2019 CERN
  *
  * This program is free software; you can redistribute it and/or
@@ -38,6 +39,7 @@
 #include <widgets/wx_menubar.h>
 #include <widgets/panel_remote_symbol.h>
 #include <advanced_config.h>
+#include <auth/auth_manager.h>
 
 
 void SCH_EDIT_FRAME::doReCreateMenuBar()
@@ -101,7 +103,7 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     submenuImport->SetTitle( _( "Import" ) );
     submenuImport->SetIcon( BITMAPS::import );
 
-    submenuImport->Add( _( "Non-KiCad Schematic..." ),
+    submenuImport->Add( _( "External Schematic..." ),
                 _( "Replace current schematic sheet with one imported from another application" ),
                 ID_IMPORT_NON_KICAD_SCH,
                 BITMAPS::import_document );
@@ -165,10 +167,10 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     ACTION_MENU* submenuAttributes = new ACTION_MENU( false, selTool );
     submenuAttributes->SetTitle( _( "Attributes" ) );
 
-    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromSimulation, ACTION_MENU::CHECK );
-    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromBOM,        ACTION_MENU::CHECK );
-    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromBoard,      ACTION_MENU::CHECK );
-    submenuAttributes->Add( SCH_ACTIONS::setDNP,                   ACTION_MENU::CHECK );
+    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromSim,    ACTION_MENU::CHECK );
+    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromBOM,    ACTION_MENU::CHECK );
+    submenuAttributes->Add( SCH_ACTIONS::setExcludeFromBoard,  ACTION_MENU::CHECK );
+    submenuAttributes->Add( SCH_ACTIONS::setDNP,               ACTION_MENU::CHECK );
 
     editMenu->Add( submenuAttributes );
 
@@ -180,8 +182,8 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     ACTION_MENU* showHidePanels = new ACTION_MENU( false, selTool );
     showHidePanels->SetTitle( _( "Panels" ) );
 
-    showHidePanels->Add( ACTIONS::showProperties, ACTION_MENU::CHECK );
-    showHidePanels->Add( ACTIONS::showSearch, ACTION_MENU::CHECK );
+    showHidePanels->Add( ACTIONS::showProperties,    ACTION_MENU::CHECK );
+    showHidePanels->Add( ACTIONS::showSearch,        ACTION_MENU::CHECK );
     showHidePanels->Add( SCH_ACTIONS::showHierarchy, ACTION_MENU::CHECK );
 
     if( ADVANCED_CFG::GetCfg().m_IncrementalConnectivity )
@@ -193,8 +195,10 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     if( m_remoteSymbolPane && !m_remoteSymbolPane->HasDataSources() )
     {
         remoteSymbolItem->Enable( false );
-        remoteSymbolItem->SetHelp( _( "Install a remote symbol server using the Plugin and Content Manger to enable" ) );
+        remoteSymbolItem->SetHelp( _( "Search signed-in remote symbol providers and download verified libraries." ) );
     }
+
+    showHidePanels->Add( SCH_ACTIONS::showAIChat, ACTION_MENU::CHECK, _( "AI Agent" ) );
 
     viewMenu->Add( showHidePanels );
 
@@ -309,9 +313,6 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     toolsMenu->Add( SCH_ACTIONS::rescueSymbols );
     toolsMenu->Add( SCH_ACTIONS::remapSymbols );
 
-    if( ADVANCED_CFG::GetCfg().m_ShowRepairSchematic )
-        toolsMenu->Add( SCH_ACTIONS::repairSchematic );
-
     toolsMenu->AppendSeparator();
     toolsMenu->Add( SCH_ACTIONS::editSymbolFields );
     toolsMenu->Add( SCH_ACTIONS::editSymbolLibraryLinks );
@@ -328,26 +329,52 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::updateSchematicFromPcb )->Enable( !Kiface().IsSingle() );
 
-    if( ADVANCED_CFG::GetCfg().m_EnableVariantsUI )
-    {
-        toolsMenu->AppendSeparator();
-        ACTION_MENU* submenuVariants = new ACTION_MENU( false, selTool );
-        submenuVariants->SetTitle( _( "Variants" ) );
-        submenuVariants->Add( SCH_ACTIONS::addVariant );
-        submenuVariants->Add( SCH_ACTIONS::removeVariant );
-        toolsMenu->Add( submenuVariants );
-    }
+    toolsMenu->AppendSeparator();
+    ACTION_MENU* submenuVariants = new ACTION_MENU( false, selTool );
+    submenuVariants->SetTitle( _( "Variants" ) );
+    submenuVariants->Add( SCH_ACTIONS::addVariant );
+    submenuVariants->Add( SCH_ACTIONS::removeVariant );
+    toolsMenu->Add( submenuVariants );
 
 #ifdef KICAD_IPC_API
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::pluginsReload );
 #endif
 
+    //-- Account menu -----------------------------------------------
+    //
+    ACTION_MENU* accountMenu = new ACTION_MENU( false, selTool );
+    
+    bool isSignedIn = AUTH_MANAGER::Instance().IsAuthenticated();
+    
+    if( isSignedIn )
+    {
+        AUTH_USER user = AUTH_MANAGER::Instance().GetCurrentUser();
+        wxString userLabel = user.fullName.IsEmpty() ? user.email : user.fullName;
+        if( userLabel.IsEmpty() )
+            userLabel = _( "Signed In" );
+        
+        wxMenuItem* userItem = accountMenu->Add( userLabel, wxEmptyString, wxID_ANY, BITMAPS::icon_kicad );
+        userItem->Enable( false );
+        
+        accountMenu->AppendSeparator();
+        accountMenu->Add( _( "Sign Out" ), _( "Sign out of your Trace account" ),
+                         ID_ACCOUNT_SIGN_OUT, BITMAPS::exit );
+    }
+    else
+    {
+        accountMenu->Add( _( "Sign In" ), _( "Sign in to your Trace account" ),
+                         ID_ACCOUNT_SIGN_IN, BITMAPS::icon_kicad );
+    }
+
     //-- Preferences menu -----------------------------------------------
     //
     ACTION_MENU* prefsMenu = new ACTION_MENU( false, selTool );
 
     prefsMenu->Add( ACTIONS::configurePaths );
+#ifdef KICAD_BACKEND_URL_OVERRIDE
+    prefsMenu->Add( ACTIONS::setBackendUrl );
+#endif
     prefsMenu->Add( ACTIONS::showSymbolLibTable );
     prefsMenu->Add( ACTIONS::showDesignBlockLibTable );
     prefsMenu->Add( ACTIONS::openPreferences );
@@ -364,10 +391,10 @@ void SCH_EDIT_FRAME::doReCreateMenuBar()
     menuBar->Append( placeMenu,   _( "&Place" ) );
     menuBar->Append( inspectMenu, _( "&Inspect" ) );
     menuBar->Append( toolsMenu,   _( "&Tools" ) );
+    menuBar->Append( accountMenu, _( "&Account" ) );
     menuBar->Append( prefsMenu,   _( "P&references" ) );
     AddStandardHelpMenu( menuBar );
 
     SetMenuBar( menuBar );
     delete oldMenuBar;
 }
-

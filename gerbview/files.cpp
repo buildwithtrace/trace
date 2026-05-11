@@ -39,6 +39,7 @@
 #include <widgets/wx_progress_reporters.h>
 #include "widgets/gerbview_layer_widget.h"
 #include <tool/tool_manager.h>
+#include <kiplatform/ui.h>
 
 // HTML Messages used more than one time:
 #define MSG_NO_MORE_LAYER _( "<b>No more available layers</b> in GerbView to load files" )
@@ -48,14 +49,10 @@
 
 void GERBVIEW_FRAME::OnGbrFileHistory( wxCommandEvent& event )
 {
-    wxString fn;
+    wxString filename = GetFileFromHistory( event.GetId(), _( "Gerber files" ) );
 
-    fn = GetFileFromHistory( event.GetId(), _( "Gerber files" ) );
-
-    if( !fn.IsEmpty() )
-    {
-        LoadGerberFiles( fn );
-    }
+    if( !filename.IsEmpty() )
+        LoadGerberFiles( filename );
 }
 
 void GERBVIEW_FRAME::OnClearGbrFileHistory( wxCommandEvent& aEvent )
@@ -66,14 +63,10 @@ void GERBVIEW_FRAME::OnClearGbrFileHistory( wxCommandEvent& aEvent )
 
 void GERBVIEW_FRAME::OnDrlFileHistory( wxCommandEvent& event )
 {
-    wxString fn;
+    wxString filename = GetFileFromHistory( event.GetId(), _( "Drill files" ), &m_drillFileHistory );
 
-    fn = GetFileFromHistory( event.GetId(), _( "Drill files" ), &m_drillFileHistory );
-
-    if( !fn.IsEmpty() )
-    {
-        LoadExcellonFiles( fn );
-    }
+    if( !filename.IsEmpty() )
+        LoadExcellonFiles( filename );
 }
 
 
@@ -91,13 +84,10 @@ void GERBVIEW_FRAME::OnClearDrlFileHistory( wxCommandEvent& aEvent )
 
 void GERBVIEW_FRAME::OnZipFileHistory( wxCommandEvent& event )
 {
-    wxString filename;
-    filename = GetFileFromHistory( event.GetId(), _( "Zip files" ), &m_zipFileHistory );
+    wxString filename = GetFileFromHistory( event.GetId(), _( "Zip files" ), &m_zipFileHistory );
 
     if( !filename.IsEmpty() )
-    {
         LoadZipArchiveFile( filename );
-    }
 }
 
 
@@ -160,6 +150,8 @@ bool GERBVIEW_FRAME::LoadFileOrShowDialog( const wxString& aFileName,
 
         wxFileDialog dlg( this, dialogTitle, currentPath, filename.GetFullName(), dialogFiletypes,
                           wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE | wxFD_CHANGE_DIR );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         wxArrayString dummy1, dummy2;
         const int nWildcards = wxParseCommonDialogsFilter( dialogFiletypes, dummy1, dummy2 );
@@ -669,6 +661,8 @@ bool GERBVIEW_FRAME::LoadZipArchiveFile( const wxString& aFullFileName )
         wxFileDialog dlg( this, _( "Open Zip File" ), currentPath, filename.GetFullName(),
                           FILEEXT::ZipFileWildcard(),
                           wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_CHANGE_DIR );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return false;

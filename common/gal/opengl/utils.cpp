@@ -26,10 +26,10 @@
 
 #include <confirm.h> // DisplayError
 
-#include <gal/opengl/kiglew.h> // Must be included first
+#include <kicad_gl/kiglad.h> // Must be included first
 
 #include <stdexcept>
-#include <wx/log.h> // wxLogDebug
+#include <wx/log.h> // wxLogTrace
 
 
 /**
@@ -67,39 +67,39 @@ int checkGlError( const std::string& aInfo, const char* aFile, int aLine, bool a
 
     case GL_INVALID_FRAMEBUFFER_OPERATION:
     {
-        GLenum status = glCheckFramebufferStatusEXT( GL_FRAMEBUFFER_EXT );
+        GLenum status = glCheckFramebufferStatus( GL_FRAMEBUFFER );
 
-        if( status != GL_FRAMEBUFFER_COMPLETE_EXT )
+        if( status != GL_FRAMEBUFFER_COMPLETE )
         {
             switch( status )
             {
-            case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT:
+            case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
                 errorMsg = "The framebuffer attachment points are incomplete.";
                 break;
 
-            case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT_EXT:
+            case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
                 errorMsg = "No images attached to the framebuffer.";
                 break;
 
-            case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER_EXT:
+            case GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER:
                 errorMsg = "The framebuffer does not have at least one image attached to it.";
                 break;
 
-            case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER_EXT:
+            case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
                 errorMsg = "The framebuffer read buffer is incomplete.";
                 break;
 
-            case GL_FRAMEBUFFER_UNSUPPORTED_EXT:
+            case GL_FRAMEBUFFER_UNSUPPORTED:
                 errorMsg = "The combination of internal formats of the attached images violates "
                            "an implementation dependent set of restrictions.";
                 break;
 
-            case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE_EXT:
+            case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
                 errorMsg = "GL_RENDERBUFFER_SAMPLES is not the same for all attached render "
                            "buffers.";
                 break;
 
-            case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS_EXT:
+            case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
                 errorMsg = "Framebuffer incomplete layer targets errors.";
                 break;
 
@@ -154,7 +154,7 @@ int checkGlError( const std::string& aInfo, const char* aFile, int aLine, bool a
                                              aFile,
                                              aLine );
 
-            DisplayErrorMessage( nullptr, "OpenGL Error", errorMsg );
+            DisplayErrorMessage( nullptr, "OpenGL Error", msg );
         }
     }
 

@@ -85,6 +85,7 @@ enum class ALTIUM_PCB_DIR
 
 
 class BOARD;
+class EDA_TEXT;
 class FP_SHAPE;
 class PCB_SHAPE;
 class PCB_TEXTBOX;
@@ -245,6 +246,8 @@ private:
 
     void HelperParsePad6NonCopper( const APAD6& aElem, PCB_LAYER_ID aLayer, PCB_SHAPE* aShape );
 
+    void HelperFillMechanicalLayerAssignments( const std::vector<ABOARD6_LAYER_STACKUP>& aStackup );
+
     void HelperCreateBoardOutline( const std::vector<ALTIUM_VERTICE>& aVertices );
 
     void HelperSetZoneLayers( ZONE& aZone, const ALTIUM_LAYER aAltiumLayer );
@@ -273,7 +276,7 @@ private:
     std::vector<PCB_DIM_RADIAL*>         m_radialDimensions;
     std::map<uint32_t, wxString>         m_unicodeStrings;
     std::vector<int>                     m_altiumToKicadNetcodes;
-    std::map<ALTIUM_LAYER, PCB_LAYER_ID> m_layermap; // used to correctly map copper layers
+    std::map<ALTIUM_LAYER, PCB_LAYER_ID> m_layermap; // used to correctly map layers
     std::map<ALTIUM_LAYER, wxString>     m_layerNames;
 
     std::map<wxString, ALTIUM_EMBEDDED_MODEL_DATA>  m_EmbeddedModels;

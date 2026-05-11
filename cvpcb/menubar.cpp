@@ -67,6 +67,9 @@ void CVPCB_MAINFRAME::doReCreateMenuBar()
     ACTION_MENU* prefsMenu = new ACTION_MENU( false, tool );
 
     prefsMenu->Add( ACTIONS::configurePaths );
+#ifdef KICAD_BACKEND_URL_OVERRIDE
+    prefsMenu->Add( ACTIONS::setBackendUrl );
+#endif
     prefsMenu->Add( ACTIONS::showFootprintLibTable );
     prefsMenu->Add( CVPCB_ACTIONS::showEquFileTable);
     prefsMenu->Add( ACTIONS::openPreferences);

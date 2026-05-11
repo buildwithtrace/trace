@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <set>
+
 #include <dialog_symbol_fields_table_base.h>
 #include <sch_reference_list.h>
 #include <schematic.h>
@@ -119,6 +121,16 @@ private:
     void EnableSelectionEvents();
     void DisableSelectionEvents();
 
+    /**
+     * Saves the current grid selection as a set of symbol full paths for later restoration.
+     */
+    std::set<wxString> SaveGridSelection();
+
+    /**
+     * Restores the grid selection from a previously saved set of symbol full paths.
+     */
+    void RestoreGridSelection( const std::set<wxString>& aFullPaths );
+
 private:
     SCH_REFERENCE_LIST getSymbolReferences( SCH_SYMBOL* aSymbol, SCH_REFERENCE_LIST& aCachedRefs );
     SCH_REFERENCE_LIST getSheetSymbolReferences( SCH_SHEET& aSheet );
@@ -142,9 +154,12 @@ private:
     void onAddVariant( wxCommandEvent& aEvent ) override;
     void onDeleteVariant( wxCommandEvent& aEvent ) override;
     void onRenameVariant( wxCommandEvent& aEvent ) override;
+    void onCopyVariant( wxCommandEvent& aEvent ) override;
     void onVariantSelectionChange( wxCommandEvent& aEvent ) override;
 
-    std::set<wxString> getSelectedVariants() const;
+    void updateVariantButtonStates();
+
+    wxString getSelectedVariant() const;
 
 private:
     std::map<wxString, BOM_PRESET>     m_bomPresets;

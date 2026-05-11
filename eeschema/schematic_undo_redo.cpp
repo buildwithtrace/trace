@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -249,6 +250,7 @@ void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList )
     std::vector<SCH_ITEM*> bulkRemovedItems;
     std::vector<SCH_ITEM*> bulkChangedItems;
     std::set<SCH_TABLE*>   changedTables;
+    bool                   updateVariantCtrl = false;
     bool                   dirtyConnectivity = false;
     bool                   rebuildHierarchyNavigator = false;
     bool                   refreshHierarchy = false;
@@ -265,6 +267,8 @@ void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList )
         EDA_ITEM*      eda_item = aList->GetPickedItem( ii );
         SCH_SCREEN*    screen = dynamic_cast<SCH_SCREEN*>( aList->GetScreenForItem( ii ) );
         SCH_SHEET_PATH undoSheet = sheets.FindSheetForScreen( screen );
+
+        wxCHECK2( eda_item, continue );
 
         eda_item->SetFlags( aList->GetPickerFlags( ii ) );
         eda_item->ClearEditFlags();
@@ -420,7 +424,12 @@ void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList )
                     {
                         refreshHierarchy = true;
                     }
+
+                    updateVariantCtrl = true;
                 }
+
+                if( schItem->Type() == SCH_SYMBOL_T )
+                    updateVariantCtrl = true;
 
                 schItem->SwapItemData( itemCopy );
 
@@ -539,6 +548,13 @@ void SCH_EDIT_FRAME::PutDataInPreviousState( PICKED_ITEMS_LIST* aList )
     // Update the hierarchy navigator when there are sheet changes.
     if( rebuildHierarchyNavigator )
         UpdateHierarchyNavigator();
+
+    if( updateVariantCtrl && m_schematic )
+    {
+        m_schematic->LoadVariants();
+        UpdateVariantSelectionCtrl( m_schematic->GetVariantNamesForUI() );
+    }
+
 }
 
 

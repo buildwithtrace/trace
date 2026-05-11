@@ -66,11 +66,28 @@ wxString SIM_LIB_MGR::ResolveLibraryPath( const wxString& aLibraryPath, REPORTER
     for( const EMBEDDED_FILES* embeddedFiles : m_embeddedFilesStack )
         embeddedFilesStack.push_back( embeddedFiles );
 
-    wxString expandedPath = resolver.ResolvePath( aLibraryPath, wxEmptyString, std::move( embeddedFilesStack ) );
+    wxString resolvedPath = resolver.ResolvePath( aLibraryPath, wxEmptyString,
+                                                  std::move( embeddedFilesStack ) );
+
+    // If FILENAME_RESOLVER found the file, use that result
+    if( !resolvedPath.IsEmpty() )
+    {
+        wxFileName fn( resolvedPath );
+
+        if( fn.IsAbsolute() )
+            return fn.GetFullPath();
+    }
+
+    // Fall back to the original behavior for paths not found by FILENAME_RESOLVER.
+    // First expand any environment variables in the path.
+    wxString expandedPath = ExpandEnvVarSubstitutions( aLibraryPath, m_project );
+
+    // Convert to UNIX format
+    expandedPath.Replace( '\\', '/' );
 
     wxFileName fn( expandedPath );
 
-    if( fn.IsAbsolute() )
+    if( fn.IsAbsolute() && fn.Exists() )
         return fn.GetFullPath();
 
     wxFileName projectFn( m_project ? m_project->AbsolutePath( expandedPath ) : expandedPath );
@@ -78,6 +95,7 @@ wxString SIM_LIB_MGR::ResolveLibraryPath( const wxString& aLibraryPath, REPORTER
     if( projectFn.Exists() )
         return projectFn.GetFullPath();
 
+    // Check relative to SPICE_LIB_DIR environment variable
     wxFileName spiceLibFn( expandedPath );
     wxString   spiceLibDir;
 
@@ -182,7 +200,8 @@ SIM_MODEL& SIM_LIB_MGR::CreateModel( const SIM_MODEL* aBaseModel, const std::vec
 }
 
 SIM_LIBRARY::MODEL SIM_LIB_MGR::CreateModel( const SCH_SHEET_PATH* aSheetPath, SCH_SYMBOL& aSymbol,
-                                             bool aResolve, int aDepth, REPORTER& aReporter )
+                                             bool aResolve, int aDepth, const wxString& aVariantName,
+                                             REPORTER& aReporter, const wxString& aMergedSimPins )
 {
     // Note: currently this creates a resolved model (all Kicad variables references are resolved
     // before building the model).
@@ -203,7 +222,12 @@ SIM_LIBRARY::MODEL SIM_LIB_MGR::CreateModel( const SCH_SHEET_PATH* aSheetPath, S
         else if( field.GetId() == FIELD_T::VALUE || field.GetName().StartsWith( wxS( "Sim." ) ) )
         {
             fields.emplace_back( &aSymbol, FIELD_T::USER, field.GetName() );
-            fields.back().SetText( field.GetShownText( aSheetPath, false, aDepth ) );
+
+            // For multi-unit symbols, use merged Sim.Pins from all units if provided
+            if( !aMergedSimPins.IsEmpty() && field.GetName() == SIM_PINS_FIELD )
+                fields.back().SetText( aMergedSimPins );
+            else
+                fields.back().SetText( field.GetShownText( aSheetPath, false, aDepth, aVariantName ) );
         }
     }
 

@@ -25,11 +25,13 @@
 #include <project/tuning_profiles.h>
 #include <settings/json_settings_internals.h>
 #include <project/project_file.h>
+#include <project/board_project_settings_params.h>
 #include <settings/common_settings.h>
 #include <settings/parameters.h>
 #include <wildcards_and_files_ext.h>
 #include <project/project_file.h>
 #include <wx/config.h>
+#include <wx/filename.h>
 #include <wx/log.h>
 
 
@@ -148,10 +150,18 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
                     for( const nlohmann::json& entry : membersJson )
                     {
                         if( entry.is_string() )
-                            members.push_back( entry.get<wxString>() );
+                        {
+                            wxString member = entry.get<wxString>().Strip( wxString::both );
+
+                            if( !member.IsEmpty() )
+                                members.push_back( member );
+                        }
                     }
 
-                    m_BusAliases.emplace( wxString::FromUTF8( it.key().c_str() ), std::move( members ) );
+                    wxString name = wxString::FromUTF8( it.key().c_str() ).Strip( wxString::both );
+
+                    if( !name.IsEmpty() )
+                        m_BusAliases.emplace( name, std::move( members ) );
                 }
             }, {} ) );
 
@@ -185,6 +195,14 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
     m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.dist",
             &m_IP2581Bom.dist, wxEmptyString ) );
 
+    m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.bom_rev",
+            &m_IP2581Bom.bomRev, wxEmptyString ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.sch_revision",
+            &m_IP2581Bom.schRevision, wxEmptyString ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturing.preferred_manufacturer",
+            &m_PreferredManufacturer, wxEmptyString ) );
 
     registerMigration( 1, 2, std::bind( &PROJECT_FILE::migrateSchema1To2, this ) );
     registerMigration( 2, 3, std::bind( &PROJECT_FILE::migrateSchema2To3, this ) );
@@ -596,7 +614,6 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
 
                 aCfg->SetPath( "/" );
 
-                // TODO: any reason we want to fail on this?
                 return true;
             };
 
@@ -693,6 +710,42 @@ bool PROJECT_FILE::LoadFromFile( const wxString& aDirectory )
 
             wxLogTrace( traceSettings, wxT( "PROJECT_FILE: Migrated old single-root format to top_level_sheets" ) );
         }
+
+        // When a project is created from a template, the top_level_sheets entries may
+        // still reference the template's schematic filenames rather than the new project's.
+        // The template copy renames files on disk but doesn't update the .kicad_pro content.
+        // Detect this and fix the references so the schematic can be found.
+        if( !m_topLevelSheets.empty() && m_project )
+        {
+            wxString projectPath = m_project->GetProjectPath();
+            wxString projectName = m_project->GetProjectName();
+
+            for( TOP_LEVEL_SHEET_INFO& sheetInfo : m_topLevelSheets )
+            {
+                wxFileName referencedFile( projectPath, sheetInfo.filename );
+
+                if( referencedFile.FileExists() )
+                    continue;
+
+                // Try the project-name-based filename
+                wxString expectedFile =
+                        projectName + wxS( "." ) + FILEEXT::KiCadSchematicFileExtension;
+
+                wxFileName candidateFile( projectPath, expectedFile );
+
+                if( candidateFile.FileExists() )
+                {
+                    wxLogTrace( traceSettings,
+                                wxT( "PROJECT_FILE: Fixing stale top_level_sheets reference "
+                                     "'%s' -> '%s'" ),
+                                sheetInfo.filename, expectedFile );
+
+                    sheetInfo.filename = expectedFile;
+                    sheetInfo.name = projectName;
+                    m_wasMigrated = true;
+                }
+            }
+        }
     }
 
     return success;
@@ -755,7 +808,13 @@ bool PROJECT_FILE::SaveAs( const wxString& aDirectory, const wxString& aFile )
     updatePathByPtr( "pcbnew.page_layout_descr_file" );
 
     for( auto& sheetInfo : m_topLevelSheets )
+    {
         updatePath( sheetInfo.filename );
+
+        // Also update the display name if it matches the old project name
+        if( sheetInfo.name == oldProjectName )
+            sheetInfo.name = aFile;
+    }
 
     // If we're actually going ahead and doing the save, the flag that keeps code from doing the save
     // should be cleared at this point

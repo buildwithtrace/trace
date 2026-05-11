@@ -52,6 +52,7 @@
 
 #include <boost/range/adaptor/reversed.hpp>
 
+#include <drawing_sheet/ds_data_model.h>
 #include <sch_edit_frame.h>
 #include <sch_line.h>
 #include <kiface_base.h>
@@ -114,6 +115,11 @@ public:
             m_align_to_grid = cfg->m_AutoplaceFields.align_to_grid;
         }
 
+        // Fields always display horizontally after autoplace. For 90/270 rotated
+        // symbols, GetDrawRotation() flips the stored angle, so we store VERTICAL
+        // to counteract the transform and produce horizontal display.
+        m_field_angle = m_symbol->GetTransform().y1 ? ANGLE_VERTICAL : ANGLE_HORIZONTAL;
+
         m_symbol_bbox = m_symbol->GetBodyBoundingBox();
         m_fbox_size = computeFBoxSize( /* aDynamic */ true );
 
@@ -147,6 +153,8 @@ public:
         {
             if( !field->IsVisible() || !field->CanAutoplace() )
                 continue;
+
+            field->SetTextAngle( m_field_angle );
 
             if( m_allow_rejustify )
             {
@@ -196,12 +204,14 @@ protected:
                 continue;
             }
 
-            if( m_symbol->GetTransform().y1 )
-                field->SetTextAngle( ANGLE_VERTICAL );
-            else
-                field->SetTextAngle( ANGLE_HORIZONTAL );
-
+            // GetBoundingBox() applies both the field's text angle and the symbol
+            // transform.  Set the display angle so the combined rotation produces
+            // bounding box dimensions matching the final horizontal display, then
+            // restore the original angle.
+            EDA_ANGLE savedAngle = field->GetTextAngle();
+            field->SetTextAngle( m_field_angle );
             BOX2I bbox = field->GetBoundingBox();
+            field->SetTextAngle( savedAngle );
             int   field_width = bbox.GetWidth();
             int   field_height = bbox.GetHeight();
 
@@ -384,6 +394,32 @@ protected:
     }
 
     /**
+     * Compute the drawable area (inside the drawing sheet border) for collision detection.
+     */
+    BOX2I getDrawableArea()
+    {
+        if( !m_screen )
+            return BOX2I();
+
+        const PAGE_INFO& pageInfo = m_screen->GetPageSettings();
+        DS_DATA_MODEL&   dsModel = DS_DATA_MODEL::GetTheInstance();
+
+        int pageWidth = pageInfo.GetWidthIU( schIUScale.IU_PER_MILS );
+        int pageHeight = pageInfo.GetHeightIU( schIUScale.IU_PER_MILS );
+
+        int leftMargin = schIUScale.mmToIU( dsModel.GetLeftMargin() );
+        int rightMargin = schIUScale.mmToIU( dsModel.GetRightMargin() );
+        int topMargin = schIUScale.mmToIU( dsModel.GetTopMargin() );
+        int bottomMargin = schIUScale.mmToIU( dsModel.GetBottomMargin() );
+
+        BOX2I drawableArea;
+        drawableArea.SetOrigin( leftMargin, topMargin );
+        drawableArea.SetEnd( pageWidth - rightMargin, pageHeight - bottomMargin );
+
+        return drawableArea;
+    }
+
+    /**
      * Return a list of the sides where a field set would collide with another item.
      */
     std::vector<SIDE_AND_COLL> getCollidingSides()
@@ -391,6 +427,9 @@ protected:
         SIDE                       sides_init[] = { SIDE_RIGHT, SIDE_TOP, SIDE_LEFT, SIDE_BOTTOM };
         std::vector<SIDE>          sides( sides_init, sides_init + arrayDim( sides_init ) );
         std::vector<SIDE_AND_COLL> colliding;
+
+        BOX2I drawableArea = getDrawableArea();
+        bool  checkDrawableArea = ( drawableArea.GetWidth() > 0 && drawableArea.GetHeight() > 0 );
 
         // Iterate over all sides and find the ones that collide
         for( SIDE side : sides )
@@ -402,6 +441,10 @@ protected:
             BOX2I box( fieldBoxPlacement( sideandpins ), m_fbox_size );
 
             COLLISION collision = COLLIDE_NONE;
+
+            // Check collision with drawing sheet boundary
+            if( checkDrawableArea && !drawableArea.Contains( box ) )
+                collision = COLLIDE_OBJECTS;
 
             for( SCH_ITEM* collider : filterCollisions( box ) )
             {
@@ -709,6 +752,7 @@ private:
     std::vector<SCH_ITEM*>  m_colliders;
     BOX2I                   m_symbol_bbox;
     VECTOR2I                m_fbox_size;
+    EDA_ANGLE               m_field_angle;
     bool                    m_allow_rejustify;
     bool                    m_align_to_grid;
     bool                    m_is_power_symbol;

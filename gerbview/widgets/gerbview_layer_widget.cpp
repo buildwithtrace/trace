@@ -25,6 +25,7 @@
 
 #include <wx/checkbox.h>
 #include <wx/filedlg.h>
+#include <settings/color_settings.h>
 #include <bitmaps.h>
 #include <gerbview.h>
 #include "gerbview_draw_panel_gal.h"
@@ -242,7 +243,7 @@ void GERBER_LAYER_WIDGET::onPopupSelection( wxCommandEvent& event )
                 loc_visible = true;
 
             cb->SetValue( loc_visible );
-            visibleLayers[ row ] = loc_visible;
+            visibleLayers[ layer ] = loc_visible;
         }
 
         m_frame->SetVisibleLayers( visibleLayers );

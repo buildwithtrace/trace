@@ -19,16 +19,18 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <deque>
-#include <gal/color4d.h>
+#include "router_preview_item.h"
 
+#include <deque>
+
+#include <board_item.h>
+#include <board_connected_item.h>
+#include <gal/color4d.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <geometry/shape_rect.h>
 #include <geometry/shape_simple.h>
 #include <pcb_painter.h>
 #include <trigo.h>
-
-#include "router_preview_item.h"
 
 #include "pns_arc.h"
 #include "pns_line.h"
@@ -42,8 +44,8 @@ using namespace KIGFX;
 ROUTER_PREVIEW_ITEM::ROUTER_PREVIEW_ITEM( const PNS::ITEM* aItem, PNS::ROUTER_IFACE* aIface,
                                           KIGFX::VIEW* aView, int aFlags ) :
         EDA_ITEM( NOT_USED ),
-        m_iface( aIface ),
         m_view( aView ),
+        m_iface( aIface ),
         m_shape( nullptr ),
         m_hole( nullptr ),
         m_flags( aFlags )
@@ -91,8 +93,8 @@ ROUTER_PREVIEW_ITEM::ROUTER_PREVIEW_ITEM( const PNS::ITEM* aItem, PNS::ROUTER_IF
 ROUTER_PREVIEW_ITEM::ROUTER_PREVIEW_ITEM( const SHAPE& aShape, PNS::ROUTER_IFACE* aIface,
                                           KIGFX::VIEW* aView ) :
         EDA_ITEM( NOT_USED ),
-        m_iface( aIface ),
         m_view( aView ),
+        m_iface( aIface ),
         m_flags( 0 )
 {
     m_shape = aShape.Clone();
@@ -248,7 +250,7 @@ void ROUTER_PREVIEW_ITEM::drawLineChain( const SHAPE_LINE_CHAIN_BASE* aL, KIGFX:
 
     gal->SetIsFill( false );
 
-    for( int s = 0; s < aL->GetSegmentCount(); s++ )
+    for( int s = 0; s < (int) aL->GetSegmentCount(); s++ )
     {
         SEG seg = aL->GetSegment( s );
 

@@ -36,10 +36,12 @@
 #include <kiway.h>
 #include <macros.h>
 #include <pgm_base.h>
+#include <settings/common_settings.h>
 #include <python_scripting.h>
 #include <string_utils.h>
 #include <tools/pcb_actions.h>
 #include <launch_ext.h>
+#include <confirm.h>
 
 #ifdef KICAD_IPC_API
 #include <api/api_plugin_manager.h>
@@ -179,7 +181,7 @@ int SCRIPTING_TOOL::reloadPlugins( const TOOL_EVENT& aEvent )
         // Action plugins can be modified, therefore the plugins menu must be updated:
         frame()->ReCreateMenuBar();
         // Recreate top toolbar to add action plugin buttons
-        frame()->ReCreateHToolbar();
+        frame()->RecreateToolbars();
         // Post a size event to force resizing toolbar by the AUI manager:
         frame()->PostSizeEvent();
     }
@@ -225,7 +227,7 @@ void SCRIPTING_TOOL::ShowPluginFolder()
 
     wxString msg = wxString::Format( _( "The plugin directory '%s' does not exist.  Create it?" ), pluginpath );
 
-    wxMessageDialog dlg( nullptr, msg, _( "Plugin Directory" ), wxYES_NO | wxICON_QUESTION );
+    KICAD_MESSAGE_DIALOG dlg( nullptr, msg, _( "Plugin Directory" ), wxYES_NO | wxICON_QUESTION );
 
     if( dlg.ShowModal() == wxID_YES )
     {

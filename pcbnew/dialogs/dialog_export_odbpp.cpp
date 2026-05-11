@@ -26,11 +26,13 @@
 #include <wx/dir.h>
 #include <wx/filedlg.h>
 #include <wx/wfstream.h>
+#include <kiplatform/ui.h>
 #include <wx/zipstrm.h>
 #include <wx/tarstrm.h>
 #include <wx/zstream.h>
 
 #include <board.h>
+#include <reporter.h>
 #include <confirm.h>
 #include <footprint.h>
 #include <kidialog.h>
@@ -48,6 +50,8 @@
 #include <io/io_mgr.h>
 #include <jobs/job_export_pcb_odb.h>
 #include <pcb_io/pcb_io_mgr.h>
+#include <kiplatform/io.h>
+#include <locale_io.h>
 
 
 
@@ -135,6 +139,8 @@ void DIALOG_EXPORT_ODBPP::onBrowseClicked( wxCommandEvent& event )
 
     wxFileDialog dlg( this, _( "Export ODB++ File" ), fn.GetPath(), fileDialogName, filter, wxFD_SAVE );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
@@ -204,6 +210,7 @@ void DIALOG_EXPORT_ODBPP::OnFmtChoiceOptionChanged()
     m_outputFileName->SetValue( fn );
 }
 
+
 void DIALOG_EXPORT_ODBPP::onOKClick( wxCommandEvent& event )
 {
     if( !m_job )
@@ -254,6 +261,8 @@ void DIALOG_EXPORT_ODBPP::GenerateODBPPFiles( const JOB_EXPORT_PCB_ODB& aJob, BO
                                               PCB_EDIT_FRAME* aParentFrame, PROGRESS_REPORTER* aProgressReporter,
                                               REPORTER* aReporter )
 {
+    LOCALE_IO toggle;
+
     wxCHECK( aBoard, /* void */ );
     wxString outputPath = aJob.GetFullOutputPath( aBoard->GetProject() );
 
@@ -330,15 +339,6 @@ void DIALOG_EXPORT_ODBPP::GenerateODBPPFiles( const JOB_EXPORT_PCB_ODB& aJob, BO
                     return;
                 }
             }
-            else
-            {
-                msg = wxString::Format( _( "Output file '%s' already exists." ), outputFn.GetFullPath() );
-
-                if( aReporter )
-                    aReporter->Report( msg, RPT_SEVERITY_ERROR );
-
-                return;
-            }
         }
 
         tempFile.AssignDir( wxFileName::GetTempDir() );
@@ -380,15 +380,6 @@ void DIALOG_EXPORT_ODBPP::GenerateODBPPFiles( const JOB_EXPORT_PCB_ODB& aJob, BO
                     DisplayErrorMessage( aParentFrame, msg );
                     return;
                 }
-            }
-            else
-            {
-                msg = wxString::Format( _( "Output directory '%s' already exists." ), tempFile.GetFullPath() );
-
-                if( aReporter )
-                    aReporter->Report( msg, RPT_SEVERITY_ERROR );
-
-                return;
             }
         }
     }
@@ -459,6 +450,12 @@ void DIALOG_EXPORT_ODBPP::GenerateODBPPFiles( const JOB_EXPORT_PCB_ODB& aJob, BO
             aProgressReporter->AdvancePhase( _( "Compressing output" ) );
 
         wxFFileOutputStream fnout( outputFn.GetFullPath() );
+
+        // Use a large I/O buffer to improve compatibility with cloud-synced folders.
+        // See KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE comment for details.
+        if( FILE* fp = fnout.GetFile()->fp() )
+            setvbuf( fp, nullptr, _IOFBF, KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE );
+
         wxZipOutputStream   zipStream( fnout );
 
         std::function<void( const wxString&, const wxString& )> addDirToZip =
@@ -502,6 +499,12 @@ void DIALOG_EXPORT_ODBPP::GenerateODBPPFiles( const JOB_EXPORT_PCB_ODB& aJob, BO
     else if( aJob.m_compressionMode == JOB_EXPORT_PCB_ODB::ODB_COMPRESSION::TGZ )
     {
         wxFFileOutputStream fnout( outputFn.GetFullPath() );
+
+        // Use a large I/O buffer to improve compatibility with cloud-synced folders.
+        // See KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE comment for details.
+        if( FILE* fp = fnout.GetFile()->fp() )
+            setvbuf( fp, nullptr, _IOFBF, KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE );
+
         wxZlibOutputStream  zlibStream( fnout, -1, wxZLIB_GZIP );
         wxTarOutputStream   tarStream( zlibStream );
 

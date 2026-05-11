@@ -126,6 +126,7 @@ private:
         int x_offset;
         int y_offset;
         int antipad_size;
+        std::set<std::string> copper_layers;  ///< Copper layers with non-zero annular ring
 
         struct HASH
         {
@@ -211,6 +212,8 @@ private:
 
     struct GRAPHIC_ITEM
     {
+        virtual ~GRAPHIC_ITEM() = default;
+
         int           start_x;  ///<! GRAPHIC_DATA_1
         int           start_y;  ///<! GRAPHIC_DATA_2
         int           width;    ///<! Various sections depending on type
@@ -614,6 +617,12 @@ private:
     bool loadZone( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>& aLine);
     bool loadPolygon( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>& aLine);
     bool loadFootprints( BOARD* aBoard );
+
+    /**
+     * Creates synthetic COMPONENT entries from pins that have no matching component.
+     * This handles Fabmaster exports where the REFDES section is empty but PIN data exists.
+     */
+    void createComponentsFromOrphanPins();
 
     SHAPE_POLY_SET loadShapePolySet( const graphic_element& aLine);
 

@@ -23,9 +23,10 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#ifndef TEXT_CTRL_EVAL_H
-#define TEXT_CTRL_EVAL_H
+#pragma once
 
+#include <optional>
+#include <functional>
 #include <wx/window.h>
 #include <wx/textctrl.h>
 #include <libeval/numeric_evaluator.h>
@@ -49,6 +50,11 @@ public:
     {
     }
 
+    void SetCustomEval( std::function<void( TEXT_CTRL_EVAL* aCtrl )> aCustomEval )
+    {
+        m_customEval = std::move( aCustomEval );
+    }
+
     /**
      * Set a new value in evaluator buffer and display it in the wxTextCtrl.
      *
@@ -66,7 +72,8 @@ protected:
     void onTextEnter( wxCommandEvent& aEvent );
 
     void evaluate();
+
+private:
+    std::optional<std::function<void( TEXT_CTRL_EVAL* aCtrl )>> m_customEval;
 };
 
-
-#endif /* TEXT_CTRL_EVAL_H */

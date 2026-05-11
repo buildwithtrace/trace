@@ -22,9 +22,11 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <set>
 #include <wx/log.h>
 #include <trigo.h>
 #include <gal/graphics_abstraction_layer.h>
@@ -48,6 +50,7 @@
 #include <sch_junction.h>
 #include <junction_helpers.h>
 #include <sch_edit_frame.h>
+#include <widgets/wx_infobar.h>
 #include <eeschema_id.h>
 #include <pgm_base.h>
 #include <view/view_controls.h>
@@ -55,6 +58,7 @@
 #include <math/box2.h>
 #include <base_units.h>
 #include <sch_screen.h>
+#include <sch_item_alignment.h>
 #include <trace_helpers.h>
 
 
@@ -336,13 +340,12 @@ void SCH_MOVE_TOOL::orthoLineDrag( SCH_COMMIT* aCommit, SCH_LINE* line, const VE
 
                 // Update our cache of the connected items.
 
-                // First, re-attach our drag labels to the original line being re-merged.
-                for( EDA_ITEM* candidate : m_lineConnectionCache[bendLine] )
+                // Re-attach drag labels from lines being deleted to the surviving line.
+                // This prevents dangling pointers when bendLine/foundLine are deleted below.
+                for( auto& [label, info] : m_specialCaseLabels )
                 {
-                    SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( candidate );
-
-                    if( label && m_specialCaseLabels.count( label ) )
-                        m_specialCaseLabels[label].attachedLine = line;
+                    if( info.attachedLine == bendLine || info.attachedLine == foundLine )
+                        info.attachedLine = line;
                 }
 
                 m_lineConnectionCache[line] = m_lineConnectionCache[bendLine];
@@ -488,8 +491,8 @@ int SCH_MOVE_TOOL::Main( const TOOL_EVENT& aEvent )
         {
             switch( m_mode )
             {
-            case MOVE: localCommit.Push( _( "Move" ) ); break;
-            case DRAG: localCommit.Push( _( "Drag" ) ); break;
+            case MOVE:  localCommit.Push( _( "Move" ) );       break;
+            case DRAG:  localCommit.Push( _( "Drag" ) );       break;
             case BREAK: localCommit.Push( _( "Break Wire" ) ); break;
             case SLICE: localCommit.Push( _( "Slice Wire" ) ); break;
             }
@@ -528,8 +531,8 @@ void SCH_MOVE_TOOL::preprocessBreakOrSliceSelection( SCH_COMMIT* aCommit, const 
     {
         if( item->Type() == SCH_LINE_T )
         {
-            // This function gets called every time segments are broken, which can
-            // also be for subsequent breaks in a loop without leaving the current move tool.
+            // This function gets called every time segments are broken, which can also be for subsequent
+            // breaks in a loop without leaving the current move tool.
             // Skip already placed segments (segment keeps IS_BROKEN but will have IS_NEW cleared below)
             // so that only the actively placed tail segment gets split again.
             if( item->HasFlag( IS_BROKEN ) && !item->HasFlag( IS_NEW ) )
@@ -568,9 +571,9 @@ void SCH_MOVE_TOOL::preprocessBreakOrSliceSelection( SCH_COMMIT* aCommit, const 
         if( !newLine )
             continue;
 
-        // If this is a second+ round break, we need to get rid of the IS_NEW flag since
-        // the new segment is now an existing segment we are breaking from, this will be checked for
-        // in the line selection gathering above
+        // If this is a second+ round break, we need to get rid of the IS_NEW flag since the new segment
+        // is now an existing segment we are breaking from, this will be checked for in the line selection
+        // gathering above
         line->ClearFlags( STARTPOINT | IS_NEW );
         line->SetFlags( ENDPOINT );
         m_selectionTool->AddItemToSel( line );
@@ -706,9 +709,8 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
             //
             m_view->ClearPreview();
 
-            // We need to bypass refreshPreview action here because it is triggered by the move,
-            // so we were getting double-key events that toggled the axis locking if you
-            // pressed them in a certain order.
+            // We need to bypass refreshPreview action here because it is triggered by the move, so we were
+            // getting double-key events that toggled the axis locking if you pressed them in a certain order.
             if( controls->GetSettings().m_lastKeyboardCursorPositionValid && !evt->IsAction( &ACTIONS::refreshPreview ) )
             {
                 VECTOR2I keyboardPos( controls->GetSettings().m_lastKeyboardCursorPosition );
@@ -813,9 +815,7 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
                 netCollisionMonitor->Update( previewJunctions, selection );
 
             for( SCH_JUNCTION* jct : previewJunctions )
-            {
                 m_view->AddToPreview( jct, true );
-            }
 
             m_toolMgr->PostEvent( EVENTS::SelectedItemsMoved );
         }
@@ -846,8 +846,8 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
 
                     switch( m_mode )
                     {
-                    case MOVE: m_frame->ShowInfoBarMsg( _( "Press <ESC> to cancel move." ) ); break;
-                    case DRAG: m_frame->ShowInfoBarMsg( _( "Press <ESC> to cancel drag." ) ); break;
+                    case MOVE:  m_frame->ShowInfoBarMsg( _( "Press <ESC> to cancel move." ) );  break;
+                    case DRAG:  m_frame->ShowInfoBarMsg( _( "Press <ESC> to cancel drag." ) );  break;
                     case BREAK: m_frame->ShowInfoBarMsg( _( "Press <ESC> to cancel break." ) ); break;
                     case SLICE: m_frame->ShowInfoBarMsg( _( "Press <ESC> to cancel slice." ) ); break;
                     }
@@ -951,20 +951,21 @@ bool SCH_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COMMIT* aComm
         m_frame->UpdateItem( hoverSheet, false );
     }
 
-    if( targetSheet )
-    {
-        moveSelectionToSheet( selection, targetSheet, aCommit );
-        m_toolMgr->RunAction( ACTIONS::selectionClear );
-        m_newDragLines.clear();
-        m_changedDragLines.clear();
-    }
-
     if( restore_state )
     {
         m_selectionTool->RemoveItemsFromSel( &m_dragAdditions, QUIET_MODE );
     }
     else
     {
+        // Only drop into a sheet when the move is committed, not when canceled.
+        if( targetSheet )
+        {
+            moveSelectionToSheet( selection, targetSheet, aCommit );
+            m_toolMgr->RunAction( ACTIONS::selectionClear );
+            m_newDragLines.clear();
+            m_changedDragLines.clear();
+        }
+
         finalizeMoveOperation( selection, aCommit, unselect, internalPoints );
     }
 
@@ -1040,8 +1041,7 @@ SCH_SELECTION& SCH_MOVE_TOOL::prepareSelection( bool& aUnselect )
 
     // Be sure that there is at least one item that we can move. If there's no selection try
     // looking for the stuff under mouse cursor (i.e. KiCad old-style hover selection).
-    SCH_SELECTION& selection = m_selectionTool->RequestSelection( SCH_COLLECTOR::MovableItems,
-                                                                  true );
+    SCH_SELECTION& selection = m_selectionTool->RequestSelection( SCH_COLLECTOR::MovableItems, true );
     aUnselect = selection.IsHover();
 
     return selection;
@@ -1148,8 +1148,7 @@ void SCH_MOVE_TOOL::setupItemsForDrag( SCH_SELECTION& aSelection, SCH_COMMIT* aC
 }
 
 
-void SCH_MOVE_TOOL::setupItemsForMove( SCH_SELECTION& aSelection,
-                                       std::vector<DANGLING_END_ITEM>& aInternalPoints )
+void SCH_MOVE_TOOL::setupItemsForMove( SCH_SELECTION& aSelection, std::vector<DANGLING_END_ITEM>& aInternalPoints )
 {
     // Mark the edges of the block with dangling flags for a move
     for( EDA_ITEM* item : aSelection )
@@ -1208,15 +1207,13 @@ void SCH_MOVE_TOOL::initializeMoveOperation( const TOOL_EVENT& aEvent, SCH_SELEC
 
         for( const VECTOR2I& pt : line->GetConnectionPoints() )
         {
-            SCH_JUNCTION* jct = static_cast<SCH_JUNCTION*>(
-                    m_frame->GetScreen()->GetItem( pt, 0, SCH_JUNCTION_T ) );
+            SCH_JUNCTION* jct = static_cast<SCH_JUNCTION*>( m_frame->GetScreen()->GetItem( pt, 0, SCH_JUNCTION_T ) );
 
             if( jct && !jct->IsSelected()
-                && std::find( m_hiddenJunctions.begin(), m_hiddenJunctions.end(), jct )
-                           == m_hiddenJunctions.end() )
+                && std::find( m_hiddenJunctions.begin(), m_hiddenJunctions.end(), jct ) == m_hiddenJunctions.end() )
             {
-                JUNCTION_HELPERS::POINT_INFO info = JUNCTION_HELPERS::AnalyzePoint(
-                        m_frame->GetScreen()->Items(), pt, false );
+                JUNCTION_HELPERS::POINT_INFO info = JUNCTION_HELPERS::AnalyzePoint( m_frame->GetScreen()->Items(),
+                                                                                    pt, false );
 
                 if( !info.isJunction )
                 {
@@ -1248,8 +1245,7 @@ void SCH_MOVE_TOOL::initializeMoveOperation( const TOOL_EVENT& aEvent, SCH_SELEC
             {
                 if( schItem->IsGroupableType() && !schItem->GetParentGroup() )
                 {
-                    aCommit->Modify( enteredGroup, m_frame->GetScreen(),
-                                     RECURSE_MODE::NO_RECURSE );
+                    aCommit->Modify( enteredGroup, m_frame->GetScreen(), RECURSE_MODE::NO_RECURSE );
                     enteredGroup->AddItem( schItem );
                 }
             }
@@ -1272,9 +1268,9 @@ void SCH_MOVE_TOOL::initializeMoveOperation( const TOOL_EVENT& aEvent, SCH_SELEC
         }
 
         schItem->RunOnChildren(
-                [&]( SCH_ITEM* unused )
+                [&]( SCH_ITEM* aChild )
                 {
-                    item->SetFlags( IS_MOVING );
+                    aChild->SetFlags( IS_MOVING );
                 },
                 RECURSE_MODE::RECURSE );
 
@@ -1356,13 +1352,18 @@ void SCH_MOVE_TOOL::initializeMoveOperation( const TOOL_EVENT& aEvent, SCH_SELEC
 }
 
 
-SCH_SHEET* SCH_MOVE_TOOL::findTargetSheet( const SCH_SELECTION& aSelection,
-                                           const VECTOR2I& aCursorPos, bool aHasSheetPins,
-                                           bool aIsGraphicsOnly, bool aCtrlDown )
+SCH_SHEET* SCH_MOVE_TOOL::findTargetSheet( const SCH_SELECTION& aSelection, const VECTOR2I& aCursorPos,
+                                           bool aHasSheetPins, bool aIsGraphicsOnly, bool aCtrlDown )
 {
+    // Fields are children of their parent item and must not be dropped into a sheet
+    for( EDA_ITEM* it : aSelection )
+    {
+        if( it->Type() == SCH_FIELD_T )
+            return nullptr;
+    }
+
     // Determine potential target sheet
-    SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>(
-            m_frame->GetScreen()->GetItem( aCursorPos, 0, SCH_SHEET_T ) );
+    SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( m_frame->GetScreen()->GetItem( aCursorPos, 0, SCH_SHEET_T ) );
 
     if( sheet && sheet->IsSelected() )
         sheet = nullptr;  // Never target a selected sheet
@@ -1400,6 +1401,31 @@ SCH_SHEET* SCH_MOVE_TOOL::findTargetSheet( const SCH_SELECTION& aSelection,
                     break;
                 }
             }
+        }
+    }
+
+    // Don't drop into a sheet if any connection point of the selection lands on a sheet pin.
+    // This indicates the user is trying to connect to the pin, not drop into the sheet.
+    if( sheet )
+    {
+        for( EDA_ITEM* it : aSelection )
+        {
+            SCH_ITEM* schItem = dynamic_cast<SCH_ITEM*>( it );
+
+            if( !schItem )
+                continue;
+
+            for( const VECTOR2I& pt : schItem->GetConnectionPoints() )
+            {
+                if( sheet->GetPin( pt ) )
+                {
+                    sheet = nullptr;
+                    break;
+                }
+            }
+
+            if( !sheet )
+                break;
         }
     }
 
@@ -1468,9 +1494,13 @@ void SCH_MOVE_TOOL::performItemMove( SCH_SELECTION& aSelection, const VECTOR2I& 
             if( EESCHEMA_SETTINGS* cfg = GetAppSettings<EESCHEMA_SETTINGS>( "eeschema" ) )
                 isLineModeConstrained = cfg->m_Drawing.line_mode != LINE_MODE::LINE_MODE_FREE;
 
-            // Only partially selected drag lines in orthogonal line mode need special handling
+            // Only partially selected drag lines in orthogonal line mode need special handling.
+            // Skip newly-created connectivity wires added to maintain connectivity at junctions:
+            // these are marked with both IS_NEW and SELECTED_BY_DRAG; they already have the
+            // correct endpoint constraint and don't need orthogonal bending
             if( ( m_mode == DRAG ) && isLineModeConstrained && line
-                && line->HasFlag( STARTPOINT ) != line->HasFlag( ENDPOINT ) )
+                && line->HasFlag( STARTPOINT ) != line->HasFlag( ENDPOINT )
+                && !line->HasFlag( SELECTED_BY_DRAG | IS_NEW ) )
             {
                 orthoLineDrag( aCommit, line, splitDelta, aXBendCount, aYBendCount, aGrid );
             }
@@ -1490,6 +1520,62 @@ void SCH_MOVE_TOOL::performItemMove( SCH_SELECTION& aSelection, const VECTOR2I& 
                 else if( !lineEnd.second && lineEnd.first->HasFlag( ENDPOINT ) )
                     lineEnd.first->SetEndPoint( pin->GetPosition() );
             }
+        }
+
+        // Needed to keep labels attached to a line when dragging a sheet/wire combo with a label
+        // on the line. The label moves by splitDelta for each part of the split move, but the
+        // line endpoints may not follow splitDelta due to orthogonal drag or sheet pin constraints,
+        // which can put the label off the line.
+        for( const auto& [label, info] : m_specialCaseLabels )
+        {
+            if( !label || !info.attachedLine )
+                continue;
+
+            VECTOR2I start = info.attachedLine->GetStartPoint();
+            VECTOR2I end = info.attachedLine->GetEndPoint();
+            VECTOR2I deltaStart = start - info.originalLineStart;
+            VECTOR2I deltaEnd = end - info.originalLineEnd;
+
+            // TODO: this could be improved by positioning the label based on the new line geometry,
+            // including line angle changes, grid snapping, and line length changes when orthogonal
+            // bends are involved.
+            //
+            // For now, special casing the equal delta case and using splitDelta should work in most
+            // cases as the user would expect.
+            if( deltaStart == deltaEnd )
+            {
+                label->SetPosition( info.originalLabelPos + deltaStart );
+            }
+            else
+            {
+                label->Move( splitDelta );
+
+                // If the line shrank while dragging, keep the label on the line,
+                // otherwise the label can drift off the end of the line, and change connectivity
+                if( !info.attachedLine->HitTest( label->GetPosition(), 1 ) && info.attachedLine->IsOrthogonal() )
+                {
+                    VECTOR2I pos = label->GetPosition();
+
+                    if( start.x == end.x )
+                    {
+                        int minY = std::min( start.y, end.y );
+                        int maxY = std::max( start.y, end.y );
+                        pos.x = start.x;
+                        pos.y = std::clamp( pos.y, minY, maxY );
+                    }
+                    else if( start.y == end.y )
+                    {
+                        int minX = std::min( start.x, end.x );
+                        int maxX = std::max( start.x, end.x );
+                        pos.y = start.y;
+                        pos.x = std::clamp( pos.x, minX, maxX );
+                    }
+
+                    label->SetPosition( pos );
+                }
+            }
+
+            updateItem( label, false );
         }
     }
 
@@ -1539,11 +1625,9 @@ bool SCH_MOVE_TOOL::handleMoveToolActions( const TOOL_EVENT* aEvent, SCH_COMMIT*
     else if( aEvent->IsAction( &ACTIONS::increment ) )
     {
         if( aEvent->HasParameter() )
-            m_toolMgr->RunSynchronousAction( ACTIONS::increment, aCommit,
-                                             aEvent->Parameter<ACTIONS::INCREMENT>() );
+            m_toolMgr->RunSynchronousAction( ACTIONS::increment, aCommit, aEvent->Parameter<ACTIONS::INCREMENT>() );
         else
-            m_toolMgr->RunSynchronousAction( ACTIONS::increment, aCommit,
-                                             ACTIONS::INCREMENT{ 1, 0 } );
+            m_toolMgr->RunSynchronousAction( ACTIONS::increment, aCommit, ACTIONS::INCREMENT{ 1, 0 } );
 
         updateStoredPositions( aSelection );
         m_toolMgr->PostAction( ACTIONS::refreshPreview );
@@ -1589,8 +1673,7 @@ bool SCH_MOVE_TOOL::handleMoveToolActions( const TOOL_EVENT* aEvent, SCH_COMMIT*
         if( *aEvent->GetCommandId() >= ID_POPUP_SCH_SELECT_UNIT
             && *aEvent->GetCommandId() <= ID_POPUP_SCH_SELECT_UNIT_END )
         {
-            SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>(
-                    m_selectionTool->GetSelection().Front() );
+            SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( m_selectionTool->GetSelection().Front() );
             int unit = *aEvent->GetCommandId() - ID_POPUP_SCH_SELECT_UNIT;
 
             if( symbol )
@@ -1602,8 +1685,7 @@ bool SCH_MOVE_TOOL::handleMoveToolActions( const TOOL_EVENT* aEvent, SCH_COMMIT*
         else if( *aEvent->GetCommandId() >= ID_POPUP_SCH_SELECT_BODY_STYLE
                  && *aEvent->GetCommandId() <= ID_POPUP_SCH_SELECT_BODY_STYLE_END )
         {
-            SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>(
-                    m_selectionTool->GetSelection().Front() );
+            SCH_SYMBOL* symbol = dynamic_cast<SCH_SYMBOL*>( m_selectionTool->GetSelection().Front() );
             int bodyStyle = ( *aEvent->GetCommandId() - ID_POPUP_SCH_SELECT_BODY_STYLE ) + 1;
 
             if( symbol && symbol->GetBodyStyle() != bodyStyle )
@@ -1636,6 +1718,7 @@ void SCH_MOVE_TOOL::updateStoredPositions( const SCH_SELECTION& aSelection )
     // positions that moveItem() uses, particularly for sheet pins which rely on them
     // for constraint calculations.
     int itemCount = 0;
+
     for( EDA_ITEM* item : aSelection )
     {
         SCH_ITEM* schItem = dynamic_cast<SCH_ITEM*>( item );
@@ -1742,6 +1825,14 @@ void SCH_MOVE_TOOL::finalizeMoveOperation( SCH_SELECTION& aSelection, SCH_COMMIT
     for( EDA_ITEM* item : aSelection )
         m_frame->AutoRotateItem( m_frame->GetScreen(), static_cast<SCH_ITEM*>( item ) );
 
+    // Clear SELECTED_BY_DRAG and other temp flags before CleanUp so that cleanup can properly
+    // process all items, including removing zero-length wires and unwanted stubs
+    for( EDA_ITEM* item : m_frame->GetScreen()->Items() )
+        item->ClearTempFlags();
+
+    for( EDA_ITEM* item : selectionCopy )
+        item->ClearTempFlags();
+
     m_frame->Schematic().CleanUp( aCommit );
 
     for( EDA_ITEM* item : m_frame->GetScreen()->Items() )
@@ -1830,9 +1921,10 @@ void SCH_MOVE_TOOL::trimDanglingLines( SCH_COMMIT* aCommit )
 
                 // Delete newly dangling lines:
                 // Find split segments (one segment is new, the other is changed) that
-                // we aren't dragging and don't have selected
-                if( aChangedItem->HasFlag( IS_BROKEN) && aChangedItem->IsDangling()
-                  && !aChangedItem->IsSelected() )
+                // we aren't dragging and don't have selected.
+                // Also catch drag wires (created with IS_NEW and SELECTED_BY_DRAG) that are dangling.
+                if( ( aChangedItem->HasFlag( IS_BROKEN ) || aChangedItem->HasFlag( IS_NEW ) )
+                    && aChangedItem->IsDangling() && !aChangedItem->IsSelected() )
                 {
                     danglers.insert( aChangedItem );
                 }
@@ -1850,8 +1942,7 @@ void SCH_MOVE_TOOL::trimDanglingLines( SCH_COMMIT* aCommit )
 }
 
 
-void SCH_MOVE_TOOL::getConnectedItems( SCH_ITEM* aOriginalItem, const VECTOR2I& aPoint,
-                                       EDA_ITEMS& aList )
+void SCH_MOVE_TOOL::getConnectedItems( SCH_ITEM* aOriginalItem, const VECTOR2I& aPoint, EDA_ITEMS& aList )
 {
     EE_RTREE&         items = m_frame->GetScreen()->Items();
     EE_RTREE::EE_TYPE itemsOverlapping = items.Overlapping( aOriginalItem->GetBoundingBox() );
@@ -1984,24 +2075,42 @@ void SCH_MOVE_TOOL::getConnectedItems( SCH_ITEM* aOriginalItem, const VECTOR2I& 
 }
 
 
-void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelectedItem,
-                                           const VECTOR2I& aPoint, EDA_ITEMS& aList )
+void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelectedItem, const VECTOR2I& aPoint,
+                                           EDA_ITEMS& aList )
 {
-    EE_RTREE&         items = m_frame->GetScreen()->Items();
-    EE_RTREE::EE_TYPE itemsOverlappingRTree = items.Overlapping( aSelectedItem->GetBoundingBox() );
+    EE_RTREE&              items = m_frame->GetScreen()->Items();
+    std::set<SCH_ITEM*>    connectableCandidates;
     std::vector<SCH_ITEM*> itemsConnectable;
-    bool              ptHasUnselectedJunction = false;
+    bool                   ptHasUnselectedJunction = false;
+
+    for( SCH_ITEM* item : items.Overlapping( aSelectedItem->GetBoundingBox() ) )
+        connectableCandidates.insert( item );
+
+    // Labels can connect at their anchor even if the label bbox doesn't overlap the target, e.g.
+    // sheet pins can do this sometimes with just net labels and no wires.
+    if( dynamic_cast<SCH_LABEL_BASE*>( aSelectedItem ) )
+    {
+        for( SCH_ITEM* item : items.Overlapping( aPoint, 1 ) )
+            connectableCandidates.insert( item );
+    }
 
     auto makeNewWire =
             [this]( SCH_COMMIT* commit, SCH_ITEM* fixed, SCH_ITEM* selected, const VECTOR2I& start,
                     const VECTOR2I& end )
             {
                 SCH_LINE* newWire;
+                bool      isBusLabel = false;
+
+                if( SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( fixed ) )
+                    isBusLabel |= SCH_CONNECTION::IsBusLabel( label->GetText() );
+
+                if( SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( selected ) )
+                    isBusLabel |= SCH_CONNECTION::IsBusLabel( label->GetText() );
 
                 // Add a new newWire between the fixed item and the selected item so the selected
                 // item can be dragged.
                 if( fixed->GetLayer() == LAYER_BUS_JUNCTION || fixed->GetLayer() == LAYER_BUS
-                    || selected->GetLayer() == LAYER_BUS )
+                    || selected->GetLayer() == LAYER_BUS || isBusLabel )
                 {
                     newWire = new SCH_LINE( start, LAYER_BUS );
                 }
@@ -2051,7 +2160,7 @@ void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelec
                 return junction;
             };
 
-    for( SCH_ITEM* item : itemsOverlappingRTree )
+    for( SCH_ITEM* item : connectableCandidates )
     {
         if( item->Type() == SCH_SHEET_T )
         {
@@ -2060,7 +2169,7 @@ void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelec
             for( SCH_SHEET_PIN* pin : sheet->GetPins() )
             {
                 if( !pin->IsSelected()
-                    && pin->GetPosition() == aSelectedItem->GetPosition()
+                    && pin->GetPosition() == aPoint
                     && pin->CanConnect( aSelectedItem ) )
                 {
                     itemsConnectable.push_back( pin );
@@ -2187,8 +2296,8 @@ void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelec
                 break;
             }
 
-            // Since only one end is going to move, the movement vector of any labels attached to
-            // it is scaled by the proportion of the line length the label is from the moving end.
+            // When only one end moves, keep attached labels tracking the moving end so they stay
+            // connected to the line.
             for( SCH_ITEM* item : items.Overlapping( line->GetBoundingBox() ) )
             {
                 SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( item );
@@ -2207,6 +2316,8 @@ void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelec
                     SPECIAL_CASE_LABEL_INFO info;
                     info.attachedLine = line;
                     info.originalLabelPos = label->GetPosition();
+                    info.originalLineStart = line->GetStartPoint();
+                    info.originalLineEnd = line->GetEndPoint();
                     m_specialCaseLabels[label] = info;
                 }
             }
@@ -2239,21 +2350,13 @@ void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelec
 
         case SCH_SYMBOL_T:
         case SCH_JUNCTION_T:
-            if( test->IsConnected( aPoint ) )
+            if( test->IsConnected( aPoint ) && !newWire )
             {
-                if( test->Type() == SCH_JUNCTION_T && test->GetPosition() == aPoint )
-                {
-                    test->SetFlags( SELECTED_BY_DRAG );
-                    aList.push_back( test );
-                }
-                else if( !newWire )
-                {
-                    // Add a new wire between the symbol or junction and the selected item so
-                    // the selected item can be dragged.
-                    newWire = makeNewWire( aCommit, test, aSelectedItem, aPoint, aPoint );
-                    newWire->SetFlags( SELECTED_BY_DRAG | STARTPOINT );
-                    aList.push_back( newWire );
-                }
+                // Add a new wire between the symbol or junction and the selected item so
+                // the selected item can be dragged.
+                newWire = makeNewWire( aCommit, test, aSelectedItem, aPoint, aPoint );
+                newWire->SetFlags( SELECTED_BY_DRAG | STARTPOINT );
+                aList.push_back( newWire );
             }
 
             break;
@@ -2304,6 +2407,8 @@ void SCH_MOVE_TOOL::getConnectedDragItems( SCH_COMMIT* aCommit, SCH_ITEM* aSelec
                             SPECIAL_CASE_LABEL_INFO info;
                             info.attachedLine = line;
                             info.originalLabelPos = label->GetPosition();
+                            info.originalLineStart = line->GetStartPoint();
+                            info.originalLineEnd = line->GetEndPoint();
                             m_specialCaseLabels[label] = info;
                         }
                     }
@@ -2381,17 +2486,18 @@ void SCH_MOVE_TOOL::moveItem( EDA_ITEM* aItem, const VECTOR2I& aDelta )
     switch( aItem->Type() )
     {
     case SCH_LINE_T:
-    {
-        SCH_LINE* line = static_cast<SCH_LINE*>( aItem );
-
-        if( aItem->HasFlag( STARTPOINT ) || ( m_mode == MOVE ) )
-            line->MoveStart( aDelta );
-
-        if( aItem->HasFlag( ENDPOINT ) || ( m_mode == MOVE ) )
-            line->MoveEnd( aDelta );
+        if( m_mode == MOVE )
+        {
+            // In MOVE mode, both endpoints always move
+            static_cast<SCH_LINE*>( aItem )->Move( aDelta );
+        }
+        else
+        {
+            // In DRAG mode, only flagged endpoints move - use shared function
+            MoveSchematicItem( aItem, aDelta );
+        }
 
         break;
-    }
 
     case SCH_PIN_T:
     case SCH_FIELD_T:
@@ -2417,13 +2523,9 @@ void SCH_MOVE_TOOL::moveItem( EDA_ITEM* aItem, const VECTOR2I& aDelta )
     }
 
     case SCH_SHEET_PIN_T:
-    {
-        SCH_SHEET_PIN* pin = (SCH_SHEET_PIN*) aItem;
-
-        pin->SetStoredPos( pin->GetStoredPos() + aDelta );
-        pin->ConstrainOnEdge( pin->GetStoredPos(), true );
+        // Use shared function for sheet pin movement
+        MoveSchematicItem( aItem, aDelta );
         break;
-    }
 
     case SCH_LABEL_T:
     case SCH_DIRECTIVE_LABEL_T:
@@ -2431,17 +2533,8 @@ void SCH_MOVE_TOOL::moveItem( EDA_ITEM* aItem, const VECTOR2I& aDelta )
     case SCH_HIER_LABEL_T:
     {
         SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( aItem );
-
-        if( m_specialCaseLabels.count( label ) )
-        {
-            SPECIAL_CASE_LABEL_INFO info = m_specialCaseLabels[ label ];
-            SEG currentLine( info.attachedLine->GetStartPoint(), info.attachedLine->GetEndPoint() );
-            label->SetPosition( currentLine.NearestPoint( info.originalLabelPos ) );
-        }
-        else
-        {
+        if( !m_specialCaseLabels.count( label ) )
             label->Move( aDelta );
-        }
 
         break;
     }
@@ -2495,130 +2588,24 @@ int SCH_MOVE_TOOL::AlignToGrid( const TOOL_EVENT& aEvent )
         }
     }
 
-    for( EDA_ITEM* item : selection )
-    {
-        if( item->Type() == SCH_LINE_T )
-        {
-            SCH_LINE*             line = static_cast<SCH_LINE*>( item );
-            std::vector<int>      flags{ STARTPOINT, ENDPOINT };
-            std::vector<VECTOR2I> pts{ line->GetStartPoint(), line->GetEndPoint() };
+    SCH_ALIGNMENT_CALLBACKS callbacks;
 
-            for( int ii = 0; ii < 2; ++ii )
+    callbacks.m_doMoveItem = doMoveItem;
+
+    callbacks.m_getConnectedDragItems =
+            [&]( SCH_ITEM* aItem, const VECTOR2I& aPoint, EDA_ITEMS& aList )
             {
-                EDA_ITEMS drag_items{ item };
-                line->ClearFlags();
-                line->SetFlags( SELECTED );
-                line->SetFlags( flags[ii] );
-                getConnectedDragItems( &commit, line, pts[ii], drag_items );
-                std::set<EDA_ITEM*> unique_items( drag_items.begin(), drag_items.end() );
+                getConnectedDragItems( &commit, aItem, aPoint, aList );
+            };
 
-                VECTOR2I delta = grid.AlignGrid( pts[ii], selectionGrid ) - pts[ii];
-
-                if( delta != VECTOR2I( 0, 0 ) )
-                {
-                    for( EDA_ITEM* dragItem : unique_items )
-                    {
-                        if( dragItem->GetParent() && dragItem->GetParent()->IsSelected() )
-                            continue;
-
-                        doMoveItem( dragItem, delta );
-                    }
-                }
-            }
-        }
-        else if( item->Type() == SCH_FIELD_T || item->Type() == SCH_TEXT_T )
-        {
-            VECTOR2I delta = grid.AlignGrid( item->GetPosition(), selectionGrid ) - item->GetPosition();
-
-            if( delta != VECTOR2I( 0, 0 ) )
-                doMoveItem( item, delta );
-        }
-        else if( item->Type() == SCH_SHEET_T )
-        {
-            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( item );
-            VECTOR2I   topLeft = sheet->GetPosition();
-            VECTOR2I   bottomRight = topLeft + sheet->GetSize();
-            VECTOR2I   tl_delta = grid.AlignGrid( topLeft, selectionGrid ) - topLeft;
-            VECTOR2I   br_delta = grid.AlignGrid( bottomRight, selectionGrid ) - bottomRight;
-
-            if( tl_delta != VECTOR2I( 0, 0 ) || br_delta != VECTOR2I( 0, 0 ) )
+    callbacks.m_updateItem =
+            [&]( EDA_ITEM* aItem )
             {
-                doMoveItem( sheet, tl_delta );
+                updateItem( aItem, true );
+            };
 
-                VECTOR2I newSize = (VECTOR2I) sheet->GetSize() - tl_delta + br_delta;
-                sheet->SetSize( VECTOR2I( newSize.x, newSize.y ) );
-                updateItem( sheet, true );
-            }
-
-            for( SCH_SHEET_PIN* pin : sheet->GetPins() )
-            {
-                VECTOR2I newPos;
-
-                if( pin->GetSide() == SHEET_SIDE::TOP || pin->GetSide() == SHEET_SIDE::LEFT )
-                    newPos = pin->GetPosition() + tl_delta;
-                else
-                    newPos = pin->GetPosition() + br_delta;
-
-                VECTOR2I delta = grid.AlignGrid( newPos - pin->GetPosition(), selectionGrid );
-
-                if( delta != VECTOR2I( 0, 0 ) )
-                {
-                    EDA_ITEMS drag_items;
-                    getConnectedDragItems( &commit, pin, pin->GetConnectionPoints()[0],
-                                           drag_items );
-
-                    doMoveItem( pin, delta );
-
-                    for( EDA_ITEM* dragItem : drag_items )
-                    {
-                        if( dragItem->GetParent() && dragItem->GetParent()->IsSelected() )
-                            continue;
-
-                        doMoveItem( dragItem, delta );
-                    }
-                }
-            }
-        }
-        else
-        {
-            SCH_ITEM*             schItem = static_cast<SCH_ITEM*>( item );
-            std::vector<VECTOR2I> connections = schItem->GetConnectionPoints();
-            EDA_ITEMS             drag_items;
-
-            for( const VECTOR2I& point : connections )
-                getConnectedDragItems( &commit, schItem, point, drag_items );
-
-            std::map<VECTOR2I, int> shifts;
-            VECTOR2I                most_common( 0, 0 );
-            int                     max_count = 0;
-
-            for( const VECTOR2I& conn : connections )
-            {
-                VECTOR2I gridpt = grid.AlignGrid( conn, selectionGrid ) - conn;
-
-                shifts[gridpt]++;
-
-                if( shifts[gridpt] > max_count )
-                {
-                    most_common = gridpt;
-                    max_count = shifts[most_common];
-                }
-            }
-
-            if( most_common != VECTOR2I( 0, 0 ) )
-            {
-                doMoveItem( item, most_common );
-
-                for( EDA_ITEM* dragItem : drag_items )
-                {
-                    if( dragItem->GetParent() && dragItem->GetParent()->IsSelected() )
-                        continue;
-
-                    doMoveItem( dragItem, most_common );
-                }
-            }
-        }
-    }
+    std::vector<EDA_ITEM*> items( selection.begin(), selection.end() );
+    AlignSchematicItemsToGrid( m_frame->GetScreen(), items, grid, selectionGrid, callbacks );
 
     SCH_LINE_WIRE_BUS_TOOL* lwbTool = m_toolMgr->GetTool<SCH_LINE_WIRE_BUS_TOOL>();
     lwbTool->TrimOverLappingWires( &commit, &selection );

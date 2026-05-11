@@ -148,7 +148,6 @@ struct APP_TEST : public wxApp
 
     bool OnInit() override
     {
-
         try
         {
             if( !program.OnPgmInit() )
@@ -172,16 +171,10 @@ struct APP_TEST : public wxApp
             wxLogError( wxT( "Unhandled exception class: %s  what: %s" ),
                         From_UTF8( typeid(e).name() ), From_UTF8( e.what() ) );
         }
-        catch( const IO_ERROR& ioe )
-        {
-            wxLogError( ioe.What() );
-        }
         catch(...)
         {
             wxLogError( wxT( "Unhandled exception of unknown type" ) );
         }
-
-        program.OnPgmExit();
 
         return false;
     }
@@ -203,12 +196,8 @@ struct APP_TEST : public wxApp
         catch( const std::exception& e )
         {
             wxLogError( wxT( "Unhandled exception class: %s  what: %s" ),
-                From_UTF8( typeid(e).name() ),
-                From_UTF8( e.what() ) );
-        }
-        catch( const IO_ERROR& ioe )
-        {
-            wxLogError( ioe.What() );
+                        From_UTF8( typeid(e).name() ),
+                        From_UTF8( e.what() ) );
         }
         catch(...)
         {

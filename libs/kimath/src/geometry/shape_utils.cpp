@@ -90,6 +90,20 @@ void KIGEOM::CollectBoxCorners( const BOX2I& aBox, std::vector<VECTOR2I>& aCorne
 }
 
 
+SHAPE_LINE_CHAIN KIGEOM::BoxToLineChain( const BOX2I& aBox )
+{
+    SHAPE_LINE_CHAIN result;
+
+    result.Append( VECTOR2I{ aBox.GetLeft(), aBox.GetTop() } );
+    result.Append( VECTOR2I{ aBox.GetRight(), aBox.GetTop() } );
+    result.Append( VECTOR2I{ aBox.GetRight(), aBox.GetBottom() } );
+    result.Append( VECTOR2I{ aBox.GetLeft(), aBox.GetBottom() } );
+    result.SetClosed( true );
+
+    return result;
+}
+
+
 std::vector<SEG> KIGEOM::GetSegsInDirection( const BOX2I& aBox, DIRECTION_45::Directions aDir )
 {
     // clang-format off

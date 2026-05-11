@@ -25,6 +25,7 @@
 
 #include "pcb_draw_panel_gal.h"
 
+#include <settings/color_settings.h>
 #include <pcb_view.h>
 #include <view/wx_view_controls.h>
 #include <pcb_painter.h>
@@ -33,6 +34,7 @@
 
 #include <board.h>
 #include <footprint.h>
+#include <pad.h>
 #include <pcb_track.h>
 #include <macros.h>
 #include <pcb_generator.h>
@@ -452,32 +454,8 @@ void PCB_DRAW_PANEL_GAL::DisplayBoard( BOARD* aBoard, PROGRESS_REPORTER* aReport
     if( m_drawingSheet )
         m_drawingSheet->SetFileName( TO_UTF8( aBoard->GetFileName() ) );
 
-    // Load drawings
-    for( BOARD_ITEM* drawing : aBoard->Drawings() )
-        m_view->Add( drawing );
-
-    // Load tracks
-    for( PCB_TRACK* track : aBoard->Tracks() )
-        m_view->Add( track );
-
-    // Load footprints and its additional elements
-    for( FOOTPRINT* footprint : aBoard->Footprints() )
-        m_view->Add( footprint );
-
-    // DRC markers
-    for( PCB_MARKER* marker : aBoard->Markers() )
-        m_view->Add( marker );
-
-    // Load points
-    for( PCB_POINT* point : aBoard->Points() )
-        m_view->Add( point );
-
-    // Load zones
-    for( ZONE* zone : aBoard->Zones() )
-        m_view->Add( zone );
-
-    for( PCB_GENERATOR* generator : aBoard->Generators() )
-        m_view->Add( generator );
+    for( BOARD_ITEM* item : aBoard->GetItemSet() )
+        m_view->Add( item );
 
     aBoard->UpdateBoardOutline();
     m_view->Add( aBoard->BoardOutline() );
@@ -591,6 +569,7 @@ void PCB_DRAW_PANEL_GAL::SetTopLayer( PCB_LAYER_ID aLayer )
             LAYER_PAD_NETNAMES, LAYER_VIA_NETNAMES,
             LAYER_SELECT_OVERLAY, LAYER_GP_OVERLAY,
             LAYER_RATSNEST,
+            LAYER_ANCHOR,
             LAYER_DRC_ERROR, LAYER_DRC_WARNING, LAYER_DRC_EXCLUSION, LAYER_MARKER_SHADOWS, LAYER_DRC_SHAPES,
             LAYER_CONFLICTS_SHADOW
     };
@@ -815,10 +794,12 @@ void PCB_DRAW_PANEL_GAL::setDefaultLayerOrder()
         // MW: Gross hack to make SetTopLayer bring the correct bitmap layer to
         // the top of the other bitmaps, but still below all the other layers
         if( layer >= LAYER_BITMAP_START && layer < LAYER_BITMAP_END )
-            m_view->SetLayerOrder( layer, i - KIGFX::VIEW::TOP_LAYER_MODIFIER );
+            m_view->SetLayerOrder( layer, i - KIGFX::VIEW::TOP_LAYER_MODIFIER, false );
         else
-            m_view->SetLayerOrder( layer, i );
+            m_view->SetLayerOrder( layer, i, false );
     }
+
+    m_view->SortOrderedLayers();
 }
 
 

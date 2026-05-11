@@ -22,6 +22,7 @@
  */
 
 #include <bitmaps.h>
+#include <common.h>
 #include <confirm.h>
 #include <widgets/std_bitmap_button.h>
 #include <widgets/paged_dialog.h>
@@ -29,6 +30,9 @@
 #include <pcbexpr_evaluator.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <drc/drc_engine.h>
+#include <project/net_settings.h>
+#include <settings/common_settings.h>
 #include <project.h>
 #include <string_utils.h>
 #include <tool/tool_manager.h>
@@ -43,6 +47,8 @@
 #include <wildcards_and_files_ext.h>
 #include <regex>
 #include <unordered_map>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 PANEL_SETUP_RULES::PANEL_SETUP_RULES( wxWindow* aParentWindow, PCB_EDIT_FRAME* aFrame ) :
         PANEL_SETUP_RULES_BASE( aParentWindow ),
@@ -95,6 +101,7 @@ PANEL_SETUP_RULES::~PANEL_SETUP_RULES( )
     Pgm().GetCommonSettings()->m_Appearance.text_editor_zoom = m_textEditor->GetZoom();
 
     delete m_scintillaTricks;
+    m_scintillaTricks = nullptr;
 
     if( m_helpWindow )
         m_helpWindow->Destroy();
@@ -753,8 +760,9 @@ void PANEL_SETUP_RULES::checkPlausibility( const std::vector<std::shared_ptr<DRC
     BOARD_DESIGN_SETTINGS& bds = board->GetDesignSettings();
     LSET                   enabledLayers = board->GetEnabledLayers();
 
-    std::unordered_map<wxString, wxString> seenConditions;
-    std::regex                             netclassPattern( "NetClass\\s*[!=]=\\s*\"?([^\"\\s]+)\"?" );
+    // Key by (condition, layerSource) so rules with different layer scopes are considered distinct
+    std::map<std::pair<wxString, wxString>, wxString> seenConditions;
+    std::regex netclassPattern( "NetClass\\s*[!=]=\\s*'\"?([^\"\\s]+)'\"?" );
 
     for( const auto& rule : aRules )
     {
@@ -765,16 +773,18 @@ void PANEL_SETUP_RULES::checkPlausibility( const std::vector<std::shared_ptr<DRC
 
         condition.Trim( true ).Trim( false );
 
-        if( seenConditions.count( condition ) )
+        auto key = std::make_pair( condition, rule->m_LayerSource );
+
+        if( seenConditions.count( key ) )
         {
             m_errorsReport->Report( wxString::Format( _( "Rules '%s' and '%s' share the same condition." ),
                                                       rule->m_Name,
-                                                      seenConditions[condition] ),
+                                                      seenConditions[key] ),
                                     RPT_SEVERITY_WARNING );
         }
         else
         {
-            seenConditions[condition] = rule->m_Name;
+            seenConditions[key] = rule->m_Name;
         }
 
         std::string          condUtf8 = condition.ToStdString();
@@ -794,7 +804,10 @@ void PANEL_SETUP_RULES::checkPlausibility( const std::vector<std::shared_ptr<DRC
             }
         }
 
-        if( !rule->m_LayerSource.IsEmpty() )
+        const bool isInner = rule->m_LayerSource.IsSameAs( wxT( "'inner'" ), false );
+        const bool isOuter = rule->m_LayerSource.IsSameAs( wxT( "'outer'" ), false );
+
+        if( !rule->m_LayerSource.IsEmpty() && !isInner && !isOuter )
         {
             LSET invalid = rule->m_LayerCondition & ~enabledLayers;
 

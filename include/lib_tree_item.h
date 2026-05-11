@@ -56,12 +56,15 @@ public:
      */
     virtual void GetChooserFields( std::map<wxString , wxString>& aColumnMap ) {}
 
-    virtual std::vector<SEARCH_TERM> GetSearchTerms() { return std::vector<SEARCH_TERM>(); }
+    virtual std::vector<SEARCH_TERM>& GetSearchTerms() = 0;
 
     /**
      * For items having aliases, IsRoot() indicates the principal item.
      */
     virtual bool IsRoot() const { return true; }
+
+    /// For symbols that could be a power symbol
+    virtual bool IsPowerSymbol() const { return false; }
 
     /**
      * For items with footprint fields.

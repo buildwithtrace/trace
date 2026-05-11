@@ -37,6 +37,7 @@
 #include <vector>
 
 #include <wx/datetime.h>
+#include <wx/filename.h>
 #include <wx/timer.h>
 
 /* Forward declarations of classes. */
@@ -62,10 +63,10 @@ struct MAGNETIC_SETTINGS;
 class PROGRESS_REPORTER;
 class PCB_LAYER_BOX_SELECTOR;
 
-#ifndef __linux__
-class NL_PCBNEW_PLUGIN;
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
 class SPNAV_2D_PLUGIN;
+#else
+class NL_PCBNEW_PLUGIN;
 #endif
 
 #ifdef wxHAS_INOTIFY
@@ -233,7 +234,7 @@ public:
     virtual void ShowChangedLanguage() override;
     virtual void UpdateStatusBar() override;
 
-    PCB_SCREEN* GetScreen() const override { return (PCB_SCREEN*) EDA_DRAW_FRAME::GetScreen(); }
+    PCB_SCREEN* GetScreen() const override;
 
     /**
      * Show the 3D view frame.
@@ -269,12 +270,12 @@ public:
     FOOTPRINT* CreateNewFootprint( wxString aFootprintName, const wxString& aLibName );
 
     /**
-     * Place \a aFootprint at the current cursor position and updates footprint coordinates
+     * Place \a aFootprint at the current cursor position (or provided one) and updates footprint coordinates
      * with the new position.
      *
      * @param aRecreateRatsnest A bool true redraws the footprint ratsnest.
      */
-    void PlaceFootprint( FOOTPRINT* aFootprint, bool aRecreateRatsnest = true );
+    void PlaceFootprint( FOOTPRINT* aFootprint, bool aRecreateRatsnest = true, std::optional<VECTOR2I> aPosition = std::nullopt );
 
     void ShowPadPropertiesDialog( PAD* aPad );
 
@@ -347,8 +348,8 @@ public:
      */
     virtual void SwitchLayer( PCB_LAYER_ID aLayer );
 
-    virtual void SetActiveLayer( PCB_LAYER_ID aLayer ) { GetScreen()->m_Active_Layer = aLayer; }
-    virtual PCB_LAYER_ID GetActiveLayer() const { return GetScreen()->m_Active_Layer; }
+    virtual void SetActiveLayer( PCB_LAYER_ID aLayer );
+    virtual PCB_LAYER_ID GetActiveLayer() const;
 
     SEVERITY GetSeverity( int aErrorCode ) const override;
 
@@ -437,10 +438,10 @@ protected:
     PCB_ORIGIN_TRANSFORMS   m_originTransforms;
 
 private:
-#ifndef __linux__
-    std::unique_ptr<NL_PCBNEW_PLUGIN>    m_spaceMouse;
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
     std::unique_ptr<SPNAV_2D_PLUGIN>    m_spaceMouse;
+#else
+    std::unique_ptr<NL_PCBNEW_PLUGIN>    m_spaceMouse;
 #endif
 
     std::unique_ptr<wxFileSystemWatcher> m_watcher;

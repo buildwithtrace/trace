@@ -58,7 +58,7 @@ namespace SYM_CHOOSER_TIMING
             KI_TRACE( wxT("KI_TRACE_SYM_CHOOSER"), wxT("step=%s step_ms=%.3f total_ms=%.3f mode=%s%s%s\n"),
                       wxString::FromUTF8( aStep ).c_str(), step_ms, total_ms,
                       g_firstRun ? wxT("cold") : wxT("warm"),
-                      aExtra.IsEmpty() ? wxT("") : wxT(" "),
+                      aExtra.IsEmpty() ? wxString( wxT("") ) : wxString( wxT(" ") ),
                       aExtra.c_str() );
         }
 

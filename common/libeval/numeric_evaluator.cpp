@@ -214,7 +214,7 @@ bool NUMERIC_EVALUATOR::IsOldSchoolDecimalSeparator( wxUniChar ch, double* siSca
 
 
 // Limited version of above for 8-bit chars
-bool NUMERIC_EVALUATOR::isOldSchoolDecimalSeparator( char ch, double* siScaler )
+bool NUMERIC_EVALUATOR::IsOldSchoolDecimalSeparator( char ch, double* siScaler )
 {
     switch( ch )
     {
@@ -492,7 +492,7 @@ NUMERIC_EVALUATOR::Token NUMERIC_EVALUATOR::getToken()
             case Unit::MM:   retval.value.dValue = 1000.0 / 25.4;  break;
             case Unit::CM:   retval.value.dValue = 1000.0 / 2.54;  break;
             default:
-            case Unit::Invalid:                                   break;
+            case Unit::Invalid:                                    break;
             }
         }
         else if( m_defaultUnits == Unit::Degrees && convertFrom == Unit::Degrees )

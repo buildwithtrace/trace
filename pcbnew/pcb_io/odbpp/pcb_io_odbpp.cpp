@@ -28,6 +28,8 @@
 #include "odb_entity.h"
 #include "wx/log.h"
 
+#include <footprint.h>
+
 
 double      PCB_IO_ODBPP::m_scale = 1.0 / PCB_IU_PER_MM;
 double      PCB_IO_ODBPP::m_symbolScale = 1.0 / PL_IU_PER_MM;
@@ -61,7 +63,7 @@ void PCB_IO_ODBPP::CreateEntity()
 
 bool PCB_IO_ODBPP::GenerateFiles( ODB_TREE_WRITER& writer )
 {
-    for( const auto entity : m_entities )
+    for( const auto& entity : m_entities )
     {
         if( !entity->CreateDirectoryTree( writer ) )
         {

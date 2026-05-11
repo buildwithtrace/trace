@@ -19,7 +19,9 @@
  */
 
 #include <magic_enum.hpp>
+#include <properties/property.h>
 
+#include <common.h>
 #include <api/api_handler_pcb.h>
 #include <api/api_pcb_utils.h>
 #include <api/api_enums.h>
@@ -95,6 +97,7 @@ API_HANDLER_PCB::API_HANDLER_PCB( PCB_EDIT_FRAME* aFrame ) :
             &API_HANDLER_PCB::handleExpandTextVariables );
     registerHandler<GetBoardOrigin, types::Vector2>( &API_HANDLER_PCB::handleGetBoardOrigin );
     registerHandler<SetBoardOrigin, Empty>( &API_HANDLER_PCB::handleSetBoardOrigin );
+    registerHandler<GetBoardLayerName, BoardLayerNameResponse>( &API_HANDLER_PCB::handleGetBoardLayerName );
 
     registerHandler<InteractiveMoveItems, Empty>( &API_HANDLER_PCB::handleInteractiveMoveItems );
     registerHandler<GetNets, NetsResponse>( &API_HANDLER_PCB::handleGetNets );
@@ -511,9 +514,18 @@ HANDLER_RESULT<ItemRequestStatus> API_HANDLER_PCB::handleCreateUpdateItemsIntern
             // can't use CopyFrom on them either.
             if( boardItem->Type() == PCB_FOOTPRINT_T  || boardItem->Type() == PCB_GROUP_T )
             {
+                // Save group membership before removal, since Remove() severs the relationship
+                PCB_GROUP* parentGroup = dynamic_cast<PCB_GROUP*>( boardItem->GetParentGroup() );
+
                 commit->Remove( boardItem );
                 item->Serialize( newItem );
-                commit->Add( item.release() );
+
+                BOARD_ITEM* newBoardItem = item.release();
+                commit->Add( newBoardItem );
+
+                // Restore group membership for the newly added item
+                if( parentGroup )
+                    parentGroup->AddItem( newBoardItem );
             }
             else
             {
@@ -1161,6 +1173,25 @@ HANDLER_RESULT<Empty> API_HANDLER_PCB::handleSetBoardOrigin(
 }
 
 
+HANDLER_RESULT<BoardLayerNameResponse> API_HANDLER_PCB::handleGetBoardLayerName(
+            const HANDLER_CONTEXT<GetBoardLayerName>& aCtx )
+{
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.board() );
+        !documentValidation )
+    {
+        return tl::unexpected( documentValidation.error() );
+    }
+
+    BoardLayerNameResponse response;
+
+    PCB_LAYER_ID id = FromProtoEnum<PCB_LAYER_ID>( aCtx.Request.layer() );
+
+    response.set_name( frame()->GetBoard()->GetLayerName( id ) );
+
+    return response;
+}
+
+
 HANDLER_RESULT<GetBoundingBoxResponse> API_HANDLER_PCB::handleGetBoundingBox(
         const HANDLER_CONTEXT<GetBoundingBox>& aCtx )
 {
@@ -1424,8 +1455,22 @@ HANDLER_RESULT<NetsResponse> API_HANDLER_PCB::handleGetNets( const HANDLER_CONTE
     {
         NETCLASS* nc = net->GetNetClass();
 
-        if( !netclassFilter.empty() && nc && !netclassFilter.count( nc->GetName() ) )
-            continue;
+        if( !netclassFilter.empty() && nc )
+        {
+            bool inClass = false;
+
+            for( const wxString& filter : netclassFilter )
+            {
+                if( nc->ContainsNetclassWithName( filter ) )
+                {
+                    inClass = true;
+                    break;
+                }
+            }
+
+            if( !inClass )
+                continue;
+        }
 
         board::types::Net* netProto = response.add_nets();
         netProto->set_name( net->GetNetname() );

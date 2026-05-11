@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,7 +18,10 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <advanced_config.h>
 #include <algorithm>
+#include <common.h>
+#include <inspectable_impl.h>
 #include <set>
 #include <bus_alias.h>
 #include <commit.h>
@@ -50,10 +54,13 @@
 #include <sim/spice_value.h>
 #include <trace_helpers.h>
 #include <string_utils.h>
+#include <text_eval/text_eval_wrapper.h>
 #include <tool/tool_manager.h>
 #include <undo_redo_container.h>
 #include <local_history.h>
+#include <richio.h>
 #include <sch_io/sch_io_mgr.h>
+#include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_io/sch_io.h>
 
 #include <wx/log.h>
@@ -61,18 +68,19 @@
 bool SCHEMATIC::m_IsSchematicExists = false;
 
 SCHEMATIC::SCHEMATIC( PROJECT* aPrj ) :
-          EDA_ITEM( nullptr, SCHEMATIC_T ),
-          m_project( nullptr ),
-          m_rootSheet( nullptr ),
-          m_schematicHolder( nullptr )
+        EDA_ITEM( nullptr, SCHEMATIC_T ),
+        m_project( nullptr ),
+        m_rootSheet( nullptr ),
+        m_schematicHolder( nullptr )
 {
-    m_currentSheet    = new SCH_SHEET_PATH();
+    m_currentSheet = new SCH_SHEET_PATH();
     m_connectionGraph = new CONNECTION_GRAPH( this );
     m_IsSchematicExists = true;
 
     SetProject( aPrj );
 
-    PROPERTY_MANAGER::Instance().RegisterListener( TYPE_HASH( SCH_FIELD ),
+    PROPERTY_MANAGER::Instance().RegisterListener(
+            TYPE_HASH( SCH_FIELD ),
             [&]( INSPECTABLE* aItem, PROPERTY_BASE* aProperty, COMMIT* aCommit )
             {
                 // Special case: propagate value, footprint, and datasheet fields to other units
@@ -128,12 +136,13 @@ SCHEMATIC::SCHEMATIC( PROJECT* aPrj ) :
                             break;
                         }
 
-                        default:
-                            break;
+                        default: break;
                         }
                     }
                 }
             } );
+
+    Reset();
 }
 
 
@@ -154,11 +163,16 @@ void SCHEMATIC::Reset()
 
     m_rootSheet = nullptr;
     m_topLevelSheets.clear();
+    m_hierarchy.clear();
 
     m_connectionGraph->Reset();
     m_currentSheet->clear();
 
     m_busAliases.clear();
+
+    ensureVirtualRoot();
+    ensureDefaultTopLevelSheet();
+    loadBusAliasesFromProject();
 }
 
 
@@ -181,8 +195,8 @@ void SCHEMATIC::SetProject( PROJECT* aPrj )
 
     if( m_project )
     {
-        PROJECT_FILE& project       = m_project->GetProjectFile();
-        project.m_ErcSettings       = new ERC_SETTINGS( &project, "erc" );
+        PROJECT_FILE& project = m_project->GetProjectFile();
+        project.m_ErcSettings = new ERC_SETTINGS( &project, "erc" );
         project.m_SchematicSettings = new SCHEMATIC_SETTINGS( &project, "schematic" );
 
         project.m_SchematicSettings->LoadFromFile();
@@ -201,7 +215,7 @@ void SCHEMATIC::CacheExistingAnnotation()
     // Cache all existing annotations in the REFDES_TRACKER
     std::shared_ptr<REFDES_TRACKER> refdesTracker = m_project->GetProjectFile().m_SchematicSettings->m_refDesTracker;
 
-    SCH_SHEET_LIST sheets = Hierarchy();
+    SCH_SHEET_LIST     sheets = Hierarchy();
     SCH_REFERENCE_LIST references;
 
     sheets.GetSymbols( references );
@@ -215,7 +229,7 @@ void SCHEMATIC::CacheExistingAnnotation()
 
 bool SCHEMATIC::Contains( const SCH_REFERENCE& aRef ) const
 {
-    SCH_SHEET_LIST sheets = Hierarchy();
+    SCH_SHEET_LIST     sheets = Hierarchy();
     SCH_REFERENCE_LIST references;
 
     /// TODO(snh): This is horribly inefficient, we should be using refdesTracker for this.
@@ -232,136 +246,162 @@ bool SCHEMATIC::Contains( const SCH_REFERENCE& aRef ) const
 }
 
 
-void SCHEMATIC::SetRoot( SCH_SHEET* aRootSheet )
+void SCHEMATIC::ensureVirtualRoot()
 {
-    wxCHECK_RET( aRootSheet, wxS( "Call to SetRoot with null SCH_SHEET!" ) );
-
-    // Check if this is a virtual root (has niluuid) or a regular sheet
-    bool isVirtualRoot = ( aRootSheet->m_Uuid == niluuid );
-
-    wxLogTrace( traceSchSheetPaths,
-                "SetRoot called: sheet='%s', UUID=%s, isVirtualRoot=%d, m_topLevelSheets.size()=%zu",
-                aRootSheet->GetName(),
-                aRootSheet->m_Uuid.AsString(),
-                isVirtualRoot ? 1 : 0,
-                m_topLevelSheets.size() );
-
-    for( size_t i = 0; i < m_topLevelSheets.size(); ++i )
+    if( m_rootSheet && m_rootSheet->m_Uuid == niluuid )
     {
-        SCH_SHEET* sheet = m_topLevelSheets[i];
-        wxLogTrace( traceSchSheetPaths,
-                    "  m_topLevelSheets[%zu]: '%s' (UUID=%s, isVirtualRoot=%d)",
-                    i,
-                    sheet ? sheet->GetName() : wxString( "(null)" ),
-                    sheet ? sheet->m_Uuid.AsString() : wxString( "(null)" ),
-                    sheet && sheet->m_Uuid == niluuid ? 1 : 0 );
+        if( !m_rootSheet->GetScreen() )
+            m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
+
+        return;
     }
 
-    if( isVirtualRoot )
+    SCH_SHEET* previousRoot = m_rootSheet;
+
+    m_rootSheet = new SCH_SHEET( this );
+    const_cast<KIID&>( m_rootSheet->m_Uuid ) = niluuid;
+    m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
+
+    if( previousRoot )
     {
-        // aRootSheet is already the virtual root, use it directly
-        m_rootSheet = aRootSheet;
+        previousRoot->SetParent( m_rootSheet );
 
-        // Ensure virtual root has a screen to hold top-level sheets
-        // Only create if we have a project (screens need a valid schematic parent)
-        if( !m_rootSheet->GetScreen() && m_project )
-        {
-            m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
-        }
-
-        // Add all existing top-level sheets to the virtual root's screen
         if( m_rootSheet->GetScreen() )
-        {
-            for( SCH_SHEET* sheet : m_topLevelSheets )
-            {
-                if( sheet && sheet->GetParent() != m_rootSheet )
-                {
-                    sheet->SetParent( m_rootSheet );
-                }
+            m_rootSheet->GetScreen()->Append( previousRoot );
 
-                // Add to screen if not already there
-                if( sheet && !m_rootSheet->GetScreen()->Items().contains( sheet ) )
-                {
-                    m_rootSheet->GetScreen()->Append( sheet );
-                }
-            }
-        }
-
-        // Current sheet should point to the first top-level sheet if available
-        m_currentSheet->clear();
-
-        if( !m_topLevelSheets.empty() )
-        {
-            m_currentSheet->push_back( m_topLevelSheets[0] );
-            wxLogTrace( traceSchCurrentSheet,
-                        "SetRoot: Set current sheet to first top-level sheet '%s', path='%s', size=%zu",
-                        m_topLevelSheets[0]->GetName(),
-                        m_currentSheet->Path().AsString(),
-                        m_currentSheet->size() );
-        }
-        else
-        {
-            wxLogTrace( traceSchCurrentSheet,
-                        "SetRoot: No top-level sheets, current sheet left empty" );
-        }
-        // If no top-level sheets, leave current sheet empty - it will be set when sheets are added
-    }
-    else
-    {
-        // aRootSheet is a regular sheet, create virtual root and make it a child
-        if( m_rootSheet == nullptr || m_rootSheet->m_Uuid != niluuid )
-        {
-            // Need to create a new virtual root
-            m_rootSheet = new SCH_SHEET( this );
-            const_cast<KIID&>( m_rootSheet->m_Uuid ) = niluuid;
-            // Create screen only if we have a project
-            if( m_project )
-            {
-                m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
-            }
-        }
-        else if( m_project && !m_rootSheet->GetScreen() )
-        {
-            // Virtual root exists but has no screen - create one now
-            m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
-        }
-
-        // Add this sheet as a top-level sheet
         m_topLevelSheets.clear();
-        m_topLevelSheets.push_back( aRootSheet );
-        aRootSheet->SetParent( m_rootSheet );
-
-        // Clear the virtual root's screen and add only the new sheet
-        if( m_rootSheet->GetScreen() )
-        {
-            m_rootSheet->GetScreen()->Clear();
-            m_rootSheet->GetScreen()->Append( aRootSheet );
-        }
-
-        m_currentSheet->clear();
-        m_currentSheet->push_back( aRootSheet );
-        wxLogTrace( traceSchCurrentSheet,
-                    "SetRoot: Set current sheet to root sheet '%s', path='%s', size=%zu",
-                    aRootSheet->GetName(),
-                    m_currentSheet->Path().AsString(),
-                    m_currentSheet->size() );
+        m_topLevelSheets.push_back( previousRoot );
     }
+}
 
-    if( m_project )
+
+void SCHEMATIC::ensureDefaultTopLevelSheet()
+{
+    // Early exit if we're already in the process of setting top-level sheets to avoid recursion
+    if( m_settingTopLevelSheets )
+        return;
+
+    ensureVirtualRoot();
+
+    if( !m_topLevelSheets.empty() )
+        return;
+
+    SCH_SHEET*  rootSheet = new SCH_SHEET( this );
+    SCH_SCREEN* rootScreen = new SCH_SCREEN( this );
+
+    const_cast<KIID&>( rootSheet->m_Uuid ) = rootScreen->GetUuid();
+    rootSheet->SetScreen( rootScreen );
+
+    SetTopLevelSheets( { rootSheet } );
+
+    SCH_SHEET_PATH rootSheetPath;
+    rootSheetPath.push_back( m_rootSheet );
+    rootSheetPath.push_back( rootSheet );
+    rootSheetPath.SetPageNumber( wxT( "1" ) );
+}
+
+
+void SCHEMATIC::ensureCurrentSheetIsTopLevel()
+{
+    if( m_topLevelSheets.empty() )
+        return;
+
+    if( m_currentSheet->empty() || !IsTopLevelSheet( m_currentSheet->at( 0 ) ) )
     {
-        m_hierarchy = BuildSheetListSortedByPageNumbers();
+        m_currentSheet->clear();
+        m_currentSheet->push_back( m_topLevelSheets[0] );
+    }
+}
+
+
+void SCHEMATIC::rebuildHierarchyState( bool aResetConnectionGraph )
+{
+    RefreshHierarchy();
+
+    if( aResetConnectionGraph && m_project )
         m_connectionGraph->Reset();
 
-        // Build screen list from root (which now has a screen)
-        m_variantNames.clear();
+    m_variantNames.clear();
+
+    if( m_rootSheet && m_rootSheet->GetScreen() )
+    {
+        SCH_SCREENS        screens( m_rootSheet );
+        std::set<wxString> variantNames = screens.GetVariantNames();
+        m_variantNames.insert( variantNames.begin(), variantNames.end() );
+    }
+
+    // Also include variants from the project file that may not have any diffs yet.
+    // This ensures newly created variants with no symbol changes are preserved.
+    if( m_project )
+    {
+        for( const auto& [name, description] : Settings().m_VariantDescriptions )
+            m_variantNames.insert( name );
+    }
+}
+
+
+void SCHEMATIC::SetTopLevelSheets( const std::vector<SCH_SHEET*>& aSheets )
+{
+    wxCHECK_RET( !aSheets.empty(), wxS( "Cannot set empty top-level sheets!" ) );
+
+    // Set the recursion guard early before any calls to ensureDefaultTopLevelSheet()
+    bool wasAlreadySetting = m_settingTopLevelSheets;
+    m_settingTopLevelSheets = true;
+
+    std::vector<SCH_SHEET*> validSheets;
+    validSheets.reserve( aSheets.size() );
+
+    for( SCH_SHEET* sheet : aSheets )
+    {
+        // Skip null sheets and virtual roots (which have niluuid)
+        if( sheet && sheet->m_Uuid != niluuid )
+            validSheets.push_back( sheet );
+    }
+
+    if( validSheets.empty() )
+    {
+        // Guard against re-entry to prevent infinite recursion
+        if( !wasAlreadySetting )
+            ensureDefaultTopLevelSheet();
+
+        m_settingTopLevelSheets = wasAlreadySetting;
+        return;
+    }
+
+    ensureVirtualRoot();
+
+    std::set<SCH_SHEET*> desiredSheets( validSheets.begin(), validSheets.end() );
+
+    if( m_rootSheet->GetScreen() )
+    {
+        for( SCH_ITEM* item : m_rootSheet->GetScreen()->Items() )
+        {
+            SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( item );
+
+            if( sheet && !desiredSheets.contains( sheet ) )
+                delete sheet;
+        }
+
+        m_rootSheet->GetScreen()->Clear( false );
+    }
+
+    m_currentSheet->clear();
+    m_topLevelSheets.clear();
+
+    for( SCH_SHEET* sheet : validSheets )
+    {
+        sheet->SetParent( m_rootSheet );
 
         if( m_rootSheet->GetScreen() )
-        {
-            SCH_SCREENS screens( m_rootSheet );
-            std::set<wxString> variantNames = screens.GetVariantNames();
-            m_variantNames.insert( variantNames.begin(), variantNames.end() );
-        }
+            m_rootSheet->GetScreen()->Append( sheet );
+
+        m_topLevelSheets.push_back( sheet );
     }
+
+    ensureCurrentSheetIsTopLevel();
+    rebuildHierarchyState( true );
+
+    m_settingTopLevelSheets = wasAlreadySetting;
 }
 
 
@@ -386,18 +426,18 @@ SCH_SHEET_LIST SCHEMATIC::Hierarchy() const
 
 void SCHEMATIC::RefreshHierarchy()
 {
+    ensureDefaultTopLevelSheet();
     m_hierarchy = BuildSheetListSortedByPageNumbers();
 }
 
 
 void SCHEMATIC::GetContextualTextVars( wxArrayString* aVars ) const
 {
-    auto add =
-            [&]( const wxString& aVar )
-            {
-                if( !alg::contains( *aVars, aVar ) )
-                    aVars->push_back( aVar );
-            };
+    auto add = [&]( const wxString& aVar )
+    {
+        if( !alg::contains( *aVars, aVar ) )
+            aVars->push_back( aVar );
+    };
 
     add( wxT( "#" ) );
     add( wxT( "##" ) );
@@ -406,6 +446,8 @@ void SCHEMATIC::GetContextualTextVars( wxArrayString* aVars ) const
     add( wxT( "FILENAME" ) );
     add( wxT( "FILEPATH" ) );
     add( wxT( "PROJECTNAME" ) );
+    add( wxT( "VARIANT" ) );
+    add( wxT( "VARIANT_DESC" ) );
 
     if( !CurrentSheet().empty() )
         CurrentSheet().LastScreen()->GetTitleBlock().GetContextualTextVars( aVars );
@@ -415,8 +457,7 @@ void SCHEMATIC::GetContextualTextVars( wxArrayString* aVars ) const
 }
 
 
-bool SCHEMATIC::ResolveTextVar( const SCH_SHEET_PATH* aSheetPath, wxString* token,
-                                int aDepth ) const
+bool SCHEMATIC::ResolveTextVar( const SCH_SHEET_PATH* aSheetPath, wxString* token, int aDepth ) const
 {
     wxCHECK( aSheetPath, false );
 
@@ -455,6 +496,16 @@ bool SCHEMATIC::ResolveTextVar( const SCH_SHEET_PATH* aSheetPath, wxString* toke
     else if( token->IsSameAs( wxT( "PROJECTNAME" ) ) )
     {
         *token = m_project->GetProjectName();
+        return true;
+    }
+    else if( token->IsSameAs( wxT( "VARIANTNAME" ) ) || token->IsSameAs( wxT( "VARIANT" ) ) )
+    {
+        *token = m_currentVariant;
+        return true;
+    }
+    else if( token->IsSameAs( wxT( "VARIANT_DESC" ) ) )
+    {
+        *token = GetVariantDescription( m_currentVariant );
         return true;
     }
 
@@ -505,7 +556,7 @@ ERC_SETTINGS& SCHEMATIC::ErcSettings() const
 std::vector<SCH_MARKER*> SCHEMATIC::ResolveERCExclusions()
 {
     SCH_SHEET_LIST sheetList = Hierarchy();
-    ERC_SETTINGS&  settings  = ErcSettings();
+    ERC_SETTINGS&  settings = ErcSettings();
 
     // Migrate legacy marker exclusions to new format to ensure exclusion matching functions across
     // file versions. Silently drops any legacy exclusions which can not be mapped to the new format
@@ -528,8 +579,7 @@ std::vector<SCH_MARKER*> SCHEMATIC::ResolveERCExclusions()
         {
             const wxString settingsKey = testMarker->GetRCItem()->GetSettingsKey();
 
-            if(    settingsKey != wxT( "pin_to_pin" )
-                && settingsKey != wxT( "hier_label_mismatch" )
+            if( settingsKey != wxT( "pin_to_pin" ) && settingsKey != wxT( "hier_label_mismatch" )
                 && settingsKey != wxT( "different_unit_net" ) )
             {
                 migratedExclusions.insert( testMarker->SerializeToString() );
@@ -603,8 +653,7 @@ void SCHEMATIC::AddBusAlias( std::shared_ptr<BUS_ALIAS> aAlias )
 
     auto sameDefinition = [&]( const std::shared_ptr<BUS_ALIAS>& candidate ) -> bool
     {
-        return candidate && candidate->GetName() == aAlias->GetName()
-               && candidate->Members() == aAlias->Members();
+        return candidate && candidate->GetName() == aAlias->GetName() && candidate->Members() == aAlias->Members();
     };
 
     auto it = std::find_if( m_busAliases.begin(), m_busAliases.end(), sameDefinition );
@@ -631,8 +680,7 @@ void SCHEMATIC::SetBusAliases( const std::vector<std::shared_ptr<BUS_ALIAS>>& aA
 
         auto sameDefinition = [&]( const std::shared_ptr<BUS_ALIAS>& candidate ) -> bool
         {
-            return candidate && candidate->GetName() == clone->GetName()
-                   && candidate->Members() == clone->Members();
+            return candidate && candidate->GetName() == clone->GetName() && candidate->Members() == clone->Members();
         };
 
         if( std::find_if( m_busAliases.begin(), m_busAliases.end(), sameDefinition ) != m_busAliases.end() )
@@ -659,7 +707,7 @@ void SCHEMATIC::loadBusAliasesFromProject()
         std::shared_ptr<BUS_ALIAS> busAlias = std::make_shared<BUS_ALIAS>();
 
         busAlias->SetName( alias.first );
-        busAlias->Members() = alias.second;
+        busAlias->SetMembers( alias.second );
 
         m_busAliases.push_back( busAlias );
     }
@@ -694,12 +742,12 @@ std::set<wxString> SCHEMATIC::GetNetClassAssignmentCandidates()
 {
     std::set<wxString> names;
 
-    for( const auto& [ key, subgraphList ] : m_connectionGraph->GetNetMap() )
+    for( const auto& [key, subgraphList] : m_connectionGraph->GetNetMap() )
     {
         CONNECTION_SUBGRAPH* firstSubgraph = subgraphList[0];
 
         if( !firstSubgraph->GetDriverConnection()->IsBus()
-                && firstSubgraph->GetDriverPriority() >= CONNECTION_SUBGRAPH::PRIORITY::PIN )
+            && firstSubgraph->GetDriverPriority() >= CONNECTION_SUBGRAPH::PRIORITY::PIN )
         {
             names.insert( key.Name );
         }
@@ -724,16 +772,40 @@ bool SCHEMATIC::ResolveCrossReference( wxString* token, int aDepth ) const
         sheetPath = Hierarchy().GetSheetPathByKIIDPath( path ).value_or( sheetPath );
     }
 
+    // Parse optional variant name from syntax ${REF:FIELD:VARIANT}
+    // remainder is "FIELD" or "FIELD:VARIANT"
+    wxString variantName;
+    wxString fieldName = remainder;
+    int      colonPos = remainder.Find( ':' );
+
+    if( colonPos != wxNOT_FOUND )
+    {
+        fieldName = remainder.Left( colonPos );
+        variantName = remainder.Mid( colonPos + 1 );
+    }
+
+    // Note: We don't expand nested variables or evaluate math expressions here.
+    // The multi-pass loop in GetShownText handles all variable and expression resolution
+    // before cross-references are resolved. This ensures table cell variables like ${ROW}
+    // are expanded correctly.
+
     if( refItem && refItem->Type() == SCH_SYMBOL_T )
     {
         SCH_SYMBOL* refSymbol = static_cast<SCH_SYMBOL*>( refItem );
 
-        if( refSymbol->ResolveTextVar( &sheetPath, &remainder, aDepth + 1 ) )
-            *token = std::move( remainder );
-        else
-            *token = refSymbol->GetRef( &sheetPath, true ) + wxS( ":" ) + remainder;
+        bool resolved = refSymbol->ResolveTextVar( &sheetPath, &fieldName, variantName, aDepth + 1 );
 
-        return true;    // Cross-reference is resolved whether or not the actual textvar was
+        if( resolved )
+        {
+            *token = std::move( fieldName );
+        }
+        else
+        {
+            // Field/function not found on symbol
+            *token = wxString::Format( wxT( "<Unresolved: %s:%s>" ), refSymbol->GetRef( &sheetPath, false ), fieldName );
+        }
+
+        return true;
     }
     else if( refItem && refItem->Type() == SCH_SHEET_T )
     {
@@ -741,13 +813,81 @@ bool SCHEMATIC::ResolveCrossReference( wxString* token, int aDepth ) const
 
         sheetPath.push_back( refSheet );
 
+        wxString remainderBefore = remainder;
+
         if( refSheet->ResolveTextVar( &sheetPath, &remainder, aDepth + 1 ) )
             *token = std::move( remainder );
 
-        return true;    // Cross-reference is resolved whether or not the actual textvar was
+        // If the remainder still contains unresolved variables or expressions,
+        // return false so ExpandTextVars keeps the ${...} wrapper
+        if( remainderBefore.Contains( wxT( "${" ) ) || remainderBefore.Contains( wxT( "@{" ) ) )
+            return false;
+
+        return true; // Cross-reference is resolved
     }
 
-    return false;
+    // If UUID resolution failed, try to resolve by reference designator
+    // This handles both exact matches (J601A) and parent references for multi-unit symbols (J601)
+    if( !refItem )
+    {
+        SCH_REFERENCE_LIST refs;
+        Hierarchy().GetSymbols( refs );
+
+        SCH_SYMBOL*    foundSymbol = nullptr;
+        SCH_SHEET_PATH foundPath;
+
+        for( int ii = 0; ii < (int) refs.GetCount(); ii++ )
+        {
+            SCH_REFERENCE& reference = refs[ii];
+            wxString       symbolRef = reference.GetSymbol()->GetRef( &reference.GetSheetPath(), false );
+
+            // Try exact match first
+            if( symbolRef == ref )
+            {
+                foundSymbol = reference.GetSymbol();
+                foundPath = reference.GetSheetPath();
+                break;
+            }
+
+            // For multi-unit symbols, try matching parent reference (e.g., J601 matches J601A)
+            if( symbolRef.StartsWith( ref ) && symbolRef.Length() == ref.Length() + 1 )
+            {
+                wxChar lastChar = symbolRef.Last();
+                if( lastChar >= 'A' && lastChar <= 'Z' )
+                {
+                    foundSymbol = reference.GetSymbol();
+                    foundPath = reference.GetSheetPath();
+                    // Don't break - continue looking for exact match
+                }
+            }
+        }
+
+        if( foundSymbol )
+        {
+            bool resolved = foundSymbol->ResolveTextVar( &foundPath, &fieldName, variantName, aDepth + 1 );
+
+            if( resolved )
+            {
+                *token = std::move( fieldName );
+            }
+            else
+            {
+                // Field/function not found on symbol
+                *token = wxString::Format( wxT( "<Unresolved: %s:%s>" ), foundSymbol->GetRef( &foundPath, false ),
+                                           fieldName );
+            }
+
+            return true;
+        }
+
+        // Symbol not found - set unresolved error
+        *token = wxString::Format( wxT( "<Unresolved: %s>" ), ref );
+        return true;
+    }
+
+    // Reference not found - show error message
+    *token = wxString::Format( wxT( "<Unknown reference: %s>" ), ref );
+    return true;
 }
 
 
@@ -785,7 +925,33 @@ wxString SCHEMATIC::ConvertRefsToKIIDs( const wxString& aSource ) const
 
     for( size_t i = 0; i < sourceLen; ++i )
     {
-        if( aSource[i] == '$' && i + 1 < sourceLen && aSource[i+1] == '{' )
+        // Check for escaped expressions: \${ or \@{
+        // These should be copied verbatim without any ref→KIID conversion
+        if( aSource[i] == '\\' && i + 2 < sourceLen && aSource[i + 2] == '{' &&
+            ( aSource[i + 1] == '$' || aSource[i + 1] == '@' ) )
+        {
+            // Copy the escape sequence and the entire escaped expression
+            newbuf.append( aSource[i] );     // backslash
+            newbuf.append( aSource[i + 1] ); // $ or @
+            newbuf.append( aSource[i + 2] ); // {
+            i += 2;
+
+            // Find and copy everything until the matching closing brace
+            int braceDepth = 1;
+            for( i = i + 1; i < sourceLen && braceDepth > 0; ++i )
+            {
+                if( aSource[i] == '{' )
+                    braceDepth++;
+                else if( aSource[i] == '}' )
+                    braceDepth--;
+
+                newbuf.append( aSource[i] );
+            }
+            i--; // Back up one since the for loop will increment
+            continue;
+        }
+
+        if( aSource[i] == '$' && i + 1 < sourceLen && aSource[i + 1] == '{' )
         {
             wxString token;
             bool     isCrossRef = false;
@@ -793,8 +959,7 @@ wxString SCHEMATIC::ConvertRefsToKIIDs( const wxString& aSource ) const
 
             for( i = i + 2; i < sourceLen; ++i )
             {
-                if( aSource[i] == '{'
-                        && ( aSource[i-1] == '_' || aSource[i-1] == '^' || aSource[i-1] == '~' ) )
+                if( aSource[i] == '{' && ( aSource[i - 1] == '_' || aSource[i - 1] == '^' || aSource[i - 1] == '~' ) )
                 {
                     nesting++;
                 }
@@ -823,11 +988,11 @@ wxString SCHEMATIC::ConvertRefsToKIIDs( const wxString& aSource ) const
 
                 for( size_t jj = 0; jj < references.GetCount(); jj++ )
                 {
-                    SCH_SYMBOL* refSymbol = references[ jj ].GetSymbol();
+                    SCH_SYMBOL* refSymbol = references[jj].GetSymbol();
 
-                    if( ref == refSymbol->GetRef( &references[ jj ].GetSheetPath(), true ) )
+                    if( ref == refSymbol->GetRef( &references[jj].GetSheetPath(), true ) )
                     {
-                        KIID_PATH path = references[ jj ].GetSheetPath().Path();
+                        KIID_PATH path = references[jj].GetSheetPath().Path();
                         path.push_back( refSymbol->m_Uuid );
 
                         token = path.AsString() + wxS( ":" ) + remainder;
@@ -855,7 +1020,33 @@ wxString SCHEMATIC::ConvertKIIDsToRefs( const wxString& aSource ) const
 
     for( size_t i = 0; i < sourceLen; ++i )
     {
-        if( aSource[i] == '$' && i + 1 < sourceLen && aSource[i+1] == '{' )
+        // Check for escaped expressions: \${ or \@{
+        // These should be copied verbatim without any KIID→ref conversion
+        if( aSource[i] == '\\' && i + 2 < sourceLen && aSource[i + 2] == '{' &&
+            ( aSource[i + 1] == '$' || aSource[i + 1] == '@' ) )
+        {
+            // Copy the escape sequence and the entire escaped expression
+            newbuf.append( aSource[i] );     // backslash
+            newbuf.append( aSource[i + 1] ); // $ or @
+            newbuf.append( aSource[i + 2] ); // {
+            i += 2;
+
+            // Find and copy everything until the matching closing brace
+            int braceDepth = 1;
+            for( i = i + 1; i < sourceLen && braceDepth > 0; ++i )
+            {
+                if( aSource[i] == '{' )
+                    braceDepth++;
+                else if( aSource[i] == '}' )
+                    braceDepth--;
+
+                newbuf.append( aSource[i] );
+            }
+            i--; // Back up one since the for loop will increment
+            continue;
+        }
+
+        if( aSource[i] == '$' && i + 1 < sourceLen && aSource[i + 1] == '{' )
         {
             wxString token;
             bool     isCrossRef = false;
@@ -964,7 +1155,22 @@ void SCHEMATIC::SetSheetNumberAndCount()
         sheet_count = Root().CountSheets();
     }
 
-    int              sheet_number = 1;
+    int sheet_number = 1;
+
+    if( m_hierarchy.empty() )
+    {
+        for( screen = s_list.GetFirst(); screen != nullptr; screen = s_list.GetNext() )
+            screen->SetPageCount( sheet_count );
+
+        CurrentSheet().SetVirtualPageNumber( sheet_number );
+        screen = CurrentSheet().LastScreen();
+
+        if( screen )
+            screen->SetVirtualPageNumber( sheet_number );
+
+        return;
+    }
+
     const KIID_PATH& current_sheetpath = CurrentSheet().Path();
 
     // @todo Remove all pseudo page number system is left over from prior to real page number
@@ -999,7 +1205,7 @@ void SCHEMATIC::RecomputeIntersheetRefs()
             SCH_GLOBALLABEL* global = static_cast<SCH_GLOBALLABEL*>( item );
             wxString         resolvedLabel = global->GetShownText( &sheet, false );
 
-            pageRefsMap[ resolvedLabel ].insert( sheet.GetVirtualPageNumber() );
+            pageRefsMap[resolvedLabel].insert( sheet.GetVirtualPageNumber() );
         }
     }
 
@@ -1038,8 +1244,7 @@ void SCHEMATIC::RecomputeIntersheetRefs()
 }
 
 
-wxString SCHEMATIC::GetOperatingPoint( const wxString& aNetName, int aPrecision,
-                                       const wxString& aRange )
+wxString SCHEMATIC::GetOperatingPoint( const wxString& aNetName, int aPrecision, const wxString& aRange )
 {
     wxString spiceNetName( aNetName.Lower() );
     NETLIST_EXPORTER_SPICE::ConvertToSpiceMarkup( &spiceNetName );
@@ -1058,9 +1263,10 @@ wxString SCHEMATIC::GetOperatingPoint( const wxString& aNetName, int aPrecision,
 }
 
 
-void SCHEMATIC::FixupJunctionsAfterImport()
+int SCHEMATIC::FixupJunctionsAfterImport()
 {
     SCH_SCREENS screens( Root() );
+    int         count = 0;
 
     for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
     {
@@ -1072,6 +1278,8 @@ void SCHEMATIC::FixupJunctionsAfterImport()
         // Add missing junctions and breakup wires as needed
         for( const VECTOR2I& point : screen->GetNeededJunctions( allItems ) )
         {
+            count++;
+
             SCH_JUNCTION* junction = new SCH_JUNCTION( point );
             screen->Append( junction );
 
@@ -1083,6 +1291,8 @@ void SCHEMATIC::FixupJunctionsAfterImport()
             }
         }
     }
+
+    return count;
 }
 
 
@@ -1154,7 +1364,7 @@ void SCHEMATIC::RecordERCExclusions()
             {
                 wxString serialized = marker->SerializeToString();
                 ercSettings.m_ErcExclusions.insert( serialized );
-                ercSettings.m_ErcExclusionComments[ serialized ] = marker->GetComment();
+                ercSettings.m_ErcExclusionComments[serialized] = marker->GetComment();
             }
         }
     }
@@ -1265,7 +1475,7 @@ std::set<const SCH_SCREEN*> SCHEMATIC::GetSchematicsSharedByMultipleProjects() c
     wxCHECK( m_rootSheet, retv );
 
     SCH_SHEET_LIST hierarchy( m_rootSheet );
-    SCH_SCREENS screens( m_rootSheet );
+    SCH_SCREENS    screens( m_rootSheet );
 
     for( const SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
     {
@@ -1324,23 +1534,23 @@ void SCHEMATIC::CleanUp( SCH_COMMIT* aCommit, SCH_SCREEN* aScreen )
         aScreen = GetCurrentScreen();
 
     auto remove_item = [&]( SCH_ITEM* aItem ) -> void
-                       {
-                           changed = true;
+    {
+        changed = true;
 
-                           if( !( aItem->GetFlags() & STRUCT_DELETED ) )
-                           {
-                               aItem->SetFlags( STRUCT_DELETED );
+        if( !( aItem->GetFlags() & STRUCT_DELETED ) )
+        {
+            aItem->SetFlags( STRUCT_DELETED );
 
-                               if( aItem->IsSelected() && selectionTool )
-                                   selectionTool->RemoveItemFromSel( aItem, true /*quiet mode*/ );
+            if( aItem->IsSelected() && selectionTool )
+                selectionTool->RemoveItemFromSel( aItem, true /*quiet mode*/ );
 
-                               if( m_schematicHolder )
-                               {
-                                   m_schematicHolder->RemoveFromScreen( aItem, aScreen );
-                               }
-                               aCommit->Removed( aItem, aScreen );
-                           }
-                       };
+            if( m_schematicHolder )
+            {
+                m_schematicHolder->RemoveFromScreen( aItem, aScreen );
+            }
+            aCommit->Removed( aItem, aScreen );
+        }
+    };
 
 
     for( SCH_ITEM* item : aScreen->Items().OfType( SCH_JUNCTION_T ) )
@@ -1363,51 +1573,51 @@ void SCHEMATIC::CleanUp( SCH_COMMIT* aCommit, SCH_SCREEN* aScreen )
         ncs.push_back( static_cast<SCH_NO_CONNECT*>( item ) );
 
     alg::for_all_pairs( junctions.begin(), junctions.end(),
-            [&]( SCH_JUNCTION* aFirst, SCH_JUNCTION* aSecond )
-            {
-                if( ( aFirst->GetEditFlags() & STRUCT_DELETED )
-                        || ( aSecond->GetEditFlags() & STRUCT_DELETED ) )
-                {
-                    return;
-                }
+                        [&]( SCH_JUNCTION* aFirst, SCH_JUNCTION* aSecond )
+                        {
+                            if( ( aFirst->GetEditFlags() & STRUCT_DELETED )
+                                || ( aSecond->GetEditFlags() & STRUCT_DELETED ) )
+                            {
+                                return;
+                            }
 
-                if( aFirst->GetPosition() == aSecond->GetPosition() )
-                    remove_item( aSecond );
-            } );
+                            if( aFirst->GetPosition() == aSecond->GetPosition() )
+                                remove_item( aSecond );
+                        } );
 
     alg::for_all_pairs( ncs.begin(), ncs.end(),
-            [&]( SCH_NO_CONNECT* aFirst, SCH_NO_CONNECT* aSecond )
-            {
-                if( ( aFirst->GetEditFlags() & STRUCT_DELETED )
-                        || ( aSecond->GetEditFlags() & STRUCT_DELETED ) )
-                {
-                    return;
-                }
+                        [&]( SCH_NO_CONNECT* aFirst, SCH_NO_CONNECT* aSecond )
+                        {
+                            if( ( aFirst->GetEditFlags() & STRUCT_DELETED )
+                                || ( aSecond->GetEditFlags() & STRUCT_DELETED ) )
+                            {
+                                return;
+                            }
 
-                if( aFirst->GetPosition() == aSecond->GetPosition() )
-                    remove_item( aSecond );
-            } );
+                            if( aFirst->GetPosition() == aSecond->GetPosition() )
+                                remove_item( aSecond );
+                        } );
 
 
     auto minX = []( const SCH_LINE* l )
-                {
-                    return std::min( l->GetStartPoint().x, l->GetEndPoint().x );
-                };
+    {
+        return std::min( l->GetStartPoint().x, l->GetEndPoint().x );
+    };
 
     auto maxX = []( const SCH_LINE* l )
-                {
-                    return std::max( l->GetStartPoint().x, l->GetEndPoint().x );
-                };
+    {
+        return std::max( l->GetStartPoint().x, l->GetEndPoint().x );
+    };
 
     auto minY = []( const SCH_LINE* l )
-                {
-                    return std::min( l->GetStartPoint().y, l->GetEndPoint().y );
-                };
+    {
+        return std::min( l->GetStartPoint().y, l->GetEndPoint().y );
+    };
 
     auto maxY = []( const SCH_LINE* l )
-                {
-                    return std::max( l->GetStartPoint().y, l->GetEndPoint().y );
-                };
+    {
+        return std::max( l->GetStartPoint().y, l->GetEndPoint().y );
+    };
 
     // Would be nice to put lines in a canonical form here by swapping
     //  start <-> end as needed but I don't know what swapping breaks.
@@ -1464,16 +1674,15 @@ void SCHEMATIC::CleanUp( SCH_COMMIT* aCommit, SCH_SCREEN* aScreen )
                 if( secondLine->GetFlags() & STRUCT_DELETED )
                     continue;
 
-                if( !secondLine->IsParallel( firstLine )
-                        || !secondLine->IsStrokeEquivalent( firstLine )
-                        || secondLine->GetLayer() != firstLine->GetLayer() )
+                if( !secondLine->IsParallel( firstLine ) || !secondLine->IsStrokeEquivalent( firstLine )
+                    || secondLine->GetLayer() != firstLine->GetLayer() )
                 {
                     continue;
                 }
 
                 // Remove identical lines
                 if( firstLine->IsEndPoint( secondLine->GetStartPoint() )
-                        && firstLine->IsEndPoint( secondLine->GetEndPoint() ) )
+                    && firstLine->IsEndPoint( secondLine->GetEndPoint() ) )
                 {
                     remove_item( secondLine );
                     continue;
@@ -1507,16 +1716,15 @@ void SCHEMATIC::CleanUp( SCH_COMMIT* aCommit, SCH_SCREEN* aScreen )
 
 
 void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS aCleanupFlags,
-                                        TOOL_MANAGER* aToolManager,
-                                        PROGRESS_REPORTER* aProgressReporter,
-                                        KIGFX::SCH_VIEW* aSchView,
+                                        TOOL_MANAGER* aToolManager, PROGRESS_REPORTER* aProgressReporter,
+                                        KIGFX::SCH_VIEW*                  aSchView,
                                         std::function<void( SCH_ITEM* )>* aChangedItemHandler,
-                                        PICKED_ITEMS_LIST* aLastChangeList )
+                                        PICKED_ITEMS_LIST*                aLastChangeList )
 {
     SCHEMATIC_SETTINGS& settings = Settings();
     RefreshHierarchy();
-    SCH_SHEET_LIST      list = Hierarchy();
-    SCH_COMMIT          localCommit( aToolManager );
+    SCH_SHEET_LIST list = Hierarchy();
+    SCH_COMMIT     localCommit( aToolManager );
 
     if( !aCommit )
         aCommit = &localCommit;
@@ -1540,10 +1748,8 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
     if( settings.m_IntersheetRefsShow )
         RecomputeIntersheetRefs();
 
-    if( !ADVANCED_CFG::GetCfg().m_IncrementalConnectivity
-            || aCleanupFlags == GLOBAL_CLEANUP
-            || aLastChangeList == nullptr
-            || ConnectionGraph()->IsMinor() )
+    if( !ADVANCED_CFG::GetCfg().m_IncrementalConnectivity || aCleanupFlags == GLOBAL_CLEANUP
+        || aLastChangeList == nullptr || ConnectionGraph()->IsMinor() )
     {
         // Clear all resolved netclass caches in case labels have changed
         m_project->GetProjectFile().NetSettings()->ClearAllCaches();
@@ -1618,11 +1824,9 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
             // cases are not connectivity-related
             case UNDO_REDO::CHANGED:
             case UNDO_REDO::NEWITEM:
-            case UNDO_REDO::DELETED:
-                break;
+            case UNDO_REDO::DELETED: break;
 
-            default:
-                continue;
+            default: continue;
             }
 
             SCH_ITEM* item = dynamic_cast<SCH_ITEM*>( aLastChangeList->GetPickedItem( ii ) );
@@ -1660,18 +1864,17 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
         std::map<KIID, EDA_ITEM*> itemMap;
         list.FillItemMap( itemMap );
 
-        auto addPastAndPresentContainedItems =
-                [&]( SCH_RULE_AREA* changedRuleArea, SCH_SCREEN* screen )
-                {
-                    for( const KIID& pastItem : changedRuleArea->GetPastContainedItems() )
-                    {
-                        if( itemMap.contains( pastItem ) )
-                            addItemToChangeSet( { static_cast<SCH_ITEM*>( itemMap[pastItem] ), nullptr, screen } );
-                    }
+        auto addPastAndPresentContainedItems = [&]( SCH_RULE_AREA* changedRuleArea, SCH_SCREEN* screen )
+        {
+            for( const KIID& pastItem : changedRuleArea->GetPastContainedItems() )
+            {
+                if( itemMap.contains( pastItem ) )
+                    addItemToChangeSet( { static_cast<SCH_ITEM*>( itemMap[pastItem] ), nullptr, screen } );
+            }
 
-                    for( SCH_ITEM* containedItem : changedRuleArea->GetContainedItems() )
-                        addItemToChangeSet( { containedItem, nullptr, screen } );
-                };
+            for( SCH_ITEM* containedItem : changedRuleArea->GetContainedItems() )
+                addItemToChangeSet( { containedItem, nullptr, screen } );
+        };
 
         for( const auto& [changedRuleArea, screen] : changed_rule_areas )
             addPastAndPresentContainedItems( changedRuleArea, screen );
@@ -1685,12 +1888,10 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
             // to add the contained items to the change set to force update of their connectivity
             if( changed_item_data.item->Type() == SCH_DIRECTIVE_LABEL_T )
             {
-                const std::vector<VECTOR2I> labelConnectionPoints =
-                        changed_item_data.item->GetConnectionPoints();
+                const std::vector<VECTOR2I> labelConnectionPoints = changed_item_data.item->GetConnectionPoints();
 
-                auto candidateRuleAreas =
-                        changed_item_data.screen->Items().Overlapping( SCH_RULE_AREA_T,
-                                                                       changed_item_data.item->GetBoundingBox() );
+                auto candidateRuleAreas = changed_item_data.screen->Items().Overlapping(
+                        SCH_RULE_AREA_T, changed_item_data.item->GetBoundingBox() );
 
                 for( SCH_ITEM* candidateRuleArea : candidateRuleAreas )
                 {
@@ -1703,7 +1904,7 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
             }
         }
 
-        for( const VECTOR2I& pt: pts )
+        for( const VECTOR2I& pt : pts )
         {
             for( SCH_ITEM* item : GetCurrentScreen()->Items().Overlapping( pt ) )
             {
@@ -1711,10 +1912,18 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
                 if( !item->IsConnectable() )
                     continue;
 
+                SCH_SCREEN* screen = GetCurrentScreen();
+                std::vector<SCH_SHEET_PATH>& paths = screen->GetClientSheetPaths();
+
                 if( item->Type() == SCH_LINE_T )
                 {
                     if( item->HitTest( pt ) )
+                    {
                         changed_items.insert( item );
+
+                        for( SCH_SHEET_PATH& path : paths )
+                            item_paths.insert( std::make_pair( path, item ) );
+                    }
                 }
                 else if( item->Type() == SCH_SYMBOL_T && item->IsConnected( pt ) )
                 {
@@ -1722,6 +1931,12 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
                     std::vector<SCH_PIN*> pins = symbol->GetPins();
 
                     changed_items.insert( pins.begin(), pins.end() );
+
+                    for( SCH_PIN* pin : pins )
+                    {
+                        for( SCH_SHEET_PATH& path : paths )
+                            item_paths.insert( std::make_pair( path, pin ) );
+                    }
                 }
                 else if( item->Type() == SCH_SHEET_T )
                 {
@@ -1731,11 +1946,22 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
 
                     std::vector<SCH_SHEET_PIN*> sheetPins = sheet->GetPins();
                     changed_items.insert( sheetPins.begin(), sheetPins.end() );
+
+                    for( SCH_SHEET_PIN* pin : sheetPins )
+                    {
+                        for( SCH_SHEET_PATH& path : paths )
+                            item_paths.insert( std::make_pair( path, pin ) );
+                    }
                 }
                 else
                 {
                     if( item->IsConnected( pt ) )
+                    {
                         changed_items.insert( item );
+
+                        for( SCH_SHEET_PATH& path : paths )
+                            item_paths.insert( std::make_pair( path, item ) );
+                    }
                 }
             }
         }
@@ -1753,7 +1979,7 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
 
         std::set<wxString> affectedNets;
 
-        for( auto&[ path, item ] : all_items )
+        for( auto& [path, item] : all_items )
         {
             wxCHECK2( item, continue );
             item->SetConnectivityDirty();
@@ -1761,6 +1987,27 @@ void SCHEMATIC::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS a
 
             if( conn )
                 affectedNets.insert( conn->Name() );
+        }
+
+        // For label items, also capture the old net name from the linked item (original state).
+        // This ensures cache is cleared for both old and new net names when a label is renamed.
+        for( const CHANGED_ITEM& changedItem : changed_connectable_items )
+        {
+            if( SCH_LABEL_BASE* label = dynamic_cast<SCH_LABEL_BASE*>( changedItem.item ) )
+            {
+                const wxString& driverName = label->GetCachedDriverName();
+
+                if( !driverName.IsEmpty() )
+                    affectedNets.insert( driverName );
+            }
+
+            if( SCH_LABEL_BASE* linkedLabel = dynamic_cast<SCH_LABEL_BASE*>( changedItem.linked_item ) )
+            {
+                const wxString& driverName = linkedLabel->GetCachedDriverName();
+
+                if( !driverName.IsEmpty() )
+                    affectedNets.insert( driverName );
+            }
         }
 
         // Reset resolved netclass cache for this connection
@@ -1780,42 +2027,24 @@ void SCHEMATIC::CreateDefaultScreens()
 {
     Reset();
 
-    // Create virtual root with niluuid and a screen to hold top-level sheets
-    SCH_SHEET* virtualRoot = new SCH_SHEET( this );
-    const_cast<KIID&>( virtualRoot->m_Uuid ) = niluuid;
-    virtualRoot->SetScreen( new SCH_SCREEN( this ) );  // Virtual root has a screen
+    ensureVirtualRoot();
 
     // Create the actual first top-level sheet
-    SCH_SHEET* rootSheet = new SCH_SHEET( this );
+    SCH_SHEET*  rootSheet = new SCH_SHEET( this );
     SCH_SCREEN* rootScreen = new SCH_SCREEN( this );
 
     const_cast<KIID&>( rootSheet->m_Uuid ) = rootScreen->GetUuid();
     rootSheet->SetScreen( rootScreen );
-    rootScreen->SetFileName( "untitled.kicad_sch" );  // Set default filename to avoid conflicts
+    rootScreen->SetFileName( "untitled.kicad_sch" ); // Set default filename to avoid conflicts
     rootScreen->SetPageNumber( wxT( "1" ) );
-
-    // Set parent to virtual root
-    rootSheet->SetParent( virtualRoot );
-
-    // Add the top-level sheet to the virtual root's screen
-    virtualRoot->GetScreen()->Append( rootSheet );
 
     // Don't leave root page number empty
     SCH_SHEET_PATH rootSheetPath;
-    rootSheetPath.push_back( virtualRoot );
+    rootSheetPath.push_back( m_rootSheet );
     rootSheetPath.push_back( rootSheet );
     rootSheetPath.SetPageNumber( wxT( "1" ) );
 
-    // Set up the schematic structure
-    m_rootSheet = virtualRoot;
-    m_topLevelSheets.clear();
-    m_topLevelSheets.push_back( rootSheet );
-
-    m_currentSheet->clear();
-    m_currentSheet->push_back( rootSheet );
-
-    // Rehash sheetpaths in hierarchy since we changed the uuid.
-    RefreshHierarchy();
+    SetTopLevelSheets( { rootSheet } );
 }
 
 
@@ -1824,29 +2053,25 @@ std::vector<SCH_SHEET*> SCHEMATIC::GetTopLevelSheets() const
     return m_topLevelSheets;
 }
 
+SCH_SHEET* SCHEMATIC::GetTopLevelSheet( int aIndex ) const
+{
+    if( aIndex < 0 )
+        return nullptr;
+
+    size_t index = static_cast<size_t>( aIndex );
+
+    if( index >= m_topLevelSheets.size() )
+        return nullptr;
+
+    return m_topLevelSheets[index];
+}
 
 void SCHEMATIC::AddTopLevelSheet( SCH_SHEET* aSheet )
 {
     wxCHECK_RET( aSheet, wxS( "Cannot add null sheet!" ) );
     wxCHECK_RET( aSheet->GetScreen(), wxS( "Cannot add virtual root as top-level sheet!" ) );
 
-    // Make sure we have a virtual root
-    if( m_rootSheet == nullptr )
-    {
-        m_rootSheet = new SCH_SHEET( this );
-        const_cast<KIID&>( m_rootSheet->m_Uuid ) = niluuid;
-        // Create screen only if we have a project
-        if( m_project )
-        {
-            m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
-        }
-    }
-
-    // Ensure virtual root has a screen (may have been created before project was set)
-    if( !m_rootSheet->GetScreen() && m_project )
-    {
-        m_rootSheet->SetScreen( new SCH_SCREEN( this ) );
-    }
+    ensureVirtualRoot();
 
     // Set parent to virtual root
     aSheet->SetParent( m_rootSheet );
@@ -1860,10 +2085,9 @@ void SCHEMATIC::AddTopLevelSheet( SCH_SHEET* aSheet )
     // Add to our list
     m_topLevelSheets.push_back( aSheet );
 
-    // Refresh hierarchy
-    RefreshHierarchy();
+    ensureCurrentSheetIsTopLevel();
+    rebuildHierarchyState( true );
 }
-
 
 bool SCHEMATIC::RemoveTopLevelSheet( SCH_SHEET* aSheet )
 {
@@ -1872,7 +2096,13 @@ bool SCHEMATIC::RemoveTopLevelSheet( SCH_SHEET* aSheet )
     if( it == m_topLevelSheets.end() )
         return false;
 
+    if( m_topLevelSheets.size() == 1 )
+        return false;
+
     m_topLevelSheets.erase( it );
+
+    if( m_rootSheet && m_rootSheet->GetScreen() )
+        m_rootSheet->GetScreen()->Items().remove( aSheet );
 
     // If we're removing the current sheet, switch to another one
     if( !m_currentSheet->empty() && m_currentSheet->at( 0 ) == aSheet )
@@ -1884,15 +2114,14 @@ bool SCHEMATIC::RemoveTopLevelSheet( SCH_SHEET* aSheet )
         }
     }
 
-    RefreshHierarchy();
+    rebuildHierarchyState( true );
     return true;
 }
 
 
 bool SCHEMATIC::IsTopLevelSheet( const SCH_SHEET* aSheet ) const
 {
-    return std::find( m_topLevelSheets.begin(), m_topLevelSheets.end(), aSheet )
-           != m_topLevelSheets.end();
+    return std::find( m_topLevelSheets.begin(), m_topLevelSheets.end(), aSheet ) != m_topLevelSheets.end();
 }
 
 
@@ -1900,9 +2129,8 @@ SCH_SHEET_LIST SCHEMATIC::BuildSheetListSortedByPageNumbers() const
 {
     SCH_SHEET_LIST hierarchy;
 
-    wxLogTrace( traceSchSheetPaths,
-               "BuildSheetListSortedByPageNumbers: %zu top-level sheets",
-               m_topLevelSheets.size() );
+    wxLogTrace( traceSchSheetPaths, "BuildSheetListSortedByPageNumbers: %zu top-level sheets",
+                m_topLevelSheets.size() );
 
     // Can't build hierarchy without top-level sheets
     if( m_topLevelSheets.empty() )
@@ -1913,11 +2141,8 @@ SCH_SHEET_LIST SCHEMATIC::BuildSheetListSortedByPageNumbers() const
     {
         if( sheet )
         {
-            wxLogTrace( traceSchSheetPaths,
-                       "  Top-level sheet: '%s' (UUID=%s, isVirtualRoot=%d)",
-                       sheet->GetName(),
-                       sheet->m_Uuid.AsString(),
-                       sheet->m_Uuid == niluuid ? 1 : 0 );
+            wxLogTrace( traceSchSheetPaths, "  Top-level sheet: '%s' (UUID=%s, isVirtualRoot=%d)", sheet->GetName(),
+                        sheet->m_Uuid.AsString(), sheet->m_Uuid == niluuid ? 1 : 0 );
 
             // Build the sheet list for this top-level sheet
             SCH_SHEET_LIST sheetList;
@@ -1971,6 +2196,8 @@ wxArrayString SCHEMATIC::GetVariantNamesForUI() const
     for( const wxString& name : m_variantNames )
         variantNames.Add( name );
 
+    variantNames.Sort( SortVariantNames );
+
     return variantNames;
 }
 
@@ -1986,26 +2213,156 @@ wxString SCHEMATIC::GetCurrentVariant() const
 
 void SCHEMATIC::SetCurrentVariant( const wxString& aVariantName )
 {
+    wxString newVariant;
+
     // Internally an empty string is the default variant.  Set to default if the variant name doesn't exist.
-    if( ( aVariantName == GetDefaultVariantName() ) || !m_variantNames.contains( aVariantName ) )
-        m_currentVariant = wxEmptyString;
-    else
-        m_currentVariant = aVariantName;
+    if( ( aVariantName != GetDefaultVariantName() ) && m_variantNames.contains( aVariantName ) )
+        newVariant = aVariantName;
+
+    if( m_currentVariant == newVariant )
+        return;
+
+    m_currentVariant = newVariant;
+
+    // Variant-specific field values affect text geometry, so bounding box caches computed
+    // with the previous variant's text are now stale.
+    if( m_rootSheet )
+    {
+        SCH_SCREENS allScreens( m_rootSheet );
+
+        for( SCH_SCREEN* screen = allScreens.GetFirst(); screen; screen = allScreens.GetNext() )
+        {
+            for( SCH_ITEM* item : screen->Items() )
+                item->ClearCaches();
+        }
+    }
 }
 
 
-void SCHEMATIC::DeleteVariant( const wxString& aVariantName )
+void SCHEMATIC::AddVariant( const wxString& aVariantName )
+{
+    m_variantNames.emplace( aVariantName );
+
+    // Ensure the variant is registered in the project file
+    auto& descriptions = Settings().m_VariantDescriptions;
+
+    if( descriptions.find( aVariantName ) == descriptions.end() )
+        descriptions[aVariantName] = wxEmptyString;
+}
+
+
+void SCHEMATIC::DeleteVariant( const wxString& aVariantName, SCH_COMMIT* aCommit )
 {
     wxCHECK( m_rootSheet, /* void */ );
 
     SCH_SCREENS allScreens( m_rootSheet );
 
-    allScreens.DeleteVariant( aVariantName );
+    allScreens.DeleteVariant( aVariantName, aCommit );
+
+    m_variantNames.erase( aVariantName );
+    Settings().m_VariantDescriptions.erase( aVariantName );
 }
 
 
-void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<wxString>& aFiles )
+void SCHEMATIC::RenameVariant( const wxString& aOldName, const wxString& aNewName,
+                               SCH_COMMIT* aCommit )
 {
+    wxCHECK( m_rootSheet, /* void */ );
+    wxCHECK( !aOldName.IsEmpty() && !aNewName.IsEmpty(), /* void */ );
+    wxCHECK( m_variantNames.contains( aOldName ), /* void */ );
+
+    m_variantNames.erase( aOldName );
+    m_variantNames.insert( aNewName );
+
+    auto& descriptions = Settings().m_VariantDescriptions;
+
+    if( descriptions.count( aOldName ) )
+    {
+        descriptions[aNewName] = descriptions[aOldName];
+        descriptions.erase( aOldName );
+    }
+
+    if( m_currentVariant == aOldName )
+        m_currentVariant = aNewName;
+
+    SCH_SCREENS allScreens( m_rootSheet );
+    allScreens.RenameVariant( aOldName, aNewName, aCommit );
+}
+
+
+void SCHEMATIC::CopyVariant( const wxString& aSourceVariant, const wxString& aNewVariant,
+                             SCH_COMMIT* aCommit )
+{
+    wxCHECK( m_rootSheet, /* void */ );
+    wxCHECK( !aSourceVariant.IsEmpty() && !aNewVariant.IsEmpty(), /* void */ );
+    wxCHECK( m_variantNames.contains( aSourceVariant ), /* void */ );
+    wxCHECK( !m_variantNames.contains( aNewVariant ), /* void */ );
+
+    AddVariant( aNewVariant );
+
+    auto& descriptions = Settings().m_VariantDescriptions;
+
+    if( descriptions.count( aSourceVariant ) )
+        descriptions[aNewVariant] = descriptions[aSourceVariant];
+
+    SCH_SCREENS allScreens( m_rootSheet );
+    allScreens.CopyVariant( aSourceVariant, aNewVariant, aCommit );
+}
+
+
+wxString SCHEMATIC::GetVariantDescription( const wxString& aVariantName ) const
+{
+    const auto& descriptions = Settings().m_VariantDescriptions;
+    auto it = descriptions.find( aVariantName );
+
+    if( it != descriptions.end() )
+        return it->second;
+
+    return wxEmptyString;
+}
+
+
+void SCHEMATIC::SetVariantDescription( const wxString& aVariantName, const wxString& aDescription )
+{
+    auto& descriptions = Settings().m_VariantDescriptions;
+
+    if( aDescription.IsEmpty() )
+        descriptions.erase( aVariantName );
+    else
+        descriptions[aVariantName] = aDescription;
+}
+
+
+void SCHEMATIC::LoadVariants()
+{
+    if( m_rootSheet && m_rootSheet->GetScreen() )
+    {
+        SCH_SCREENS        screens( m_rootSheet );
+        std::set<wxString> variantNames = screens.GetVariantNames();
+        m_variantNames.insert( variantNames.begin(), variantNames.end() );
+
+        // Register any unknown variants to the project file with empty descriptions
+        auto& descriptions = Settings().m_VariantDescriptions;
+
+        for( const wxString& name : variantNames )
+        {
+            if( descriptions.find( name ) == descriptions.end() )
+                descriptions[name] = wxEmptyString;
+        }
+
+        // Also include variants from the project file that may not have any diffs yet.
+        // This ensures newly created variants with no symbol changes are preserved.
+        for( const auto& [name, description] : descriptions )
+            m_variantNames.insert( name );
+    }
+}
+
+
+void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData )
+{
+    if( !IsValid() )
+        return;
+
     wxString projPath = m_project->GetProjectPath();
 
     if( projPath.IsEmpty() )
@@ -2014,8 +2371,8 @@ void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<wxStrin
     // Verify we're saving for the correct project
     if( !projPath.IsSameAs( aProjectPath ) )
     {
-        wxLogTrace( traceAutoSave, wxS("[history] sch saver skipping - project path mismatch: %s vs %s"),
-                   projPath, aProjectPath );
+        wxLogTrace( traceAutoSave, wxS( "[history] sch saver skipping - project path mismatch: %s vs %s" ), projPath,
+                    aProjectPath );
         return;
     }
 
@@ -2030,12 +2387,16 @@ void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<wxStrin
     // Iterate full schematic hierarchy (all sheets & their screens).
     SCH_SHEET_LIST sheetList = Hierarchy();
 
-    // Acquire plugin once.
-    IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
+    SCH_IO_KICAD_SEXPR pi;
+
+    KICAD_FORMAT::FORMAT_MODE mode = KICAD_FORMAT::FORMAT_MODE::NORMAL;
+
+    if( ADVANCED_CFG::GetCfg().m_CompactSave )
+        mode = KICAD_FORMAT::FORMAT_MODE::COMPACT_TEXT_PROPERTIES;
 
     for( const SCH_SHEET_PATH& path : sheetList )
     {
-        SCH_SHEET*  sheet  = path.Last();
+        SCH_SHEET*  sheet = path.Last();
         SCH_SCREEN* screen = path.LastScreen();
 
         if( !sheet || !screen )
@@ -2054,9 +2415,14 @@ void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<wxStrin
         wxString rel = absPath.Mid( projPath.length() );
 
         // Destination mirrors project-relative path under .history
-        wxFileName dst( historyRootPath, rel );
+        wxFileName dst( rel );
 
-        // Ensure destination directory exists
+        if( dst.IsRelative() )
+            dst.MakeAbsolute( historyRootPath );
+        else
+            dst.SetPath( historyRootPath );
+
+        // Ensure destination directory exists on UI thread
         wxFileName dstDir( dst );
         dstDir.SetFullName( wxEmptyString );
 
@@ -2065,15 +2431,23 @@ void SCHEMATIC::SaveToHistory( const wxString& aProjectPath, std::vector<wxStrin
 
         try
         {
-            pi->SaveSchematicFile( dst.GetFullPath(), sheet, this );
-            aFiles.push_back( dst.GetFullPath() );
-            wxLogTrace( traceAutoSave, wxS("[history] sch saver exported sheet '%s' -> '%s'"),
-                        absPath, dst.GetFullPath() );
+            STRING_FORMATTER formatter;
+            pi.FormatSchematicToFormatter( &formatter, sheet, this );
+
+            HISTORY_FILE_DATA entry;
+            entry.path = dst.GetFullPath();
+            entry.content = std::move( formatter.MutableString() );
+            entry.prettify = true;
+            entry.formatMode = mode;
+            aFileData.push_back( std::move( entry ) );
+
+            wxLogTrace( traceAutoSave, wxS( "[history] sch saver serialized %zu bytes for '%s' -> '%s'" ),
+                        aFileData.back().content.size(), absPath, dst.GetFullPath() );
         }
         catch( const IO_ERROR& ioe )
         {
-            wxLogTrace( traceAutoSave, wxS("[history] sch saver export failed for '%s': %s"),
-                        absPath, wxString::FromUTF8( ioe.What() ) );
+            wxLogTrace( traceAutoSave, wxS( "[history] sch saver serialize failed for '%s': %s" ), absPath,
+                        wxString::FromUTF8( ioe.What() ) );
         }
     }
 }

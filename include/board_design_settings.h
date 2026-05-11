@@ -26,10 +26,7 @@
 
 #include <memory>
 
-#include <netclass.h>
-#include <project/net_settings.h>
 #include <board_stackup_manager/board_stackup.h>
-#include <drc/drc_engine.h>
 #include <lset.h>
 #include <settings/nested_settings.h>
 #include <widgets/ui_common.h>
@@ -81,7 +78,7 @@
 
 #define DEFAULT_MINCLEARANCE          0.0     // overall min clearance
 #define DEFAULT_MINCONNECTION         0.0     // overall min connection width
-#define DEFAULT_TRACKMINWIDTH         0.0     // track width min value
+#define DEFAULT_TRACKMINWIDTH         0.2     // track width min value (mm)
 #define DEFAULT_VIASMINSIZE           0.5     // vias (not micro vias) min diameter
 #define DEFAULT_MINTHROUGHDRILL       0.3     // through holes (not micro vias) min drill diameter
 #define DEFAULT_MICROVIASMINSIZE      0.2     // micro vias (not vias) min diameter
@@ -100,6 +97,10 @@
 #define MINIMUM_ERROR_SIZE_MM         0.001   // For arc approximation
 #define MAXIMUM_ERROR_SIZE_MM         0.1     // For arc approximation
 
+class DRC_ENGINE;
+class NET_SETTINGS;
+class NETCLASS;
+
 #define MAXIMUM_CLEARANCE             pcbIUScale.mmToIU( 500 )  // to prevent int-overflows
 
 // Min/max values used in dialogs to validate settings
@@ -107,10 +108,10 @@
 #define MAXIMUM_LINE_WIDTH_MM         100.0   // max line width entered in a dialog
 
 // Default pad properties
-#define DEFAULT_PAD_WIDTH_MM 2.54         // master pad width
-#define DEFAULT_PAD_HEIGTH_MM 1.27        // master pad height
-#define DEFAULT_PAD_DRILL_DIAMETER_MM 0.8 // master pad drill diameter for PTH
-#define DEFAULT_PAD_RR_RADIUS_RATIO 0.15  // master pad corner radius ratio
+#define DEFAULT_PAD_WIDTH_MM          2.54
+#define DEFAULT_PAD_HEIGTH_MM         1.27
+#define DEFAULT_PAD_DRILL_DIAMETER_MM 0.8
+#define DEFAULT_PAD_RR_RADIUS_RATIO   0.15
 
 /**
  * Container to handle a stock of specific vias each with unique diameter and drill sizes

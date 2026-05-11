@@ -118,4 +118,7 @@
 /// Path to the python executable that should be used by KiCad
 #define PYTHON_EXECUTABLE               "@PYTHON_EXECUTABLE@"
 
+/// Path to the trace directory containing eeschema/trace.py, pcbnew/trace.py, etc.
+#define KICAD_TRACE_DIR                 "@KICAD_TRACE_DIR@"
+
 #endif  // CONFIG_H_

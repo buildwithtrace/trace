@@ -45,6 +45,11 @@ public:
     DESIGN_BLOCK_PREVIEW_WIDGET( wxWindow* aParent ) : wxPanel( aParent ) {}
     ~DESIGN_BLOCK_PREVIEW_WIDGET() = default;
 
+    /**
+     * Return whether the widget initialized properly. This could return false if Kiway is
+     * not available. If this returns false, no other methods should be called.
+     */
+    virtual bool IsInitialized() const = 0;
 
     /**
      * Set the contents of the status label and display it.

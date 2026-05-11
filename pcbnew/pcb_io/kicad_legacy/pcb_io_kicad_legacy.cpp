@@ -68,6 +68,7 @@
 #include <wx/filename.h>
 #include <wx/wfstream.h>
 #include <wx/txtstrm.h>
+#include <wx/tokenzr.h>
 #include <boost/ptr_container/ptr_map.hpp>
 
 #include <string_utils.h>
@@ -77,6 +78,7 @@
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <project/net_settings.h>
 #include <footprint.h>
 #include <core/ignore.h>
 #include <pad.h>
@@ -541,7 +543,7 @@ void PCB_IO_KICAD_LEGACY::loadAllSections( bool doAppend )
 
             // The footprint names in legacy libraries can contain the '/' and ':'
             // characters which will cause the FPID parser to choke.
-            ReplaceIllegalFileNameChars( &fpName );
+            ReplaceIllegalFileNameChars( fpName );
 
             if( !fpName.empty() )
                 fpid.Parse( fpName, true );
@@ -1416,7 +1418,7 @@ void PCB_IO_KICAD_LEGACY::loadPAD( FOOTPRINT* aFootprint )
             switch( padchar )
             {
             case 'C':   padshape = static_cast<int>( PAD_SHAPE::CIRCLE );      break;
-            case 'R':   padshape = static_cast<int>( PAD_SHAPE::RECTANGLE );        break;
+            case 'R':   padshape = static_cast<int>( PAD_SHAPE::RECTANGLE );   break;
             case 'O':   padshape = static_cast<int>( PAD_SHAPE::OVAL );        break;
             case 'T':   padshape = static_cast<int>( PAD_SHAPE::TRAPEZOID );   break;
             default:
@@ -1952,9 +1954,11 @@ void PCB_IO_KICAD_LEGACY::loadPCB_LINE()
 
                     dseg->SetLayer( leg_layer2new( m_cu_count,  layer ) );
                     break;
+
                 case 1:
                     ignore_unused( intParse( data ) );
                     break;
+
                 case 2:
                 {
                     EDA_ANGLE angle = degParse( data );
@@ -1964,15 +1968,16 @@ void PCB_IO_KICAD_LEGACY::loadPCB_LINE()
 
                     break;
                 }
+
                 case 3:
                     const_cast<KIID&>( dseg->m_Uuid ) = KIID( data );
                     break;
+
                 case 4:
-                {
                     // Ignore state data
                     hexParse( data );
                     break;
-                }
+
                 // Bezier Control Points
                 case 5:
                     x = biuParse( data );
@@ -2270,7 +2275,7 @@ void PCB_IO_KICAD_LEGACY::loadTrackList( int aStructType )
         {
         default:
         case PCB_TRACE_T: newTrack = new PCB_TRACK( m_board ); break;
-        case PCB_VIA_T:   newVia = new PCB_VIA( m_board );   break;
+        case PCB_VIA_T:   newVia = new PCB_VIA( m_board );     break;
         }
 
         if( makeType == PCB_VIA_T )     // Ensure layers are OK when possible:
@@ -3171,7 +3176,7 @@ void LP_CACHE::LoadModules( LINE_READER* aReader )
 
             // The footprint names in legacy libraries can contain the '/' and ':'
             // characters which will cause the LIB_ID parser to choke.
-            ReplaceIllegalFileNameChars( &footprintName );
+            ReplaceIllegalFileNameChars( footprintName );
 
             // set the footprint name first thing, so exceptions can use name.
             fp_ptr->SetFPID( LIB_ID( wxEmptyString, footprintName ) );

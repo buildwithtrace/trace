@@ -23,6 +23,7 @@
 #include <utility>
 #include <wx/datetime.h>
 #include <wx/log.h>
+#include <wx/tokenzr.h>
 
 #include <boost/algorithm/string.hpp>
 
@@ -137,7 +138,8 @@ LIB_SYMBOL* SCH_IO_DATABASE::LoadSymbol( const wxString&   aLibraryPath,
 
     for( const DATABASE_LIB_TABLE& tableIter : m_settings->m_Tables )
     {
-        if( tableIter.name == tableName )
+        // no table means globally unique keys, try all tables
+        if( tableName.empty() || tableIter.name == tableName )
             tablesToTry.emplace_back( &tableIter );
     }
 
@@ -255,7 +257,8 @@ void SCH_IO_DATABASE::cacheLib()
             std::string rawName = std::any_cast<std::string>( result[table.key_col] );
             UTF8        sanitizedName = LIB_ID::FixIllegalChars( rawName, false );
             std::string sanitizedKey = sanitizedName.c_str();
-            std::string prefix = table.name.empty() ? "" : fmt::format( "{}/", table.name );
+            std::string prefix =
+                    ( m_settings->m_GloballyUniqueKeys || table.name.empty() ) ? "" : fmt::format( "{}/", table.name );
             std::string sanitizedDisplayName = fmt::format( "{}{}", prefix, sanitizedKey );
             wxString    name( sanitizedDisplayName );
 
@@ -598,6 +601,7 @@ std::unique_ptr<LIB_SYMBOL>  SCH_IO_DATABASE::loadSymbolFromRow( const wxString&
 
     static const wxString c_valueFieldName( wxS( "Value" ) );
     static const wxString c_datasheetFieldName( wxS( "Datasheet" ) );
+    static const wxString c_footprintFieldName( wxS( "Footprint" ) );
 
     for( const DATABASE_FIELD_MAPPING& mapping : aTable.fields )
     {
@@ -607,6 +611,11 @@ std::unique_ptr<LIB_SYMBOL>  SCH_IO_DATABASE::loadSymbolFromRow( const wxString&
                         mapping.column );
             continue;
         }
+
+        // Skip footprint field if it maps to the footprints column, since that column is
+        // already processed above with tokenization for semicolon-separated multiple footprints.
+        if( mapping.name_wx == c_footprintFieldName && mapping.column == aTable.footprints_col )
+            continue;
 
         std::string strValue;
 

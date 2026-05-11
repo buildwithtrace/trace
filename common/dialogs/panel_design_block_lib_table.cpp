@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -48,7 +49,8 @@
 #include <dialogs/dialog_edit_library_tables.h>
 #include <dialogs/dialog_plugin_options.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiplatform/ui.h>
+#include <kiway_mail.h>
 #include <settings/settings_manager.h>
 #include <settings/kicad_settings.h>
 #include <paths.h>
@@ -174,7 +176,17 @@ protected:
         LIBRARY_TABLE_ROW& tableRow = table->at( aRow );
 
         if( tableRow.Type() == LIBRARY_TABLE_ROW::TABLE_TYPE_NAME )
-            return wxEmptyString;
+        {
+            wxString filter = _( "Design Block Library Tables" );
+#ifndef __WXOSX__
+            filter << wxString::Format( _( " (%s)|%s" ), FILEEXT::DesignBlockLibraryTableFileName,
+                                        FILEEXT::DesignBlockLibraryTableFileName );
+#else
+            filter << wxString::Format( _( " (%s)|%s" ), wxFileSelectorDefaultWildcardStr,
+                                        wxFileSelectorDefaultWildcardStr );
+#endif
+            return filter;
+        }
 
         if( tableRow.Type().IsEmpty() )
             return wxEmptyString;
@@ -182,7 +194,7 @@ protected:
         DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_T fileType = DESIGN_BLOCK_IO_MGR::EnumFromStr( tableRow.Type() );
         if( fileType == DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_UNKNOWN )
             return wxEmptyString;
-        
+
         const IO_BASE::IO_FILE_DESC& pluginDesc = m_supportedDesignBlockFiles.at( fileType );
 
         if( pluginDesc.m_IsFile )
@@ -204,6 +216,11 @@ public:
             m_panel( aPanel )
     {
         SetTooltipEnable( COL_STATUS );
+    }
+
+    static bool SupportsVisibilityColumn()
+    {
+        return false;
     }
 
 protected:
@@ -235,10 +252,10 @@ protected:
 
     void openTable( const LIBRARY_TABLE_ROW& aRow ) override
     {
-        wxString uri = LIBRARY_MANAGER::ExpandURI( aRow.URI(), Pgm().GetSettingsManager().Prj() );
-        auto     nestedTable = std::make_unique<LIBRARY_TABLE>( uri, LIBRARY_TABLE_SCOPE::GLOBAL );
+        wxFileName fn( LIBRARY_MANAGER::ExpandURI( aRow.URI(), Pgm().GetSettingsManager().Prj() ) );
+        std::shared_ptr<LIBRARY_TABLE> child = std::make_shared<LIBRARY_TABLE>( fn, LIBRARY_TABLE_SCOPE::GLOBAL );
 
-        m_panel->AddTable( nestedTable.get(), aRow.Nickname(), true );
+        m_panel->OpenTable( child, aRow.Nickname() );
     }
 
     wxString getTablePreamble() override
@@ -246,9 +263,39 @@ protected:
         return wxT( "(design_block_lib_table" );
     }
 
+    bool supportsVisibilityColumn() override
+    {
+        return DESIGN_BLOCK_GRID_TRICKS::SupportsVisibilityColumn();
+    }
+
 protected:
     PANEL_DESIGN_BLOCK_LIB_TABLE* m_panel;
 };
+
+
+void PANEL_DESIGN_BLOCK_LIB_TABLE::OpenTable( const std::shared_ptr<LIBRARY_TABLE>& aTable, const wxString& aTitle )
+{
+    for( int ii = 2; ii < (int) m_notebook->GetPageCount(); ++ii )
+    {
+        if( m_notebook->GetPageText( ii ) == aTitle )
+        {
+            // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
+            // results in a re-entrant call where the second call is one page behind.
+            for( int attempts = 0; attempts < 3; ++attempts )
+                m_notebook->ChangeSelection( ii );
+
+            return;
+        }
+    }
+
+    m_nestedTables.push_back( aTable );
+    AddTable( aTable.get(), aTitle, true );
+
+    // Something is pretty fishy with wxAuiNotebook::ChangeSelection(); on Mac at least it
+    // results in a re-entrant call where the second call is one page behind.
+    for( int attempts = 0; attempts < 3; ++attempts )
+        m_notebook->ChangeSelection( m_notebook->GetPageCount() - 1 );
+}
 
 
 void PANEL_DESIGN_BLOCK_LIB_TABLE::AddTable( LIBRARY_TABLE* table, const wxString& aTitle, bool aClosable )
@@ -271,7 +318,7 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::AddTable( LIBRARY_TABLE* table, const wxStrin
     {
         wxString* lastGlobalLibDir = nullptr;
 
-        if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" ) )
+        if( KICAD_SETTINGS* cfg = GetAppSettings<KICAD_SETTINGS>( "trace" ) )
         {
             if( cfg->m_lastDesignBlockLibDir.IsEmpty() )
                 cfg->m_lastDesignBlockLibDir = PATHS::GetDefaultUserDesignBlocksPath();
@@ -315,7 +362,8 @@ PANEL_DESIGN_BLOCK_LIB_TABLE::PANEL_DESIGN_BLOCK_LIB_TABLE( DIALOG_EDIT_LIBRARY_
                                                             PROJECT* aProject ) :
         PANEL_DESIGN_BLOCK_LIB_TABLE_BASE( aParent ),
         m_project( aProject ),
-        m_parent( aParent )
+        m_parent( aParent ),
+        m_suppressNotebookPageEvents( false )
 {
     m_lastProjectLibDir = m_project->GetProjectPath();
 
@@ -391,6 +439,7 @@ PANEL_DESIGN_BLOCK_LIB_TABLE::PANEL_DESIGN_BLOCK_LIB_TABLE( DIALOG_EDIT_LIBRARY_
     Layout();
 
     m_notebook->Bind( wxEVT_AUINOTEBOOK_PAGE_CLOSE, &PANEL_DESIGN_BLOCK_LIB_TABLE::onNotebookPageCloseRequest, this );
+    m_notebook->Bind( wxEVT_AUINOTEBOOK_PAGE_CHANGING, &PANEL_DESIGN_BLOCK_LIB_TABLE::onNotebookPageChangeRequest, this );
     // This is the button only press for the browse button instead of the menu
     m_browseButton->Bind( wxEVT_BUTTON, &PANEL_DESIGN_BLOCK_LIB_TABLE::browseLibrariesHandler, this );
 }
@@ -418,6 +467,12 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::populatePluginList()
 {
     for( const DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_T& type : { DESIGN_BLOCK_IO_MGR::KICAD_SEXP } )
     {
+        if( type == DESIGN_BLOCK_IO_MGR::NESTED_TABLE )
+        {
+            m_pluginChoices.Add( DESIGN_BLOCK_IO_MGR::ShowType( type ) );
+            continue;
+        }
+
         IO_RELEASER<DESIGN_BLOCK_IO> pi( DESIGN_BLOCK_IO_MGR::FindPlugin( type ) );
 
         if( !pi )
@@ -443,13 +498,11 @@ WX_GRID* PANEL_DESIGN_BLOCK_LIB_TABLE::get_grid( int aPage ) const
 
 bool PANEL_DESIGN_BLOCK_LIB_TABLE::verifyTables()
 {
-    wxString msg;
-
     for( int page = 0 ; page < (int) m_notebook->GetPageCount(); ++page )
     {
         WX_GRID* grid = get_grid( page );
 
-        if( !LIB_TABLE_GRID_TRICKS::VerifyTable( grid,
+        if( !DESIGN_BLOCK_GRID_TRICKS::VerifyTable( grid, DESIGN_BLOCK_GRID_TRICKS::SupportsVisibilityColumn(),
                 [&]( int aRow, int aCol )
                 {
                     // show the tabbed panel holding the grid we have flunked:
@@ -489,6 +542,15 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::moveUpHandler( wxCommandEvent& event )
 void PANEL_DESIGN_BLOCK_LIB_TABLE::moveDownHandler( wxCommandEvent& event )
 {
     LIB_TABLE_GRID_TRICKS::MoveDownHandler( cur_grid() );
+}
+
+
+void PANEL_DESIGN_BLOCK_LIB_TABLE::onNotebookPageChangeRequest( wxAuiNotebookEvent& aEvent )
+{
+    if( m_suppressNotebookPageEvents )
+        aEvent.Veto();
+    else
+        aEvent.Skip();
 }
 
 
@@ -557,7 +619,6 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::onMigrateLibraries( wxCommandEvent& event )
 
     for( int row : rowsToMigrate )
     {
-        wxString   libName = cur_grid()->GetCellValue( row, COL_NICKNAME );
         wxString   relPath = cur_grid()->GetCellValue( row, COL_URI );
         wxString   resolvedPath = ExpandEnvVarSubstitutions( relPath, m_project );
         wxFileName legacyLib( resolvedPath );
@@ -629,7 +690,7 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::browseLibrariesHandler( wxCommandEvent& event
         return;
 
     const IO_BASE::IO_FILE_DESC& fileDesc = m_supportedDesignBlockFiles.at( fileType );
-    KICAD_SETTINGS*              cfg = GetAppSettings<KICAD_SETTINGS>( "kicad" );
+    KICAD_SETTINGS*              cfg = GetAppSettings<KICAD_SETTINGS>( "trace" );
 
     wxString  title = wxString::Format( _( "Select %s Library" ), DESIGN_BLOCK_IO_MGR::ShowType( fileType ) );
     wxString  dummy;
@@ -647,6 +708,8 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::browseLibrariesHandler( wxCommandEvent& event
     {
         wxFileDialog dlg( topLevelParent, title, *lastDir, wxEmptyString, fileDesc.FileFilter(),
                           wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return;
@@ -757,10 +820,12 @@ bool PANEL_DESIGN_BLOCK_LIB_TABLE::TransferDataFromWindow()
     if( !verifyTables() )
         return false;
 
-    std::optional<LIBRARY_TABLE*> optTable = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK,
-                                                                              LIBRARY_TABLE_SCOPE::GLOBAL );
-    wxCHECK( optTable, false );
-    LIBRARY_TABLE* globalTable = *optTable;
+    LIBRARY_MANAGER& manager = Pgm().GetLibraryManager();
+
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK,
+                                                            LIBRARY_TABLE_SCOPE::GLOBAL );
+    wxCHECK( optTable.has_value(), false );
+    LIBRARY_TABLE* globalTable = optTable.value();
 
     if( get_model( 0 )->Table() != *globalTable )
     {
@@ -775,11 +840,11 @@ bool PANEL_DESIGN_BLOCK_LIB_TABLE::TransferDataFromWindow()
                 } );
     }
 
-    optTable = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK, LIBRARY_TABLE_SCOPE::PROJECT );
+    optTable = manager.Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK, LIBRARY_TABLE_SCOPE::PROJECT );
 
     if( optTable.has_value() && get_model( 1 )->Table().Path() == optTable.value()->Path() )
     {
-        LIBRARY_TABLE* projectTable = *optTable;
+        LIBRARY_TABLE* projectTable = optTable.value();
 
         if( get_model( 1 )->Table() != *projectTable )
         {
@@ -789,7 +854,7 @@ bool PANEL_DESIGN_BLOCK_LIB_TABLE::TransferDataFromWindow()
             projectTable->Save().map_error(
                     []( const LIBRARY_ERROR& aError )
                     {
-                        wxMessageBox( _( "Error saving project-specific library table:\n\n" ) + aError.message,
+                        wxMessageBox( _( "Error saving project library table:\n\n" ) + aError.message,
                                       _( "File Save Error" ), wxOK | wxICON_ERROR );
                     } );
         }
@@ -807,6 +872,7 @@ bool PANEL_DESIGN_BLOCK_LIB_TABLE::TransferDataFromWindow()
         }
     }
 
+    m_suppressNotebookPageEvents = true;
     return true;
 }
 
@@ -878,9 +944,6 @@ void PANEL_DESIGN_BLOCK_LIB_TABLE::populateEnvironReadOnlyTable()
 
 void InvokeEditDesignBlockLibTable( KIWAY* aKiway, wxWindow *aParent )
 {
-    wxString                projectTablePath = aKiway->Prj().DesignBlockLibTblName();
-    wxString                msg;
-
     DIALOG_EDIT_LIBRARY_TABLES dlg( aParent, _( "Design Block Libraries" ) );
 
     dlg.InstallPanel( new PANEL_DESIGN_BLOCK_LIB_TABLE( &dlg, &aKiway->Prj() ) );

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2019-2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -568,6 +569,13 @@ TOOL_ACTION ACTIONS::editTable( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Edit Table..." ) )
         .Icon( BITMAPS::table_edit ) );
 
+TOOL_ACTION ACTIONS::exportTableCSV( TOOL_ACTION_ARGS()
+        .Name( "common.TableEditor.exportTableCSV" )
+        .Scope( AS_GLOBAL )
+        .MenuText( _( "Export Table to CSV..." ) )
+        .Tooltip( _( "Export table contents to CSV file with resolved text variables" ) )
+        .Icon( BITMAPS::export_file ) );
+
 TOOL_ACTION ACTIONS::activatePointEditor( TOOL_ACTION_ARGS()
         .Name( "common.Control.activatePointEditor" )
         .ToolbarState( TOOLBAR_STATE::HIDDEN )
@@ -1098,7 +1106,6 @@ TOOL_ACTION ACTIONS::inchesUnits( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Inches" ) )
         .Icon( BITMAPS::unit_inch )
-        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Flags( AF_NONE )
         .Parameter( EDA_UNITS::INCH ) );
 
@@ -1106,7 +1113,6 @@ TOOL_ACTION ACTIONS::milsUnits( TOOL_ACTION_ARGS()
         .Name( "common.Control.mils" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Mils" ) )
-        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::unit_mil )
         .Flags( AF_NONE )
         .Parameter( EDA_UNITS::MILS ) );
@@ -1115,7 +1121,6 @@ TOOL_ACTION ACTIONS::millimetersUnits( TOOL_ACTION_ARGS()
         .Name( "common.Control.metricUnits" )
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Millimeters" ) )
-        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::unit_mm )
         .Flags( AF_NONE )
         .Parameter( EDA_UNITS::MM ) );
@@ -1174,7 +1179,6 @@ TOOL_ACTION ACTIONS::cursorSmallCrosshairs( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Small crosshairs" ) )
         .Tooltip( _( "Use small crosshairs aligned at 0 and 90 degrees" ) )
-        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::cursor_shape ) );
 
 TOOL_ACTION ACTIONS::cursorFullCrosshairs( TOOL_ACTION_ARGS()
@@ -1182,7 +1186,6 @@ TOOL_ACTION ACTIONS::cursorFullCrosshairs( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Full-Window Crosshairs" ) )
         .Tooltip( _( "Display full-window crosshairs aligned at 0 and 90 degrees" ) )
-        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::cursor_fullscreen ) );
 
 TOOL_ACTION ACTIONS::cursor45Crosshairs( TOOL_ACTION_ARGS()
@@ -1190,7 +1193,6 @@ TOOL_ACTION ACTIONS::cursor45Crosshairs( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "45 Degree Crosshairs" ) )
         .Tooltip( _( "Display full-window crosshairs aligned at 45 and 135 degrees" ) )
-        .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::cursor_fullscreen45 ) );
 
 TOOL_ACTION ACTIONS::highContrastMode( TOOL_ACTION_ARGS()
@@ -1356,6 +1358,13 @@ TOOL_ACTION ACTIONS::configurePaths( TOOL_ACTION_ARGS()
         .Tooltip( _( "Edit path configuration environment variables" ) )
         .Icon( BITMAPS::path ) );
 
+TOOL_ACTION ACTIONS::setBackendUrl( TOOL_ACTION_ARGS()
+        .Name( "common.SuiteControl.setBackendUrl" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Set Backend URL..." ) )
+        .Tooltip( _( "Set the backend server URL for AI services" ) )
+        .Icon( BITMAPS::www ) );
+
 TOOL_ACTION ACTIONS::showSymbolLibTable( TOOL_ACTION_ARGS()
         .Name( "common.SuiteControl.showSymbolLibTable" )
         .Scope( AS_GLOBAL )
@@ -1380,8 +1389,8 @@ TOOL_ACTION ACTIONS::showDesignBlockLibTable( TOOL_ACTION_ARGS()
 TOOL_ACTION ACTIONS::gettingStarted( TOOL_ACTION_ARGS()
         .Name( "common.SuiteControl.gettingStarted" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "Getting Started with KiCad" ) )
-        .Tooltip( _( "Open \"Getting Started in KiCad\" guide for beginners" ) )
+        .FriendlyName( _( "Getting Started with Trace" ) )
+        .Tooltip( _( "Open \"Getting Started in Trace\" guide for beginners" ) )
         .Icon( BITMAPS::help ) );
 
 TOOL_ACTION ACTIONS::help( TOOL_ACTION_ARGS()
@@ -1394,7 +1403,7 @@ TOOL_ACTION ACTIONS::help( TOOL_ACTION_ARGS()
 TOOL_ACTION ACTIONS::about( TOOL_ACTION_ARGS()
         .Name( "common.SuiteControl.about" )
         .Scope( AS_GLOBAL )
-        .FriendlyName( _( "About KiCad" ) )
+        .FriendlyName( _( "About Trace" ) )
         .UIId( wxID_ABOUT )
         .Icon( BITMAPS::about ) );
 

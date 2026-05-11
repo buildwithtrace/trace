@@ -41,7 +41,9 @@
 #include <sch_view.h>
 #include <sch_painter.h>
 #include <sch_shape.h>
+#include <settings/color_settings.h>
 #include <settings/settings_manager.h>
+#include <widgets/wx_infobar.h>
 #include <confirm.h>
 #include <preview_items/selection_area.h>
 #include <project_sch.h>
@@ -60,16 +62,17 @@
 #include <view/view_controls.h>
 #include <widgets/kistatusbar.h>
 #include <wx/choicdlg.h>
+#include <wx/evtloop.h>
 #include <wx/fswatcher.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
 #include <trace_helpers.h>
 
-#ifndef __linux__
+#if defined(__linux__) || defined(__FreeBSD__)
+#include <spacenav/spnav_2d_plugin.h>
+#else
 #include <navlib/nl_schematic_plugin.h>
 #include <wx/fdrepdlg.h>
-#else
-#include <spacenav/spnav_2d_plugin.h>
 #endif
 
 
@@ -338,11 +341,11 @@ void SCH_BASE_FRAME::ActivateGalCanvas()
     {
         if( !m_spaceMouse )
         {
-#ifndef __linux__
-            m_spaceMouse = std::make_unique<NL_SCHEMATIC_PLUGIN>();
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
             m_spaceMouse = std::make_unique<SPNAV_2D_PLUGIN>( GetCanvas() );
             m_spaceMouse->SetScale( schIUScale.IU_PER_MILS / pcbIUScale.IU_PER_MILS );
+#else
+            m_spaceMouse = std::make_unique<NL_SCHEMATIC_PLUGIN>();
 #endif
         }
 
@@ -653,14 +656,13 @@ void SCH_BASE_FRAME::handleIconizeEvent( wxIconizeEvent& aEvent )
 void SCH_BASE_FRAME::GetLibraryItemsForListDialog( wxArrayString& aHeaders,
                                                    std::vector<wxArrayString>& aItemsToDisplay )
 {
-    COMMON_SETTINGS*      cfg = Pgm().GetCommonSettings();
-    PROJECT_FILE&         project = Prj().GetProjectFile();
-    SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-    std::vector<wxString> libNicknames = adapter->GetLibraryNames();
-
     aHeaders.Add( _( "Library" ) );
     aHeaders.Add( _( "Description" ) );
 
+    COMMON_SETTINGS*           cfg = Pgm().GetCommonSettings();
+    PROJECT_FILE&              project = Prj().GetProjectFile();
+    SYMBOL_LIBRARY_ADAPTER*    adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
+    std::vector<wxString>      libNicknames = adapter->GetLibraryNames();
     std::vector<wxArrayString> unpinned;
 
     for( const wxString& nickname : libNicknames )
@@ -811,6 +813,11 @@ void SCH_BASE_FRAME::setSymWatcher( const LIB_ID* aID )
     m_watcherLastModified = m_watcherFileName.GetModificationTime();
     wxLog::EnableLogging( true );
 
+    // File system watcher requires an active event loop. If we're being called during
+    // library enumeration before the main event loop is running, skip watcher creation.
+    if( !wxEventLoopBase::GetActive() )
+        return;
+
     Bind( wxEVT_FSWATCHER, &SCH_BASE_FRAME::OnSymChange, this );
     m_watcher = std::make_unique<wxFileSystemWatcher>();
     m_watcher->SetOwner( this );
@@ -829,12 +836,10 @@ void SCH_BASE_FRAME::setSymWatcher( const LIB_ID* aID )
 
 void SCH_BASE_FRAME::OnSymChange( wxFileSystemWatcherEvent& aEvent )
 {
-    LEGACY_SYMBOL_LIBS* libs = PROJECT_SCH::LegacySchLibs( &Prj() );
-
     wxLogTrace( traceLibWatch, "OnSymChange: %s, watcher file: %s",
                 aEvent.GetPath().GetFullPath(), m_watcherFileName.GetFullPath() );
 
-    if( !libs || !m_watcher || !m_watcher.get() || m_watcherFileName.GetPath().IsEmpty() )
+    if( !m_watcher || !m_watcher.get() || m_watcherFileName.GetPath().IsEmpty() )
         return;
 
     if( aEvent.GetPath() != m_watcherFileName )

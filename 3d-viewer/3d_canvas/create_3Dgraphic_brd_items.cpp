@@ -40,6 +40,7 @@
 #include <pcb_text.h>
 #include <pcb_textbox.h>
 #include <pcb_table.h>
+#include <pcb_track.h>
 #include <pcb_painter.h>        // for PCB_RENDER_SETTINGS
 #include <zone.h>
 #include <convert_basic_shapes_to_polygon.h>
@@ -108,10 +109,12 @@ void BOARD_ADAPTER::addText( const EDA_TEXT* aText, CONTAINER_2D_BASE* aContaine
 
     if( aOwner && aOwner->IsKnockout() )
     {
-        SHAPE_POLY_SET  finalPoly;
-        const PCB_TEXT* pcbText = static_cast<const PCB_TEXT*>( aOwner );
+        SHAPE_POLY_SET finalPoly;
 
-        pcbText->TransformTextToPolySet( finalPoly, 0, aOwner->GetMaxError(), ERROR_INSIDE );
+        if( const PCB_TEXTBOX* pcbTextBox = dynamic_cast<const PCB_TEXTBOX*>( aOwner ) )
+            pcbTextBox->TransformTextToPolySet( finalPoly, 0, aOwner->GetMaxError(), ERROR_INSIDE );
+        else if( const PCB_TEXT* pcbText = dynamic_cast<const PCB_TEXT*>( aOwner ) )
+            pcbText->TransformTextToPolySet( finalPoly, 0, aOwner->GetMaxError(), ERROR_INSIDE );
 
         // Do not call finalPoly.Fracture() here: ConvertPolygonToTriangles() call it
         // if needed, and Fracture() called twice can create bad results and is useless
@@ -207,6 +210,8 @@ void BOARD_ADAPTER::addFootprintShapes( const FOOTPRINT* aFootprint, CONTAINER_2
     {
         if( !aFlags.test( LAYER_FP_TEXT ) )
             continue;
+
+        wxCHECK2( field, continue );
 
         if( field->IsReference() && !aFlags.test( LAYER_FP_REFERENCES ) )
             continue;

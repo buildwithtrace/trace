@@ -259,12 +259,14 @@ void SCH_PLOTTER::plotOneSheetPDF( PLOTTER* aPlotter, SCH_SCREEN* aScreen,
         wxString sheetPath = m_schematic->CurrentSheet().PathHumanReadable();
         const PAGE_INFO& actualPage = aScreen->GetPageSettings(); // page size selected in schematic
 
-        PlotDrawingSheet( aPlotter, &aScreen->Schematic()->Project(),
-                          aScreen->GetTitleBlock(),
-                          actualPage,
-                          aScreen->Schematic()->GetProperties(),
+        SCHEMATIC* sch = aScreen->Schematic();
+        wxString   variantName = sch->GetCurrentVariant();
+        wxString   variantDesc = sch->GetVariantDescription( variantName );
+
+        PlotDrawingSheet( aPlotter, &sch->Project(), aScreen->GetTitleBlock(), actualPage, sch->GetProperties(),
                           aScreen->GetPageNumber(), aScreen->GetPageCount(), sheetName, sheetPath,
-                          aScreen->GetFileName(), color, aScreen->GetVirtualPageNumber() == 1 );
+                          aScreen->GetFileName(), color, aScreen->GetVirtualPageNumber() == 1, variantName,
+                          variantDesc );
     }
 
     aScreen->Plot( aPlotter, aPlotOpts );
@@ -471,12 +473,14 @@ bool SCH_PLOTTER::plotOneSheetPS( const wxString& aFileName, SCH_SCREEN* aScreen
         wxString sheetPath = m_schematic->CurrentSheet().PathHumanReadable();
         COLOR4D  color = plotter->RenderSettings()->GetLayerColor( LAYER_SCHEMATIC_DRAWINGSHEET );
 
-        PlotDrawingSheet( plotter, &aScreen->Schematic()->Project(),
-                          aScreen->GetTitleBlock(),
-                          aPageInfo, aScreen->Schematic()->GetProperties(),
+        SCHEMATIC* sch = aScreen->Schematic();
+        wxString   variantName = sch->GetCurrentVariant();
+        wxString   variantDesc = sch->GetVariantDescription( variantName );
+
+        PlotDrawingSheet( plotter, &sch->Project(), aScreen->GetTitleBlock(), aPageInfo, sch->GetProperties(),
                           aScreen->GetPageNumber(), aScreen->GetPageCount(), sheetName, sheetPath,
                           aScreen->GetFileName(), plotter->GetColorMode() ? color : COLOR4D::BLACK,
-                          aScreen->GetVirtualPageNumber() == 1 );
+                          aScreen->GetVirtualPageNumber() == 1, variantName, variantDesc );
     }
 
     aScreen->Plot( plotter, aPlotOpts );
@@ -648,13 +652,14 @@ bool SCH_PLOTTER::plotOneSheetSVG( const wxString& aFileName, SCH_SCREEN* aScree
         wxString sheetPath = m_schematic->CurrentSheet().PathHumanReadable();
         COLOR4D  color = plotter->RenderSettings()->GetLayerColor( LAYER_SCHEMATIC_DRAWINGSHEET );
 
-        PlotDrawingSheet( plotter, &aScreen->Schematic()->Project(),
-                          aScreen->GetTitleBlock(),
-                          actualPage, aScreen->Schematic()->GetProperties(),
-                          aScreen->GetPageNumber(),
-                          aScreen->GetPageCount(), sheetName, sheetPath, aScreen->GetFileName(),
-                          plotter->GetColorMode() ? color : COLOR4D::BLACK,
-                          aScreen->GetVirtualPageNumber() == 1 );
+        SCHEMATIC* sch = aScreen->Schematic();
+        wxString   variantName = sch->GetCurrentVariant();
+        wxString   variantDesc = sch->GetVariantDescription( variantName );
+
+        PlotDrawingSheet( plotter, &sch->Project(), aScreen->GetTitleBlock(), actualPage, sch->GetProperties(),
+                          aScreen->GetPageNumber(), aScreen->GetPageCount(), sheetName, sheetPath,
+                          aScreen->GetFileName(), plotter->GetColorMode() ? color : COLOR4D::BLACK,
+                          aScreen->GetVirtualPageNumber() == 1, variantName, variantDesc );
     }
 
     aScreen->Plot( plotter, aPlotOpts );
@@ -796,13 +801,13 @@ bool SCH_PLOTTER::plotOneSheetDXF( const wxString& aFileName, SCH_SCREEN* aScree
         wxString sheetPath = m_schematic->CurrentSheet().PathHumanReadable();
         COLOR4D  color = plotter->RenderSettings()->GetLayerColor( LAYER_SCHEMATIC_DRAWINGSHEET );
 
-        PlotDrawingSheet( plotter, &m_schematic->Project(),
-                          aScreen->GetTitleBlock(),
-                          pageInfo,
-                          aScreen->Schematic()->GetProperties(), aScreen->GetPageNumber(),
-                          aScreen->GetPageCount(), sheetName, sheetPath, aScreen->GetFileName(),
-                          plotter->GetColorMode() ? color : COLOR4D::BLACK,
-                          aScreen->GetVirtualPageNumber() == 1 );
+        wxString variantName = m_schematic->GetCurrentVariant();
+        wxString variantDesc = m_schematic->GetVariantDescription( variantName );
+
+        PlotDrawingSheet( plotter, &m_schematic->Project(), aScreen->GetTitleBlock(), pageInfo,
+                          m_schematic->GetProperties(), aScreen->GetPageNumber(), aScreen->GetPageCount(), sheetName,
+                          sheetPath, aScreen->GetFileName(), plotter->GetColorMode() ? color : COLOR4D::BLACK,
+                          aScreen->GetVirtualPageNumber() == 1, variantName, variantDesc );
     }
 
     aScreen->Plot( plotter, aPlotOpts );
@@ -875,6 +880,8 @@ wxFileName SCH_PLOTTER::createPlotFileName( const SCH_PLOT_OPTS& aPlotOpts,
 void SCH_PLOTTER::Plot( PLOT_FORMAT aPlotFormat, const SCH_PLOT_OPTS& aPlotOpts,
                         SCH_RENDER_SETTINGS* aRenderSettings, REPORTER* aReporter )
 {
+    wxString oldVariant = m_schematic->GetCurrentVariant();
+    m_schematic->SetCurrentVariant( aPlotOpts.m_variant );
     m_colorSettings = ::GetColorSettings( aPlotOpts.m_theme );
 
     switch( aPlotFormat )
@@ -886,4 +893,6 @@ void SCH_PLOTTER::Plot( PLOT_FORMAT aPlotFormat, const SCH_PLOT_OPTS& aPlotOpts,
     case PLOT_FORMAT::SVG:  createSVGFiles( aPlotOpts, aRenderSettings, aReporter );  break;
     case PLOT_FORMAT::HPGL: /* no longer supported */                                 break;
     }
+
+    m_schematic->SetCurrentVariant( oldVariant );
 }

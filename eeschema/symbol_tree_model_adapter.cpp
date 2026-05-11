@@ -26,6 +26,7 @@
 #include <wx/window.h>
 #include <core/kicad_algo.h>
 #include <pgm_base.h>
+#include <settings/common_settings.h>
 #include <project/project_file.h>
 #include <widgets/wx_progress_reporters.h>
 #include <dialogs/html_message_box.h>
@@ -35,8 +36,6 @@
 #include <string_utils.h>
 #include <trace_helpers.h>
 #include <libraries/symbol_library_adapter.h>
-
-#define PROGRESS_INTERVAL_MILLIS 33      // 30 FPS refresh rate
 
 
 wxObjectDataPtr<LIB_TREE_MODEL_ADAPTER>
@@ -54,12 +53,9 @@ SYMBOL_TREE_MODEL_ADAPTER::SYMBOL_TREE_MODEL_ADAPTER( SCH_BASE_FRAME* aParent, S
 {
     m_colWidths[ GetDefaultFieldName( FIELD_T::VALUE, false ) ] = 300;
     m_colWidths[ GetDefaultFieldName( FIELD_T::FOOTPRINT, false ) ] = 600;
-    m_colWidths[ GetDefaultFieldName( FIELD_T::DATASHEET, false ) ] = 600;
 
     m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::VALUE, false ) );
     m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::FOOTPRINT, false ) );
-    // Datasheet probably isn't useful, but better to leave that decision to the user:
-    m_availableColumns.emplace_back( GetDefaultFieldName( FIELD_T::DATASHEET, false ) );
 }
 
 
@@ -87,15 +83,24 @@ void SYMBOL_TREE_MODEL_ADAPTER::AddLibraries( SCH_BASE_FRAME* aFrame )
     COMMON_SETTINGS* cfg = Pgm().GetCommonSettings();
     PROJECT_FILE&    project = aFrame->Prj().GetProjectFile();
 
+    std::unordered_set<wxString> pinned;
+    std::ranges::copy( cfg->m_Session.pinned_symbol_libs, std::inserter( pinned, pinned.begin() ) );
+    std::ranges::copy( project.m_PinnedSymbolLibs, std::inserter( pinned, pinned.begin() ) );
+
     auto addFunc =
             [&]( const wxString& aLibName, const std::vector<LIB_SYMBOL*>& aSymbolList,
                  const wxString& aDescription )
             {
-                std::vector<LIB_TREE_ITEM*> treeItems( aSymbolList.begin(), aSymbolList.end() );
-                bool pinned = alg::contains( cfg->m_Session.pinned_symbol_libs, aLibName )
-                              || alg::contains( project.m_PinnedSymbolLibs, aLibName );
+                LIB_TREE_NODE_LIBRARY& lib_node =
+                        DoAddLibraryNode( aLibName, aDescription, pinned.contains( aLibName ) );
 
-                DoAddLibrary( aLibName, aDescription, treeItems, pinned, false );
+                for( LIB_TREE_ITEM* item: aSymbolList )
+                {
+                    if( item )
+                        lib_node.AddItem( item );
+                }
+
+                lib_node.AssignIntrinsicRanks( m_shownColumns, false );
             };
 
     LIBRARY_MANAGER& manager = Pgm().GetLibraryManager();
@@ -111,23 +116,31 @@ void SYMBOL_TREE_MODEL_ADAPTER::AddLibraries( SCH_BASE_FRAME* aFrame )
     {
         for( const LIBRARY_TABLE_ROW* row : manager.Rows( LIBRARY_TABLE_TYPE::SYMBOL ) )
         {
-            if( row->Hidden() )
+            if( row->Disabled() || row->Hidden() )
                 continue;
 
             toLoad.emplace_back( row->Nickname() );
         }
     }
 
+    bool anyLoaded = false;
+
     for( const wxString& lib : toLoad )
     {
-        if( !m_adapter->GetLibraryStatus( lib ) )
+        std::optional<LIB_STATUS> status = m_adapter->GetLibraryStatus( lib );
+
+        if( status && status->load_status == LOAD_STATUS::LOAD_ERROR )
+            continue;
+
+        if( !status || status->load_status != LOAD_STATUS::LOADED )
         {
             m_pending_load_libraries.insert( lib );
             continue;
         }
 
-        std::optional<const LIBRARY_TABLE_ROW*> rowResult =
-                manager.GetRow( LIBRARY_TABLE_TYPE::SYMBOL, lib );
+        anyLoaded = true;
+
+        std::optional<const LIBRARY_TABLE_ROW*> rowResult = manager.GetRow( LIBRARY_TABLE_TYPE::SYMBOL, lib );
 
         wxCHECK2( rowResult, continue );
 
@@ -178,8 +191,7 @@ void SYMBOL_TREE_MODEL_ADAPTER::AddLibraries( SCH_BASE_FRAME* aFrame )
     {
         m_check_pending_libraries_timer = std::make_unique<wxTimer>( aFrame );
 
-        wxLogTrace( traceLibraries, "%zu pending libraries, starting lazy load...",
-                    m_pending_load_libraries.size() );
+        wxLogTrace( traceLibraries, "%zu pending libraries, starting lazy load...", m_pending_load_libraries.size() );
 
         aFrame->Bind( wxEVT_TIMER,
                 [&, aFrame]( wxTimerEvent& )
@@ -200,7 +212,7 @@ void SYMBOL_TREE_MODEL_ADAPTER::AddLibraries( SCH_BASE_FRAME* aFrame )
 
     m_tree.AssignIntrinsicRanks( m_shownColumns );
 
-    if( isLazyLoad && m_lazyLoadHandler )
+    if( isLazyLoad && anyLoaded && m_lazyLoadHandler )
     {
         createMissingColumns();
         m_lazyLoadHandler();
@@ -210,14 +222,12 @@ void SYMBOL_TREE_MODEL_ADAPTER::AddLibraries( SCH_BASE_FRAME* aFrame )
 
 void SYMBOL_TREE_MODEL_ADAPTER::AddLibrary( wxString const& aLibNickname, bool pinned )
 {
-    SYMBOL_LIBRARY_ADAPTER::SYMBOL_TYPE type =
-            ( GetFilter() != nullptr ) ? SYMBOL_LIBRARY_ADAPTER::SYMBOL_TYPE::POWER_ONLY
-                                       : SYMBOL_LIBRARY_ADAPTER::SYMBOL_TYPE::ALL_SYMBOLS;
-    std::vector<LIB_SYMBOL*>    symbols = m_adapter->GetSymbols( aLibNickname, type );
-    std::vector<LIB_TREE_ITEM*> comp_list;
-
-    std::optional<const LIBRARY_TABLE_ROW*> row =
-            Pgm().GetLibraryManager().GetRow( LIBRARY_TABLE_TYPE::SYMBOL, aLibNickname );
+    SYMBOL_LIBRARY_ADAPTER::SYMBOL_TYPE     type = GetFilter() ? SYMBOL_LIBRARY_ADAPTER::SYMBOL_TYPE::POWER_ONLY
+                                                               : SYMBOL_LIBRARY_ADAPTER::SYMBOL_TYPE::ALL_SYMBOLS;
+    std::vector<LIB_SYMBOL*>                symbols = m_adapter->GetSymbols( aLibNickname, type );
+    std::optional<const LIBRARY_TABLE_ROW*> row = Pgm().GetLibraryManager().GetRow( LIBRARY_TABLE_TYPE::SYMBOL,
+                                                                                    aLibNickname );
+    std::vector<LIB_TREE_ITEM*>             comp_list;
 
     if( row && symbols.size() > 0 )
     {

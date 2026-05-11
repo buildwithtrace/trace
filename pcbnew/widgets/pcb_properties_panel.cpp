@@ -35,6 +35,7 @@
 #include <board_connected_item.h>
 #include <board.h>
 #include <properties/pg_properties.h>
+#include <properties/property.h>
 #include <pcb_shape.h>
 #include <pcb_text.h>
 #include <pcb_track.h>
@@ -79,15 +80,32 @@ public:
         FOOTPRINT* footprint = reinterpret_cast<FOOTPRINT*>( obj );
         PCB_FIELD* field = footprint->GetField( m_name );
 
-        if( !field )
+        wxString variantName;
+
+        if( footprint->GetBoard() )
+            variantName = footprint->GetBoard()->GetCurrentVariant();
+
+        if( !variantName.IsEmpty() )
         {
-            PCB_FIELD* newField = new PCB_FIELD( footprint, FIELD_T::USER, m_name );
-            newField->SetText( value );
-            footprint->Add( newField );
+            // Store the value as a variant override
+            FOOTPRINT_VARIANT* variant = footprint->AddVariant( variantName );
+
+            if( variant )
+                variant->SetFieldValue( m_name, value );
         }
         else
         {
-            field->SetText( value );
+            // Set the base field value
+            if( !field )
+            {
+                PCB_FIELD* newField = new PCB_FIELD( footprint, FIELD_T::USER, m_name );
+                newField->SetText( value );
+                footprint->Add( newField );
+            }
+            else
+            {
+                field->SetText( value );
+            }
         }
     }
 
@@ -97,9 +115,25 @@ public:
         PCB_FIELD* field = footprint->GetField( m_name );
 
         if( field )
-            return wxAny( field->GetText() );
+        {
+            wxString variantName;
+
+            if( footprint->GetBoard() )
+                variantName = footprint->GetBoard()->GetCurrentVariant();
+
+            wxString text;
+
+            if( !variantName.IsEmpty() )
+                text = footprint->GetFieldValueForVariant( variantName, m_name );
+            else
+                text = field->GetText();
+
+            return wxAny( text );
+        }
         else
+        {
             return wxAny( MISSING_FIELD_SENTINEL );
+        }
     }
 
 private:
@@ -114,14 +148,17 @@ class PG_NET_SELECTOR_EDITOR : public wxPGEditor
 public:
     static const wxString EDITOR_NAME;
 
-    PG_NET_SELECTOR_EDITOR( PCB_BASE_EDIT_FRAME* aFrame ) : m_frame( aFrame )
+    PG_NET_SELECTOR_EDITOR( PCB_BASE_EDIT_FRAME* aFrame ) :
+            m_frame( aFrame )
     {
     }
 
+    void UpdateFrame( PCB_BASE_EDIT_FRAME* aFrame ) { m_frame = aFrame; }
+
     wxString GetName() const override { return EDITOR_NAME; }
 
-    wxPGWindowList CreateControls( wxPropertyGrid* aGrid, wxPGProperty* aProperty,
-                                   const wxPoint& aPos, const wxSize& aSize ) const override
+    wxPGWindowList CreateControls( wxPropertyGrid* aGrid, wxPGProperty* aProperty, const wxPoint& aPos,
+                                   const wxSize& aSize ) const override
     {
         NET_SELECTOR* editor = new NET_SELECTOR( aGrid->GetPanel(), wxID_ANY, aPos, aSize, 0 );
 
@@ -158,8 +195,7 @@ public:
         }
     }
 
-    bool GetValueFromControl( wxVariant& aVariant, wxPGProperty* aProperty,
-                              wxWindow* aCtrl ) const override
+    bool GetValueFromControl( wxVariant& aVariant, wxPGProperty* aProperty, wxWindow* aCtrl ) const override
     {
         NET_SELECTOR* editor = dynamic_cast<NET_SELECTOR*>( aCtrl );
 
@@ -170,8 +206,7 @@ public:
         return true;
     }
 
-    bool OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wxWindow* aWindow,
-                  wxEvent& aEvent ) const override
+    bool OnEvent( wxPropertyGrid* aGrid, wxPGProperty* aProperty, wxWindow* aWindow, wxEvent& aEvent ) const override
     {
         return false;
     }
@@ -179,6 +214,7 @@ public:
 private:
     PCB_BASE_EDIT_FRAME* m_frame;
 };
+
 
 const wxString PG_NET_SELECTOR_EDITOR::EDITOR_NAME = wxS( "PG_NET_SELECTOR_EDITOR" );
 
@@ -245,6 +281,7 @@ PCB_PROPERTIES_PANEL::PCB_PROPERTIES_PANEL( wxWindow* aParent, PCB_BASE_EDIT_FRA
     else
     {
         m_netSelectorEditorInstance = static_cast<PG_NET_SELECTOR_EDITOR*>( it->second );
+        m_netSelectorEditorInstance->UpdateFrame( m_frame );
     }
 
     it = wxPGGlobalVars->m_mapEditorClasses.find( PG_FPID_EDITOR::BuildEditorName( m_frame ) );
@@ -256,7 +293,11 @@ PCB_PROPERTIES_PANEL::PCB_PROPERTIES_PANEL( wxWindow* aParent, PCB_BASE_EDIT_FRA
     }
     else
     {
-        PG_FPID_EDITOR* fpEditor = new PG_FPID_EDITOR( m_frame );
+        PG_FPID_EDITOR* fpEditor = new PG_FPID_EDITOR( m_frame,
+                                                       []()
+                                                       {
+                                                           return "";
+                                                       });
         m_fpEditorInstance = static_cast<PG_FPID_EDITOR*>( wxPropertyGrid::RegisterEditorClass( fpEditor ) );
     }
 
@@ -280,6 +321,7 @@ PCB_PROPERTIES_PANEL::~PCB_PROPERTIES_PANEL()
     m_unitEditorInstance->UpdateFrame( nullptr );
     m_fpEditorInstance->UpdateFrame( nullptr );
     m_urlEditorInstance->UpdateFrame( nullptr );
+    m_netSelectorEditorInstance->UpdateFrame( nullptr );
 }
 
 
@@ -348,10 +390,19 @@ void PCB_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
         FOOTPRINT* footprint = static_cast<FOOTPRINT*>( item );
 
         for( PCB_FIELD* field : footprint->GetFields() )
+        {
+            wxCHECK2( field, continue );
+
             m_currentFieldNames.insert( field->GetCanonicalName() );
+        }
     }
 
     const wxString groupFields = _HKI( "Fields" );
+
+    // Make sure value comes immediately after reference.  (Reference is invariant, so was added by
+    // FOOTPRINT_DESC().  We *could* still add it here, but then the whole Fields section comes at
+    // the end, which isn't ideal.)
+    m_propMgr.AddProperty( new PCB_FOOTPRINT_FIELD_PROPERTY( _HKI( "Value" ) ), groupFields );
 
     for( const wxString& name : m_currentFieldNames )
     {
@@ -423,12 +474,10 @@ PROPERTY_BASE* PCB_PROPERTIES_PANEL::getPropertyFromEvent( const wxPropertyGridE
 
     BOARD_ITEM* firstItem = static_cast<BOARD_ITEM*>( item );
 
-    wxCHECK_MSG( firstItem, nullptr,
-                 wxT( "getPropertyFromEvent for a property with nothing selected!") );
+    wxCHECK_MSG( firstItem, nullptr, wxT( "getPropertyFromEvent for a property with nothing selected!") );
 
     PROPERTY_BASE* property = m_propMgr.GetProperty( TYPE_HASH( *firstItem ), aEvent.GetPropertyName() );
-    wxCHECK_MSG( property, nullptr,
-                 wxT( "getPropertyFromEvent for a property not found on the selected item!" ) );
+    wxCHECK_MSG( property, nullptr, wxT( "getPropertyFromEvent for a property not found on the selected item!" ) );
 
     return property;
 }
@@ -523,6 +572,45 @@ void PCB_PROPERTIES_PANEL::valueChanged( wxPropertyGridEvent& aEvent )
             continue;
         }
 
+        // Handle variant-aware boolean properties for footprints
+        if( item->Type() == PCB_FOOTPRINT_T )
+        {
+            FOOTPRINT* footprint = static_cast<FOOTPRINT*>( item );
+            wxString   variantName;
+
+            if( footprint->GetBoard() )
+                variantName = footprint->GetBoard()->GetCurrentVariant();
+
+            if( !variantName.IsEmpty() )
+            {
+                wxString propName = aEvent.GetPropertyName();
+
+                if( propName == _HKI( "Do not Populate" )
+                    || propName == _HKI( "Exclude From Bill of Materials" )
+                    || propName == _HKI( "Exclude From Position Files" ) )
+                {
+                    FOOTPRINT_VARIANT* variant = footprint->GetVariant( variantName );
+
+                    if( !variant )
+                        variant = footprint->AddVariant( variantName );
+
+                    if( variant )
+                    {
+                        bool boolValue = newValue.GetBool();
+
+                        if( propName == _HKI( "Do not Populate" ) )
+                            variant->SetDNP( boolValue );
+                        else if( propName == _HKI( "Exclude From Bill of Materials" ) )
+                            variant->SetExcludedFromBOM( boolValue );
+                        else if( propName == _HKI( "Exclude From Position Files" ) )
+                            variant->SetExcludedFromPosFiles( boolValue );
+
+                        continue;
+                    }
+                }
+            }
+        }
+
         item->Set( property, newValue );
     }
 
@@ -590,4 +678,37 @@ void PCB_PROPERTIES_PANEL::updateLists( const BOARD* aBoard )
 
     auto tuningNet = m_propMgr.GetProperty( TYPE_HASH( PCB_TUNING_PATTERN ), _HKI( "Net" ) );
     tuningNet->SetChoices( nets );
+}
+
+
+bool PCB_PROPERTIES_PANEL::getItemValue( EDA_ITEM* aItem, PROPERTY_BASE* aProperty, wxVariant& aValue )
+{
+    // For FOOTPRINT variant-aware boolean properties, return variant-specific values
+    if( aItem->Type() == PCB_FOOTPRINT_T )
+    {
+        FOOTPRINT*      footprint = static_cast<FOOTPRINT*>( aItem );
+        const wxString& propName = aProperty->Name();
+        wxString        variantName;
+
+        if( footprint->GetBoard() )
+            variantName = footprint->GetBoard()->GetCurrentVariant();
+
+        if( propName == _HKI( "Do not Populate" ) )
+        {
+            aValue = wxVariant( footprint->GetDNPForVariant( variantName ) );
+            return true;
+        }
+        else if( propName == _HKI( "Exclude From Bill of Materials" ) )
+        {
+            aValue = wxVariant( footprint->GetExcludedFromBOMForVariant( variantName ) );
+            return true;
+        }
+        else if( propName == _HKI( "Exclude From Position Files" ) )
+        {
+            aValue = wxVariant( footprint->GetExcludedFromPosFilesForVariant( variantName ) );
+            return true;
+        }
+    }
+
+    return PROPERTIES_PANEL::getItemValue( aItem, aProperty, aValue );
 }

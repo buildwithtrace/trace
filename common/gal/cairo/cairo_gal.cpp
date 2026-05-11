@@ -29,6 +29,7 @@
 
 #include <wx/image.h>
 #include <wx/log.h>
+#include <wx/dcclient.h>
 
 #include <gal/cairo/cairo_gal.h>
 #include <gal/cairo/cairo_compositor.h>
@@ -599,9 +600,12 @@ void CAIRO_GAL_BASE::Flush()
 
 void CAIRO_GAL_BASE::ClearScreen()
 {
-    cairo_set_source_rgb( m_currentContext, m_clearColor.r, m_clearColor.g, m_clearColor.b );
+    cairo_operator_t oldOp = cairo_get_operator( m_currentContext );
+    cairo_set_source_rgba( m_currentContext, m_clearColor.r, m_clearColor.g, m_clearColor.b, m_clearColor.a );
+    cairo_set_operator( m_currentContext, CAIRO_OPERATOR_SOURCE );
     cairo_rectangle( m_currentContext, 0.0, 0.0, m_screenSize.x, m_screenSize.y );
     cairo_fill( m_currentContext );
+    cairo_set_operator( m_currentContext, oldOp );
 }
 
 
@@ -991,7 +995,7 @@ void CAIRO_GAL::StartDiffLayer()
 
 void CAIRO_GAL::EndDiffLayer()
 {
-    m_compositor->DrawBuffer( m_tempBuffer, m_mainBuffer, CAIRO_OPERATOR_ADD );
+    m_compositor->DrawBuffer( m_tempBuffer, m_mainBuffer, CAIRO_OPERATOR_DIFFERENCE );
 }
 
 
@@ -1673,6 +1677,10 @@ void CAIRO_GAL::setCompositor()
 
 void CAIRO_GAL::onPaint( wxPaintEvent& aEvent )
 {
+    // A wxPaintDC must be created in wxEVT_PAINT handlers. Without this, the system keeps
+    // sending paint events because it thinks the window still needs to be painted, causing
+    // high CPU usage in fallback mode (Cairo).
+    wxPaintDC dc( this );
     PostPaint( aEvent );
 }
 

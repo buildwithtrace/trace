@@ -31,7 +31,7 @@
 #include <core/minoptmax.h>
 #include <layer_ids.h>
 #include <lset.h>
-#include <netclass.h>
+#include <eda_units.h>
 #include <zones.h>
 #include <libeval_compiler/libeval_compiler.h>
 #include <wx/intl.h>
@@ -80,7 +80,8 @@ enum DRC_CONSTRAINT_T
     CONNECTION_WIDTH_CONSTRAINT,
     TRACK_ANGLE_CONSTRAINT,
     VIA_DANGLING_CONSTRAINT,
-    BRIDGED_MASK_CONSTRAINT
+    BRIDGED_MASK_CONSTRAINT,
+    SOLDER_MASK_SLIVER_CONSTRAINT
 };
 
 

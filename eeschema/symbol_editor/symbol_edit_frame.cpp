@@ -4,6 +4,7 @@
  * Copyright (C) 2013 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,11 +24,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <auth/auth_manager.h>
 #include <bitmaps.h>
 #include <wx/hyperlink.h>
 #include <base_screen.h>
 #include <confirm.h>
 #include <core/kicad_algo.h>
+#include <core/throttle.h>
 #include <eeschema_id.h>
 #include <eeschema_settings.h>
 #include <env_paths.h>
@@ -35,7 +38,7 @@
 #include <kidialog.h>
 #include <kiface_base.h>
 #include <kiplatform/app.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <symbol_edit_frame.h>
 #include <lib_symbol_library_manager.h>
 #include <symbol_editor/symbol_editor_settings.h>
@@ -44,6 +47,7 @@
 #include <project_sch.h>
 #include <sch_painter.h>
 #include <sch_view.h>
+#include <settings/color_settings.h>
 #include <settings/settings_manager.h>
 #include <toolbars_symbol_editor.h>
 #include <tool/action_manager.h>
@@ -76,6 +80,7 @@
 #include <widgets/wx_progress_reporters.h>
 #include <widgets/panel_sch_selection_filter.h>
 #include <widgets/sch_properties_panel.h>
+#include <widgets/lib_tree.h>
 #include <widgets/symbol_tree_pane.h>
 #include <widgets/wx_aui_utils.h>
 #include <widgets/filedlg_hook_new_library.h>
@@ -104,8 +109,15 @@ BEGIN_EVENT_TABLE( SYMBOL_EDIT_FRAME, SCH_BASE_FRAME )
     EVT_UPDATE_UI( ID_LIBEDIT_SELECT_UNIT_NUMBER, SYMBOL_EDIT_FRAME::OnUpdateUnitNumber )
     EVT_UPDATE_UI( ID_LIBEDIT_SELECT_BODY_STYLE, SYMBOL_EDIT_FRAME::OnUpdateBodyStyle )
 
+    EVT_CHOICE( ID_ON_ZOOM_SELECT, SYMBOL_EDIT_FRAME::OnSelectZoom )
+    EVT_CHOICE( ID_ON_GRID_SELECT, SYMBOL_EDIT_FRAME::OnSelectGrid )
+
     // Drop files event
     EVT_DROP_FILES( SYMBOL_EDIT_FRAME::OnDropFiles )
+
+    // Account menu
+    EVT_MENU( ID_ACCOUNT_SIGN_IN_SYM, SYMBOL_EDIT_FRAME::onSignIn )
+    EVT_MENU( ID_ACCOUNT_SIGN_OUT_SYM, SYMBOL_EDIT_FRAME::onSignOut )
 
 END_EVENT_TABLE()
 
@@ -125,7 +137,7 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_libMgr = nullptr;
     m_unit = 1;
     m_bodyStyle = 1;
-    m_aboutTitle = _HKI( "KiCad Symbol Editor" );
+    m_aboutTitle = _HKI( "Trace Symbol Editor" );
 
     wxIcon icon;
     wxIconBundle icon_bundle;
@@ -177,6 +189,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     configureToolbars();
     RecreateToolbars();
 
+    // Listen for auth state changes to update the Account menu
+    AUTH_MANAGER::Instance().Bind( EVT_AUTH_STATE_CHANGED, &SYMBOL_EDIT_FRAME::onAuthStateChanged, this );
+
     UpdateTitle();
     UpdateSymbolMsgPanelInfo();
     RebuildSymbolUnitAndBodyStyleLists();
@@ -195,7 +210,7 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                       .Top().Layer( 6 ) );
 
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" )
                       .Left().Layer( 2 ) );
@@ -212,7 +227,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                       .Left().Layer( 3 )
                       .TopDockable( false ).BottomDockable( false )
                       .Caption( _( "Libraries" ) )
-                      .MinSize( FromDIP( 250 ), -1 ).BestSize( FromDIP( 250 ), -1 ) );
+                      // Don't use -1 for don't-change-height on a growable panel; it has side-effects.
+                      .MinSize( FromDIP( 250 ), FromDIP( 80 ) )
+                      .BestSize( FromDIP( 250 ), -1 ) );
 
     m_auimgr.AddPane( m_propertiesPanel, defaultPropertiesPaneInfo( this ) );
     m_auimgr.AddPane( m_selectionFilterPanel, defaultSchSelectionFilterPaneInfo( this ) );
@@ -288,6 +305,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
 SYMBOL_EDIT_FRAME::~SYMBOL_EDIT_FRAME()
 {
+    // Unbind auth state change handler
+    AUTH_MANAGER::Instance().Unbind( EVT_AUTH_STATE_CHANGED, &SYMBOL_EDIT_FRAME::onAuthStateChanged, this );
+
     // Shutdown all running tools
     if( m_toolManager )
         m_toolManager->ShutdownAllTools();
@@ -349,8 +369,11 @@ void SYMBOL_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
     bool prop_shown = m_auimgr.GetPane( PropertiesPaneName() ).IsShown();
     m_settings->m_AuiPanels.show_properties = prop_shown;
 
-    SCH_SELECTION_TOOL* selTool = GetToolManager()->GetTool<SCH_SELECTION_TOOL>();
-    m_settings->m_SelectionFilter = selTool->GetFilter();
+    if( TOOL_MANAGER* toolMgr = GetToolManager() )
+    {
+        if( SCH_SELECTION_TOOL* selTool = toolMgr->GetTool<SCH_SELECTION_TOOL>() )
+            m_settings->m_SelectionFilter = selTool->GetFilter();
+    }
 }
 
 
@@ -1145,8 +1168,11 @@ wxString SYMBOL_EDIT_FRAME::AddLibraryFile( bool aCreateNew )
     LIBRARY_TABLE_SCOPE scope = tableChooser.GetUseGlobalTable() ? LIBRARY_TABLE_SCOPE::GLOBAL
                                                                  : LIBRARY_TABLE_SCOPE::PROJECT;
 
-    std::optional<LIBRARY_TABLE*> table = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::SYMBOL, scope );
-    wxCHECK( table, wxEmptyString );
+    LIBRARY_MANAGER&              manager = Pgm().GetLibraryManager();
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, scope );
+
+    wxCHECK( optTable.has_value(), wxEmptyString );
+    LIBRARY_TABLE* table = optTable.value();
 
     wxString libName = fn.GetName();
 
@@ -1180,14 +1206,26 @@ wxString SYMBOL_EDIT_FRAME::AddLibraryFile( bool aCreateNew )
         }
     }
 
-    ( *table )->Save().map_error(
-            []( const LIBRARY_ERROR& aError )
+    bool success = true;
+
+    // Tables are reinitialized by m_libMgr->AddLibrary(). So reinit table reference.
+    optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, scope );
+    wxCHECK( optTable.has_value(), wxEmptyString );
+    table = optTable.value();
+
+    table->Save().map_error(
+            [&]( const LIBRARY_ERROR& aError )
             {
-                wxMessageBox( wxString::Format( _( "Error saving library table:\n\n%s" ), aError.message ),
-                              _( "File Save Error" ), wxOK | wxICON_ERROR );
+                KICAD_MESSAGE_DIALOG dlg( this, _( "Error saving library table." ), _( "File Save Error" ),
+                                          wxOK | wxICON_ERROR );
+                dlg.SetExtendedMessage( aError.message );
+                dlg.ShowModal();
+
+                success = false;
             } );
 
-    adapter->LoadOne( fn.GetName() );
+    if( success )
+        adapter->LoadOne( fn.GetName() );
 
     std::string packet = fn.GetFullPath().ToStdString();
     this->Kiway().ExpressMail( FRAME_SCH_SYMBOL_EDITOR, MAIL_RELOAD_LIB, packet );
@@ -1205,6 +1243,7 @@ void SYMBOL_EDIT_FRAME::DdAddLibrary( wxString aLibFile )
     if( libName.IsEmpty() )
         return;
 
+    LIBRARY_MANAGER&        manager = Pgm().GetLibraryManager();
     SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
 
     if( adapter->HasLibrary( libName ) )
@@ -1213,23 +1252,30 @@ void SYMBOL_EDIT_FRAME::DdAddLibrary( wxString aLibFile )
         return;
     }
 
-    // TODO(JE) after Jeff's commit removing the select dialog; this is always project? is that correct?
     if( !m_libMgr->AddLibrary( fn.GetFullPath(), LIBRARY_TABLE_SCOPE::PROJECT ) )
     {
         DisplayError( this, _( "Could not open the library file." ) );
         return;
     }
 
-    std::optional<LIBRARY_TABLE*> table = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::SYMBOL,
-                                                                           LIBRARY_TABLE_SCOPE::PROJECT );
-    wxCHECK( table, /* void */ );
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, LIBRARY_TABLE_SCOPE::PROJECT );
+    wxCHECK( optTable.has_value(), /* void */ );
+    LIBRARY_TABLE* table = optTable.value();
+    bool           success = true;
 
-    ( *table )->Save().map_error(
-            []( const LIBRARY_ERROR& aError )
+    table->Save().map_error(
+            [&]( const LIBRARY_ERROR& aError )
             {
-                wxMessageBox( wxString::Format( _( "Error saving library table:\n\n%s" ), aError.message ),
-                              _( "File Save Error" ), wxOK | wxICON_ERROR );
+                KICAD_MESSAGE_DIALOG dlg( this, _( "Error saving library table." ), _( "File Save Error" ),
+                                          wxOK | wxICON_ERROR );
+                dlg.SetExtendedMessage( aError.message );
+                dlg.ShowModal();
+
+                success = false;
             } );
+
+    if( success )
+        adapter->LoadOne( libName );
 
     std::string packet = fn.GetFullPath().ToStdString();
     this->Kiway().ExpressMail( FRAME_SCH_SYMBOL_EDITOR, MAIL_RELOAD_LIB, packet );
@@ -1304,24 +1350,39 @@ void SYMBOL_EDIT_FRAME::SyncLibraries( bool aShowProgress, bool aPreloadCancelle
     if( m_treePane )
         selected = GetLibTree()->GetSelectedLibId();
 
+    // Ensure any in-progress background library preloading is complete before syncing the
+    // tree. Without this, libraries still in LOADING state get skipped by Sync(), resulting
+    // in an incomplete tree that requires a manual refresh to fully populate.
+    SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
+    adapter->BlockUntilLoaded();
+
     if( aShowProgress )
     {
         APP_PROGRESS_DIALOG progressDlg( _( "Loading Symbol Libraries" ), wxEmptyString,
                                          m_libMgr->GetAdapter()->GetLibrariesCount(), this );
 
+        THROTTLE  progressThrottle( std::chrono::milliseconds( 350 ) );
+        int       pendingProgress = 0;
+        bool      callbackFired = false;
+        wxString  pendingLibName;
+
         m_libMgr->Sync( aForceRefresh,
                 [&]( int progress, int max, const wxString& libName )
                 {
-                    progressDlg.Update( progress, wxString::Format( _( "Loading library '%s'..." ),
-                                                                    libName ) );
+                    pendingProgress = progress;
+                    pendingLibName = libName;
+                    callbackFired = true;
+
+                    if( progressThrottle.Ready() )
+                        progressDlg.Update( progress, wxString::Format( _( "Loading library '%s'..." ), libName ) );
                 } );
+
+        if( callbackFired )
+            progressDlg.Update( pendingProgress, wxString::Format( _( "Loading library '%s'..." ), pendingLibName ) );
     }
     else if( !aPreloadCancelled )
     {
-        m_libMgr->Sync( aForceRefresh,
-                [&]( int progress, int max, const wxString& libName )
-                {
-                } );
+        m_libMgr->Sync( aForceRefresh, [&]( int progress, int max, const wxString& libName ) {} );
     }
 
     if( m_treePane )
@@ -1579,7 +1640,7 @@ void SYMBOL_EDIT_FRAME::FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll )
 
     if( m_symbol )
     {
-        for( SCH_PIN* pin : m_symbol->GetPins() )
+        for( SCH_PIN* pin : m_symbol->GetGraphicalPins( 0, 0 ) )
         {
             if( pin->m_Uuid == lastBrightenedItemID )
                 lastItem = pin;
@@ -1605,6 +1666,17 @@ void SYMBOL_EDIT_FRAME::FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll )
 
     if( aItem )
     {
+        if( aItem->IsSCH_ITEM() )
+        {
+            SCH_ITEM* item = static_cast<SCH_ITEM*>( aItem );
+
+            if( int unit = item->GetUnit() )
+                SetUnit( unit );
+
+            if( int bodyStyle = item->GetBodyStyle() )
+                SetBodyStyle( bodyStyle );
+        }
+
         if( !aItem->IsBrightened() )
         {
             aItem->SetBrightened();
@@ -1613,12 +1685,12 @@ void SYMBOL_EDIT_FRAME::FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll )
             lastBrightenedItemID = aItem->m_Uuid;
         }
 
-        FocusOnLocation( VECTOR2I( aItem->GetFocusPosition().x, -aItem->GetFocusPosition().y ), aAllowScroll );
+        FocusOnLocation( VECTOR2I( aItem->GetFocusPosition().x, aItem->GetFocusPosition().y ), aAllowScroll );
     }
 }
 
 
-void SYMBOL_EDIT_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void SYMBOL_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
     const std::string& payload = mail.GetPayload();
 
@@ -1923,7 +1995,8 @@ bool SYMBOL_EDIT_FRAME::addLibTableEntry( const wxString& aLibFile, LIBRARY_TABL
     wxFileName libTableFileName( Prj().GetProjectPath(), FILEEXT::SymbolLibraryTableFileName );
     wxString libNickname = fn.GetName();
     SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-    const ENV_VAR_MAP& envVars = Pgm().GetLocalEnvVariables();
+    LIBRARY_MANAGER&        manager = Pgm().GetLibraryManager();
+    const ENV_VAR_MAP&      envVars = Pgm().GetLocalEnvVariables();
 
     if( adapter->HasLibrary( libNickname ) )
     {
@@ -1938,10 +2011,9 @@ bool SYMBOL_EDIT_FRAME::addLibTableEntry( const wxString& aLibFile, LIBRARY_TABL
         }
     }
 
-    std::optional<LIBRARY_TABLE*> optTable =
-            Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::SYMBOL, aScope );
-    wxCHECK( optTable, false );
-    LIBRARY_TABLE* table = *optTable;
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, aScope );
+    wxCHECK( optTable.has_value(), false );
+    LIBRARY_TABLE* table = optTable.value();
 
     LIBRARY_TABLE_ROW* row = &table->InsertRow();
 
@@ -1960,10 +2032,8 @@ bool SYMBOL_EDIT_FRAME::addLibTableEntry( const wxString& aLibFile, LIBRARY_TABL
     table->Save().map_error(
             [&]( const LIBRARY_ERROR& aError )
             {
-                wxString msg = aScope == LIBRARY_TABLE_SCOPE::GLOBAL ? _( "Error saving global library table." )
-                                                                     : _( "Error saving project library table." );
-
-                wxMessageDialog dlg( this, msg, _( "File Save Error" ), wxOK | wxICON_ERROR );
+                KICAD_MESSAGE_DIALOG dlg( this, _( "Error saving library table." ), _( "File Save Error" ),
+                                          wxOK | wxICON_ERROR );
                 dlg.SetExtendedMessage( aError.message );
                 dlg.ShowModal();
 
@@ -1971,7 +2041,10 @@ bool SYMBOL_EDIT_FRAME::addLibTableEntry( const wxString& aLibFile, LIBRARY_TABL
             } );
 
     if( success )
+    {
+        manager.ReloadTables( aScope, { LIBRARY_TABLE_TYPE::SYMBOL } );
         adapter->LoadOne( libNickname );
+    }
 
     return success;
 }
@@ -1980,17 +2053,17 @@ bool SYMBOL_EDIT_FRAME::addLibTableEntry( const wxString& aLibFile, LIBRARY_TABL
 bool SYMBOL_EDIT_FRAME::replaceLibTableEntry( const wxString& aLibNickname, const wxString& aLibFile )
 {
     SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-    LIBRARY_TABLE* table = nullptr;
-    LIBRARY_TABLE_SCOPE scope = LIBRARY_TABLE_SCOPE::GLOBAL;
+    LIBRARY_MANAGER&        manager = Pgm().GetLibraryManager();
+    LIBRARY_TABLE*          table = nullptr;
+    LIBRARY_TABLE_SCOPE     scope = LIBRARY_TABLE_SCOPE::GLOBAL;
 
     // Check the global library table first because checking the project library table
     // checks the global library table as well due to library chaining.
     if( adapter->GetRow( aLibNickname, scope ) )
     {
-        std::optional<LIBRARY_TABLE*> optTable = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::SYMBOL,
-                                                                                  scope );
-        wxCHECK( optTable, false );
-        table = *optTable;
+        std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, scope );
+        wxCHECK( optTable.has_value(), false );
+        table = optTable.value();
     }
     else
     {
@@ -1998,19 +2071,18 @@ bool SYMBOL_EDIT_FRAME::replaceLibTableEntry( const wxString& aLibNickname, cons
 
         if( adapter->GetRow( aLibNickname, scope ) )
         {
-            std::optional<LIBRARY_TABLE*> optTable = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::SYMBOL,
-                                                                                      scope );
+            std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, scope );
 
-            if( optTable )
-                table = *optTable;
+            if( optTable.has_value() )
+                table = optTable.value();
         }
     }
 
     wxCHECK( table, false );
 
-    auto optRow = adapter->GetRow( aLibNickname, scope );
-    wxCHECK( optRow, false );
-    LIBRARY_TABLE_ROW* row = *optRow;
+    std::optional<LIBRARY_TABLE_ROW*> optRow = adapter->GetRow( aLibNickname, scope );
+    wxCHECK( optRow.has_value(), false );
+    LIBRARY_TABLE_ROW* row = optRow.value();
 
     const ENV_VAR_MAP& envVars = Pgm().GetLocalEnvVariables();
 
@@ -2022,17 +2094,15 @@ bool SYMBOL_EDIT_FRAME::replaceLibTableEntry( const wxString& aLibNickname, cons
     wxString normalizedPath = NormalizePath( aLibFile, &envVars, projectPath );
 
     row->SetURI( normalizedPath );
-    row->SetType( "KiCad" );
+    row->SetType( "Trace" );
 
     bool success = true;
 
     table->Save().map_error(
             [&]( const LIBRARY_ERROR& aError )
             {
-                wxString msg = scope == LIBRARY_TABLE_SCOPE::GLOBAL ? _( "Error saving global library table." )
-                                                                    : _( "Error saving project library table." );
-
-                wxMessageDialog dlg( this, msg, _( "File Save Error" ), wxOK | wxICON_ERROR );
+                KICAD_MESSAGE_DIALOG dlg( this, _( "Error saving library table." ), _( "File Save Error" ),
+                                          wxOK | wxICON_ERROR );
                 dlg.SetExtendedMessage( aError.message );
                 dlg.ShowModal();
 
@@ -2040,7 +2110,10 @@ bool SYMBOL_EDIT_FRAME::replaceLibTableEntry( const wxString& aLibNickname, cons
             } );
 
     if( success )
+    {
+        manager.ReloadTables( scope, { LIBRARY_TABLE_TYPE::SYMBOL } );
         adapter->LoadOne( aLibNickname );
+    }
 
     return success;
 }
@@ -2096,4 +2169,37 @@ bool SYMBOL_EDIT_FRAME::GetShowInvisiblePins()
 {
     // Returns the current render option for invisible pins
     return libeditconfig()->m_ShowHiddenPins;
+}
+
+
+void SYMBOL_EDIT_FRAME::onSignIn( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().StartLogin();
+}
+
+
+void SYMBOL_EDIT_FRAME::onSignOut( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().SignOut();
+}
+
+
+void SYMBOL_EDIT_FRAME::onAuthStateChanged( wxCommandEvent& event )
+{
+    // Auth state changed (e.g., user signed in via browser callback)
+    // Use CallAfter to ensure menu bar update happens on the main thread
+    // and after the event has fully propagated
+    CallAfter( [this]() {
+        doReCreateMenuBar();
+        
+        // Force a visual refresh of the menu bar on macOS
+#ifdef __WXMAC__
+        if( wxMenuBar* menuBar = GetMenuBar() )
+        {
+            menuBar->Refresh();
+        }
+#endif
+    } );
+    
+    event.Skip();  // Allow other handlers to process this event
 }

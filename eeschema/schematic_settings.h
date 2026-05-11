@@ -24,7 +24,7 @@
 #include <settings/nested_settings.h>
 #include <settings/bom_settings.h>
 #include <template_fieldnames.h>
-#include <font/font.h>
+#include <font/font_metrics.h>
 
 class NGSPICE_SETTINGS;
 class REFDES_TRACKER;
@@ -122,6 +122,12 @@ public:
      * This is used to avoid reusing designators in the same project.
      */
     std::shared_ptr<REFDES_TRACKER> m_refDesTracker;
+
+    /**
+     * A map of variant names to their descriptions.
+     * This is stored in the project file and is the authoritative source for variant metadata.
+     */
+    std::map<wxString, wxString> m_VariantDescriptions;
 };
 
 #endif

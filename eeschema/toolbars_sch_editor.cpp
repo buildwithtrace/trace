@@ -33,8 +33,12 @@
 #include <eeschema_id.h>
 #include <pgm_base.h>
 #include <python_scripting.h>
+#include <tool/action_menu.h>
 #include <tool/tool_manager.h>
+#include <settings/common_settings.h>
 #include <tool/action_toolbar.h>
+#include <tool/ui/toolbar_context_menu_registry.h>
+#include <widgets/wx_infobar.h>
 #include <tools/sch_actions.h>
 #include <tools/sch_selection_tool.h>
 #include <widgets/hierarchy_pane.h>
@@ -43,13 +47,20 @@
 #include <widgets/sch_properties_panel.h>
 #include <widgets/sch_search_pane.h>
 #include <toolbars_sch_editor.h>
+#include <project/project_file.h>
 #include <wx/choice.h>
+#include <wx/stattext.h>
 
 
-ACTION_TOOLBAR_CONTROL SCH_ACTION_TOOLBAR_CONTROLS::currentVariant(
-        "control.currentVariant",
-        _( "Current Variant" ),
-        _( "Control to select the current schematic variant" ) );
+ACTION_TOOLBAR_CONTROL SCH_ACTION_TOOLBAR_CONTROLS::currentVariant( "control.currentVariant",
+                                                                    _( "Current variant" ),
+                                                                    _( "Selects the current schematic variant" ),
+                                                                    { FRAME_SCH } );
+
+ACTION_TOOLBAR_CONTROL SCH_ACTION_TOOLBAR_CONTROLS::currentManufacturer( "control.SCHCurrentManufacturer",
+                                                                          _( "Preferred Manufacturer" ),
+                                                                          _( "Select the preferred PCB manufacturer for this project" ),
+                                                                          { FRAME_SCH } );
 
 
 std::optional<TOOLBAR_CONFIGURATION> SCH_EDIT_TOOLBAR_SETTINGS::DefaultToolbarConfig( TOOLBAR_LOC aToolbar )
@@ -64,6 +75,14 @@ std::optional<TOOLBAR_CONFIGURATION> SCH_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
 
     case TOOLBAR_LOC::LEFT:
         config.AppendAction( ACTIONS::toggleGrid )
+              .WithContextMenu(
+                      []( TOOL_MANAGER* aToolMgr )
+                      {
+                          SCH_SELECTION_TOOL* selTool = aToolMgr->GetTool<SCH_SELECTION_TOOL>();
+                          auto               menu = std::make_unique<ACTION_MENU>( false, selTool );
+                          menu->Add( ACTIONS::gridProperties );
+                          return menu;
+                      } )
               .AppendAction( ACTIONS::toggleGridOverrides )
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Units" ) )
                             .AddAction( ACTIONS::inchesUnits )
@@ -88,17 +107,12 @@ std::optional<TOOLBAR_CONFIGURATION> SCH_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
 
         config.AppendSeparator()
               .AppendAction( SCH_ACTIONS::showHierarchy )
-              .AppendAction( ACTIONS::showProperties );
+              .AppendAction( ACTIONS::showProperties )
+              .AppendAction( SCH_ACTIONS::showAIChat );
 
         if( ADVANCED_CFG::GetCfg().m_DrawBoundingBoxes )
             config.AppendAction( ACTIONS::toggleBoundingBoxes );
 
-        /* TODO (ISM): Handle context menus
-        EE_SELECTION_TOOL* selTool = m_toolManager->GetTool<EE_SELECTION_TOOL>();
-        std::unique_ptr<ACTION_MENU> gridMenu = std::make_unique<ACTION_MENU>( false, selTool );
-        gridMenu->Add( ACTIONS::gridProperties );
-        m_tbLeft->AddToolContextMenu( ACTIONS::toggleGrid, std::move( gridMenu ) );
-        */
         break;
 
     case TOOLBAR_LOC::RIGHT:
@@ -204,8 +218,8 @@ std::optional<TOOLBAR_CONFIGURATION> SCH_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
         config.AppendSeparator()
               .AppendAction( SCH_ACTIONS::showPcbNew );
 
-        if( ADVANCED_CFG::GetCfg().m_EnableVariantsUI )
-            config.AppendControl( SCH_ACTION_TOOLBAR_CONTROLS::currentVariant );
+        config.AppendControl( SCH_ACTION_TOOLBAR_CONTROLS::currentVariant );
+        config.AppendControl( SCH_ACTION_TOOLBAR_CONTROLS::currentManufacturer );
 
         // Insert all the IPC plugins here on the toolbar
         // TODO (ISM): Move this to individual actions for each script
@@ -223,53 +237,94 @@ void SCH_EDIT_FRAME::configureToolbars()
 {
     SCH_BASE_FRAME::configureToolbars();
 
-    if( ADVANCED_CFG::GetCfg().m_EnableVariantsUI )
-    {
     // Variant selection drop down control on main tool bar.
     auto variantSelectionCtrlFactory =
-        [this]( ACTION_TOOLBAR* aToolbar )
-        {
-            std::optional<wxString> currentVariantName = Schematic().GetCurrentVariant();
-            wxString tmp = currentVariantName ? *currentVariantName : GetDefaultVariantName();
+            [this]( ACTION_TOOLBAR* aToolbar )
+            {
+                std::optional<wxString> currentVariantName = Schematic().GetCurrentVariant();
+                wxString tmp = currentVariantName ? *currentVariantName : GetDefaultVariantName();
 
-            m_currentVariantCtrl = new wxChoice( aToolbar, ID_TOOLBAR_SCH_SELECT_VARAIANT, wxDefaultPosition,
-                                                 wxDefaultSize, Schematic().GetVariantNamesForUI(), 0,
-                                                 wxDefaultValidator, tmp );
+                m_currentVariantCtrl = new wxChoice( aToolbar, ID_TOOLBAR_SCH_SELECT_VARAIANT, wxDefaultPosition,
+                                                     wxDefaultSize, Schematic().GetVariantNamesForUI(), 0,
+                                                     wxDefaultValidator, tmp );
 
-            m_currentVariantCtrl->SetToolTip( _( "Select the current variant to display and edit." ) );
-            aToolbar->Add( m_currentVariantCtrl );
-            UpdateVariantSelectionCtrl( Schematic().GetVariantNamesForUI() );
-        };
+                m_currentVariantCtrl->SetToolTip( _( "Select the current variant to display and edit." ) );
+                aToolbar->Add( m_currentVariantCtrl );
+                UpdateVariantSelectionCtrl( Schematic().GetVariantNamesForUI() );
+            };
 
     RegisterCustomToolbarControlFactory( SCH_ACTION_TOOLBAR_CONTROLS::currentVariant, variantSelectionCtrlFactory );
-    }
+
+    // Manufacturer selection dropdown control
+    auto manufacturerCtrlFactory =
+            [this]( ACTION_TOOLBAR* aToolbar )
+            {
+                if( !m_currentManufacturerCtrl )
+                {
+                    wxArrayString choices;
+                    choices.Add( _( "(No manufacturer)" ) );
+                    choices.Add( wxT( "PCBWay" ) );
+                    choices.Add( wxT( "Pikkolo Assembly" ) );
+
+                    m_currentManufacturerCtrl = new wxChoice(
+                            aToolbar, ID_TOOLBAR_SCH_SELECT_MANUFACTURER,
+                            wxDefaultPosition, wxSize( 160, -1 ), choices );
+                }
+
+                m_currentManufacturerCtrl->SetToolTip(
+                    _( "Select the preferred manufacturer for DRC and ordering" ) );
+
+                wxString current = Prj().GetProjectFile().m_PreferredManufacturer;
+                if( current == wxT( "pcbway" ) )
+                    m_currentManufacturerCtrl->SetSelection( 1 );
+                else if( current == wxT( "pikkolo" ) )
+                    m_currentManufacturerCtrl->SetSelection( 2 );
+                else
+                    m_currentManufacturerCtrl->SetSelection( 0 );
+
+                aToolbar->Add( m_currentManufacturerCtrl );
+            };
+
+    RegisterCustomToolbarControlFactory( SCH_ACTION_TOOLBAR_CONTROLS::currentManufacturer, manufacturerCtrlFactory );
 
     // IPC/Scripting plugin control
     // TODO (ISM): Clean this up to make IPC actions just normal tool actions to get rid of this entire
     // control
     auto pluginControlFactory =
-        [this]( ACTION_TOOLBAR* aToolbar )
-        {
-            // Add scripting console and API plugins
-            bool scriptingAvailable = SCRIPTING::IsWxAvailable();
-
-            #ifdef KICAD_IPC_API
-            bool haveApiPlugins = Pgm().GetCommonSettings()->m_Api.enable_server &&
-                    !Pgm().GetPluginManager().GetActionsForScope( PluginActionScope() ).empty();
-            #else
-            bool haveApiPlugins = false;
-            #endif
-
-            if( scriptingAvailable || haveApiPlugins )
+            [this]( ACTION_TOOLBAR* aToolbar )
             {
-                aToolbar->AddScaledSeparator( aToolbar->GetParent() );
+                // Add scripting console and API plugins
+                bool scriptingAvailable = SCRIPTING::IsWxAvailable();
 
-                if( haveApiPlugins )
-                    AddApiPluginTools( aToolbar );
-            }
-        };
+#ifdef KICAD_IPC_API
+                bool haveApiPlugins = Pgm().GetCommonSettings()->m_Api.enable_server
+                                        && !Pgm().GetPluginManager().GetActionsForScope( PluginActionScope() ).empty();
+#else
+                bool haveApiPlugins = false;
+#endif
+
+                if( scriptingAvailable || haveApiPlugins )
+                {
+                    aToolbar->AddScaledSeparator( aToolbar->GetParent() );
+
+                    if( haveApiPlugins )
+                        AddApiPluginTools( aToolbar );
+                }
+            };
 
     RegisterCustomToolbarControlFactory( ACTION_TOOLBAR_CONTROLS::ipcScripting, pluginControlFactory );
+}
+
+
+void SCH_EDIT_FRAME::ClearToolbarControl( int aId )
+{
+    SCH_BASE_FRAME::ClearToolbarControl( aId );
+
+    switch( aId )
+    {
+    case ID_TOOLBAR_SCH_SELECT_VARAIANT: m_currentVariantCtrl = nullptr; break;
+    case ID_TOOLBAR_SCH_SELECT_MANUFACTURER: m_currentManufacturerCtrl = nullptr; break;
+    }
 }
 
 
@@ -285,7 +340,12 @@ void SCH_EDIT_FRAME::UpdateVariantSelectionCtrl( const wxArrayString& aVariantNa
     if( selectionIndex != wxNOT_FOUND )
         currentSelection = m_currentVariantCtrl->GetString( selectionIndex );
 
-    m_currentVariantCtrl->Set( aVariantNames );
+    // Add all variant names, a separator, and "Add New Variant..." at the end
+    wxArrayString contents = aVariantNames;
+    contents.Add( wxS( "---" ) );
+    contents.Add( _( "Add New Design Variant..." ) );
+
+    m_currentVariantCtrl->Set( contents );
 
     selectionIndex = m_currentVariantCtrl->FindString( currentSelection );
 
@@ -301,14 +361,170 @@ void SCH_EDIT_FRAME::onVariantSelected( wxCommandEvent& aEvent )
     if( aEvent.GetId() != ID_TOOLBAR_SCH_SELECT_VARAIANT )
         return;
 
-    int selection = m_currentVariantCtrl->GetSelection();
+    wxCHECK( m_currentVariantCtrl, /* void */ );
 
+    int selection = m_currentVariantCtrl->GetSelection();
+    int count = m_currentVariantCtrl->GetCount();
+
+    if( selection == wxNOT_FOUND || count == 0 )
+        return;
+
+    // "Add New Variant..." is always the last item, separator is second-to-last
+    if( selection == count - 1 )
+    {
+        // Restore previous selection before showing dialog
+        int previousSelection = m_currentVariantCtrl->FindString(
+                Schematic().GetCurrentVariant().IsEmpty() ? GetDefaultVariantName()
+                                                          : Schematic().GetCurrentVariant() );
+
+        if( previousSelection != wxNOT_FOUND )
+            m_currentVariantCtrl->SetSelection( previousSelection );
+
+        ShowAddVariantDialog();
+        return;
+    }
+
+    // Separator line - ignore selection
+    if( selection == count - 2 )
+    {
+        int previousSelection = m_currentVariantCtrl->FindString(
+                Schematic().GetCurrentVariant().IsEmpty() ? GetDefaultVariantName()
+                                                          : Schematic().GetCurrentVariant() );
+
+        if( previousSelection != wxNOT_FOUND )
+            m_currentVariantCtrl->SetSelection( previousSelection );
+
+        return;
+    }
+
+    wxString selectedString = m_currentVariantCtrl->GetString( selection );
     wxString selectedVariant;
 
-    if( ( selection != wxNOT_FOUND ) && ( m_currentVariantCtrl->GetString( selection ) != GetDefaultVariantName() ) )
-        selectedVariant = m_currentVariantCtrl->GetString( selection );
+    if( selectedString != GetDefaultVariantName() )
+        selectedVariant = selectedString;
 
     Schematic().SetCurrentVariant( selectedVariant );
+    UpdateProperties();
+    HardRedraw();
+
+    // Refresh message panel for current selection
+    SCH_SELECTION_TOOL* selTool = m_toolManager->GetTool<SCH_SELECTION_TOOL>();
+
+    if( selTool )
+    {
+        SCH_SELECTION& sub_sel = selTool->GetSelection();
+
+        if( sub_sel.GetSize() == 1 )
+            SetMsgPanel( static_cast<EDA_ITEM*>( sub_sel.Front() ) );
+    }
+}
+
+
+void SCH_EDIT_FRAME::onManufacturerSelected( wxCommandEvent& aEvent )
+{
+    if( aEvent.GetId() != ID_TOOLBAR_SCH_SELECT_MANUFACTURER )
+        return;
+
+    if( !m_currentManufacturerCtrl )
+        return;
+
+    int sel = m_currentManufacturerCtrl->GetSelection();
+    wxString mfrId;
+
+    if( sel == 1 )
+        mfrId = wxT( "pcbway" );
+    else if( sel == 2 )
+        mfrId = wxT( "pikkolo" );
+
+    Prj().GetProjectFile().m_PreferredManufacturer = mfrId;
+    Prj().GetProjectFile().SaveToFile();
+}
+
+
+bool SCH_EDIT_FRAME::ShowAddVariantDialog()
+{
+    // Create a dialog with both name and description fields
+    wxDialog dlg( this, wxID_ANY, _( "New Design Variant" ), wxDefaultPosition, wxDefaultSize,
+                  wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER );
+
+    wxBoxSizer* mainSizer = new wxBoxSizer( wxVERTICAL );
+
+    // Name field
+    wxStaticText* nameLabel = new wxStaticText( &dlg, wxID_ANY, _( "Variant name:" ) );
+    mainSizer->Add( nameLabel, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, 10 );
+
+    mainSizer->AddSpacer( 3 );
+
+    wxTextCtrl* nameCtrl = new wxTextCtrl( &dlg, wxID_ANY );
+    mainSizer->Add( nameCtrl, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10 );
+
+    // Description field
+    wxStaticText* descLabel = new wxStaticText( &dlg, wxID_ANY, _( "Description (optional):" ) );
+    mainSizer->Add( descLabel, 0, wxLEFT | wxRIGHT | wxTOP | wxEXPAND, 10 );
+
+    mainSizer->AddSpacer( 3 );
+
+    wxTextCtrl* descCtrl = new wxTextCtrl( &dlg, wxID_ANY, wxEmptyString, wxDefaultPosition,
+                                           wxSize( 300, 60 ), wxTE_MULTILINE );
+    mainSizer->Add( descCtrl, 1, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, 10 );
+
+    // Buttons
+    wxStdDialogButtonSizer* btnSizer = new wxStdDialogButtonSizer();
+    btnSizer->AddButton( new wxButton( &dlg, wxID_OK ) );
+    btnSizer->AddButton( new wxButton( &dlg, wxID_CANCEL ) );
+    btnSizer->Realize();
+    mainSizer->Add( btnSizer, 0, wxALL | wxALIGN_RIGHT, 5 );
+
+    dlg.SetSizer( mainSizer );
+    dlg.Fit();
+    dlg.Centre();
+    nameLabel->SetFocus();
+
+    if( dlg.ShowModal() == wxID_CANCEL )
+        return false;
+
+    wxString variantName = nameCtrl->GetValue().Trim().Trim( false );
+    wxString variantDesc = descCtrl->GetValue().Trim().Trim( false );
+
+    // Empty strings, reserved names, and duplicate variant names are not allowed.
+    if( variantName.IsEmpty() )
+    {
+        GetInfoBar()->ShowMessageFor( _( "Variant name cannot be empty." ), 10000, wxICON_ERROR );
+        return false;
+    }
+
+    // Check for reserved name (case-insensitive)
+    if( variantName.CmpNoCase( GetDefaultVariantName() ) == 0 )
+    {
+        GetInfoBar()->ShowMessageFor( wxString::Format( _( "'%s' is a reserved variant name." ),
+                                                         GetDefaultVariantName() ),
+                                      10000, wxICON_ERROR );
+        return false;
+    }
+
+    // Check for duplicate variant names (case-insensitive)
+    for( const wxString& existingName : Schematic().GetVariantNames() )
+    {
+        if( existingName.CmpNoCase( variantName ) == 0 )
+        {
+            GetInfoBar()->ShowMessageFor( wxString::Format( _( "Variant '%s' already exists." ),
+                                                            existingName ),
+                                          10000, wxICON_ERROR );
+            return false;
+        }
+    }
+
+    // Add variant to the schematic
+    Schematic().AddVariant( variantName );
+
+    if( !variantDesc.IsEmpty() )
+        Schematic().SetVariantDescription( variantName, variantDesc );
+
+    // Update the variant selector and select the new variant
+    UpdateVariantSelectionCtrl( Schematic().GetVariantNamesForUI() );
+    SetCurrentVariant( variantName );
+    OnModify();
+    return true;
 }
 
 
@@ -317,7 +533,9 @@ void SCH_EDIT_FRAME::SetCurrentVariant( const wxString& aVariantName )
     if( !m_currentVariantCtrl )
         return;
 
-    int newSelection = m_currentVariantCtrl->FindString( aVariantName );
+    wxString name = aVariantName.IsEmpty() ? GetDefaultVariantName() : aVariantName;
+
+    int newSelection = m_currentVariantCtrl->FindString( name );
 
     if( newSelection == wxNOT_FOUND )
         return;
@@ -329,9 +547,12 @@ void SCH_EDIT_FRAME::SetCurrentVariant( const wxString& aVariantName )
     if( currentSelection != wxNOT_FOUND )
         selectedString = m_currentVariantCtrl->GetString( currentSelection );
 
-    if( selectedString != aVariantName )
+    if( selectedString != name )
     {
         m_currentVariantCtrl->SetSelection( newSelection );
         Schematic().SetCurrentVariant( aVariantName );
+
+        UpdateProperties();
+        HardRedraw();
     }
 }

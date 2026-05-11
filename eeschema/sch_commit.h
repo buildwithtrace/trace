@@ -40,6 +40,7 @@ class SCH_TOOL_BASE;
 #define SKIP_UNDO          0x0001
 #define APPEND_UNDO        0x0002
 #define SKIP_SET_DIRTY     0x0004
+#define SKIP_CONNECTIVITY  0x0008
 
 class SCH_COMMIT : public COMMIT
 {

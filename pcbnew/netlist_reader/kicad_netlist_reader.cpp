@@ -22,6 +22,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <wx/log.h>
+
 #include <netlist_lexer.h>  // netlist_lexer is common to Eeschema and Pcbnew
 #include <string_utils.h>
 #include <json_common.h>
@@ -105,6 +107,7 @@ void KICAD_NETLIST_PARSER::Parse()
 
         case T_components:  // The section comp starts here.
             wxLogTrace( "CVPCB_PINCOUNT", wxT( "Parse: entering components section" ) );
+
             while( ( token = NextTok() ) != T_EOF )
             {
                 if( token == T_RIGHT )
@@ -132,8 +135,23 @@ void KICAD_NETLIST_PARSER::Parse()
 
             break;
 
+        case T_variants:  // The section variants starts here.
+            while( ( token = NextTok() ) != T_EOF )
+            {
+                if( token == T_RIGHT )
+                    break;
+                else if( token == T_LEFT )
+                    token = NextTok();
+
+                if( token == T_variant )       // A variant section found. Read it
+                    parseVariant();
+            }
+
+            break;
+
         case T_nets:    // The section nets starts here.
             wxLogTrace( "CVPCB_PINCOUNT", wxT( "Parse: entering nets section" ) );
+
             while( ( token = NextTok() ) != T_EOF )
             {
                 if( token == T_RIGHT )
@@ -149,6 +167,7 @@ void KICAD_NETLIST_PARSER::Parse()
 
         case T_libparts:    // The section libparts starts here.
             wxLogTrace( "CVPCB_PINCOUNT", wxT( "Parse: entering libparts section" ) );
+
             while( ( token = NextTok() ) != T_EOF )
             {
                 if( token == T_RIGHT )
@@ -333,6 +352,7 @@ void KICAD_NETLIST_PARSER::parseComponent()
     std::vector<std::set<wxString>> jumperPinGroups;
 
     std::vector<COMPONENT::UNIT_INFO> parsedUnits;
+    std::vector<COMPONENT_VARIANT>    parsedVariants;
 
     // The token comp was read, so the next data is (ref P1)
     while( (token = NextTok() ) != T_RIGHT )
@@ -423,8 +443,8 @@ void KICAD_NETLIST_PARSER::parseComponent()
 
             if( !propName.IsEmpty() )
                 properties[propName] = std::move( propValue );
-        }
             break;
+        }
 
         case T_fields:
             while( ( token = NextTok() ) != T_RIGHT )
@@ -576,6 +596,7 @@ void KICAD_NETLIST_PARSER::parseComponent()
                     skipCurrent();
                 }
             }
+
             break;
         }
 
@@ -640,6 +661,163 @@ void KICAD_NETLIST_PARSER::parseComponent()
             break;
         }
 
+        case T_variants:
+        {
+            while( ( token = NextTok() ) != T_RIGHT )
+            {
+                if( token == T_LEFT )
+                    token = NextTok();
+
+                if( token != T_variant )
+                {
+                    skipCurrent();
+                    continue;
+                }
+
+                COMPONENT_VARIANT variant;
+
+                for( token = NextTok(); token != T_RIGHT; token = NextTok() )
+                {
+                    if( token == T_LEFT )
+                        token = NextTok();
+
+                    switch( token )
+                    {
+                    case T_name:
+                        NeedSYMBOLorNUMBER();
+                        variant.m_name = From_UTF8( CurText() );
+                        NeedRIGHT();
+                        break;
+
+                    case T_property:
+                    {
+                        wxString propName;
+                        wxString propValue;
+                        bool     hasValue = false;
+
+                        while( ( token = NextTok() ) != T_RIGHT )
+                        {
+                            if( token == T_LEFT )
+                                token = NextTok();
+
+                            if( token == T_name )
+                            {
+                                NeedSYMBOLorNUMBER();
+                                propName = From_UTF8( CurText() );
+                                NeedRIGHT();
+                            }
+                            else if( token == T_value )
+                            {
+                                NeedSYMBOLorNUMBER();
+                                propValue = From_UTF8( CurText() );
+                                hasValue = true;
+                                NeedRIGHT();
+                            }
+                            else
+                            {
+                                Expecting( "name or value" );
+                            }
+                        }
+
+                        if( propName.IsEmpty() )
+                            break;
+
+                        bool propBool = true;
+
+                        if( hasValue )
+                        {
+                            wxString normalized = propValue;
+                            normalized.MakeLower();
+
+                            if( normalized == wxT( "0" ) || normalized == wxT( "false" ) )
+                                propBool = false;
+                            else if( normalized == wxT( "1" ) || normalized == wxT( "true" ) )
+                                propBool = true;
+                            else
+                                propBool = !propValue.IsEmpty();
+                        }
+
+                        if( propName.CmpNoCase( wxT( "dnp" ) ) == 0 )
+                        {
+                            variant.m_dnp = propBool;
+                            variant.m_hasDnp = true;
+                        }
+                        else if( propName.CmpNoCase( wxT( "exclude_from_bom" ) ) == 0 )
+                        {
+                            variant.m_excludedFromBOM = propBool;
+                            variant.m_hasExcludedFromBOM = true;
+                        }
+                        else if( propName.CmpNoCase( wxT( "exclude_from_sim" ) ) == 0 )
+                        {
+                            variant.m_excludedFromSim = propBool;
+                            variant.m_hasExcludedFromSim = true;
+                        }
+                        else if( propName.CmpNoCase( wxT( "exclude_from_pos_files" ) ) == 0 )
+                        {
+                            variant.m_excludedFromPosFiles = propBool;
+                            variant.m_hasExcludedFromPosFiles = true;
+                        }
+
+                        break;
+                    }
+
+                    case T_fields:
+                        while( ( token = NextTok() ) != T_RIGHT )
+                        {
+                            if( token == T_LEFT )
+                                token = NextTok();
+
+                            if( token == T_field )
+                            {
+                                wxString fieldName;
+                                wxString fieldValue;
+
+                                while( ( token = NextTok() ) != T_RIGHT )
+                                {
+                                    if( token == T_LEFT )
+                                        token = NextTok();
+
+                                    if( token == T_name )
+                                    {
+                                        NeedSYMBOLorNUMBER();
+                                        fieldName = From_UTF8( CurText() );
+                                        NeedRIGHT();
+                                    }
+                                    else if( token == T_value )
+                                    {
+                                        NeedSYMBOLorNUMBER();
+                                        fieldValue = From_UTF8( CurText() );
+                                        NeedRIGHT();
+                                    }
+                                    else if( token == T_STRING )
+                                    {
+                                        fieldValue = From_UTF8( CurText() );
+                                    }
+                                }
+
+                                if( !fieldName.IsEmpty() )
+                                    variant.m_fields[fieldName] = std::move( fieldValue );
+                            }
+                            else
+                            {
+                                Expecting( "field" );
+                            }
+                        }
+                        break;
+
+                    default:
+                        skipCurrent();
+                        break;
+                    }
+                }
+
+                if( !variant.m_name.IsEmpty() )
+                    parsedVariants.push_back( std::move( variant ) );
+            }
+
+            break;
+        }
+
         default:
             // Skip not used data (i.e all other tokens)
             skipCurrent();
@@ -650,7 +828,7 @@ void KICAD_NETLIST_PARSER::parseComponent()
     if( !footprint.IsEmpty() && fpid.Parse( footprint, true ) >= 0 )
     {
         wxString error;
-        error.Printf( _( "Invalid footprint ID in\nfile: '%s'\nline: %d\nofff: %d" ),
+        error.Printf( _( "Invalid footprint ID in\nfile: '%s'\nline: %d\noffset: %d" ),
                       CurSource(), CurLineNumber(), CurOffset() );
 
         THROW_IO_ERROR( error );
@@ -667,6 +845,10 @@ void KICAD_NETLIST_PARSER::parseComponent()
     std::ranges::copy( jumperPinGroups, std::inserter( component->JumperPadGroups(),
                                                        component->JumperPadGroups().end() ) );
     component->SetUnitInfo( parsedUnits );
+
+    for( const COMPONENT_VARIANT& variant : parsedVariants )
+        component->AddVariant( variant );
+
     m_netlist->AddComponent( component );
 }
 
@@ -761,7 +943,7 @@ void KICAD_NETLIST_PARSER::parseGroup()
     if( !libId.IsEmpty() && groupLibId.Parse( libId, true ) >= 0 )
     {
         wxString error;
-        error.Printf( _( "Invalid lib_id ID in\nfile: '%s'\nline: %d\nofff: %d" ), CurSource(), CurLineNumber(),
+        error.Printf( _( "Invalid lib_id ID in\nfile: '%s'\nline: %d\noffset: %d" ), CurSource(), CurLineNumber(),
                       CurOffset() );
 
         THROW_IO_ERROR( error );
@@ -770,6 +952,44 @@ void KICAD_NETLIST_PARSER::parseGroup()
     NETLIST_GROUP* group = new NETLIST_GROUP{ std::move( name ), std::move( uuid ), std::move( groupLibId ),
                                               std::move( members ) };
     m_netlist->AddGroup( group );
+}
+
+
+void KICAD_NETLIST_PARSER::parseVariant()
+{
+    // Parses a variant section like:
+    // (variant (name "Variant1") (description "First variant"))
+
+    wxString name;
+    wxString description;
+
+    for( token = NextTok(); token != T_RIGHT; token = NextTok() )
+    {
+        if( token == T_LEFT )
+            token = NextTok();
+
+        switch( token )
+        {
+        case T_name:
+            NeedSYMBOLorNUMBER();
+            name = From_UTF8( CurText() );
+            NeedRIGHT();
+            break;
+
+        case T_description:
+            NeedSYMBOLorNUMBER();
+            description = From_UTF8( CurText() );
+            NeedRIGHT();
+            break;
+
+        default:
+            skipCurrent();
+            break;
+        }
+    }
+
+    if( !name.IsEmpty() )
+        m_netlist->AddVariant( name, description );
 }
 
 

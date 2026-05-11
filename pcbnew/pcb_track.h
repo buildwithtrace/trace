@@ -32,12 +32,12 @@
  * PCB_LOCATE_BURIEDVIA_T and PCB_LOCATE_UVIA_T.
  */
 
-#ifndef CLASS_TRACK_H
-#define CLASS_TRACK_H
+#pragma once
 
-
-#include <mutex>
 #include <array>
+#include <optional>
+#include <mutex>
+
 #include <board_connected_item.h>
 #include <base_units.h>
 #include <geometry/shape_segment.h>
@@ -45,70 +45,13 @@
 #include <core/arraydim.h>
 #include <lset.h>
 #include <padstack.h>
-#include <optional>
+#include <pcb_track_types.h>
 
-class PCB_TRACK;
-class PCB_VIA;
 class PAD;
 class MSG_PANEL_ITEM;
 class SHAPE_POLY_SET;
 class SHAPE_ARC;
 
-
-// Flag used in locate routines (from which endpoint work)
-enum ENDPOINT_T : int
-{
-    ENDPOINT_START = 0,
-    ENDPOINT_END = 1
-};
-
-// Note that this enum must be synchronized to GAL_LAYER_ID
-enum class VIATYPE : int
-{
-    THROUGH      = 4, /* Always a through hole via */
-    BURIED       = 3, /* this via can be on internal layers */
-    BLIND        = 2, /* this via can be on internal layers */
-    MICROVIA     = 1, /* this via which connect from an external layer
-                       * to the near neighbor internal layer */
-    NOT_DEFINED  = 0  /* not yet used */
-};
-
-enum class TENTING_MODE
-{
-    FROM_BOARD = 0,
-    TENTED = 1,
-    NOT_TENTED = 2
-};
-
-enum class COVERING_MODE
-{
-    FROM_BOARD = 0,
-    COVERED = 1,
-    NOT_COVERED = 2
-};
-
-enum class PLUGGING_MODE
-{
-    FROM_BOARD = 0,
-    PLUGGED = 1,
-    NOT_PLUGGED = 2
-};
-
-enum class CAPPING_MODE
-{
-    FROM_BOARD = 0,
-    CAPPED = 1,
-    NOT_CAPPED = 2
-};
-
-enum class FILLING_MODE
-{
-    FROM_BOARD = 0,
-    FILLED = 1,
-    NOT_FILLED = 2
-};
-
-#define UNDEFINED_DRILL_DIAMETER  -1       //< Undefined via drill diameter.
 
 // Used for tracks and vias for algorithmic safety, not to enforce constraints
 #define GEOMETRY_MIN_SIZE (int) ( 0.001 * pcbIUScale.IU_PER_MM )
@@ -649,14 +592,13 @@ public:
      */
     void SetRemoveUnconnected( bool aSet )
     {
-        m_padStack.SetUnconnectedLayerMode( aSet
-                ? PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL
-                : PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL );
+        m_padStack.SetUnconnectedLayerMode( aSet ? UNCONNECTED_LAYER_MODE::REMOVE_ALL
+                                                 : UNCONNECTED_LAYER_MODE::KEEP_ALL );
     }
 
     bool GetRemoveUnconnected() const
     {
-        return m_padStack.UnconnectedLayerMode() != PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL;
+        return m_padStack.UnconnectedLayerMode() != UNCONNECTED_LAYER_MODE::KEEP_ALL;
     }
 
     /**
@@ -665,29 +607,27 @@ public:
      */
     void SetKeepStartEnd( bool aSet )
     {
-        m_padStack.SetUnconnectedLayerMode( aSet
-                ? PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END
-                : PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL );
+        m_padStack.SetUnconnectedLayerMode( aSet ? UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END
+                                                 : UNCONNECTED_LAYER_MODE::REMOVE_ALL );
     }
 
     bool GetKeepStartEnd() const
     {
-        return m_padStack.UnconnectedLayerMode()
-               == PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END;
+        return m_padStack.UnconnectedLayerMode() == UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END;
     }
 
     bool ConditionallyFlashed( PCB_LAYER_ID aLayer ) const
     {
         switch( m_padStack.UnconnectedLayerMode() )
         {
-        case PADSTACK::UNCONNECTED_LAYER_MODE::KEEP_ALL:
+        case UNCONNECTED_LAYER_MODE::KEEP_ALL:
             return false;
 
-        case PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL:
+        case UNCONNECTED_LAYER_MODE::REMOVE_ALL:
             return true;
 
-        case PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END:
-        case PADSTACK::UNCONNECTED_LAYER_MODE::START_END_ONLY:
+        case UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END:
+        case UNCONNECTED_LAYER_MODE::START_END_ONLY:
             return aLayer != m_padStack.Drill().start && aLayer != m_padStack.Drill().end;
         }
 
@@ -906,6 +846,3 @@ private:
     std::mutex                                  m_zoneLayerOverridesMutex;
     std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE> m_zoneLayerOverrides;
 };
-
-
-#endif // CLASS_TRACK_H

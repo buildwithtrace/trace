@@ -40,7 +40,7 @@ endif()
 set( EXTRA_PYTEST_ENVIRONMENT "" )
 
 if( APPLE )
-    # We need to use the installed kicad-cli not the build dir to run these tests
+    # We need to use the installed trace-cli not the build dir to run these tests
     get_filename_component( CAIRO_LIB_BASE "${CAIRO_LIBRARY}" DIRECTORY )
     set( EXTRA_PYTEST_ENVIRONMENT "DYLD_FALLBACK_LIBRARY_PATH=${CAIRO_LIB_BASE}" )
 

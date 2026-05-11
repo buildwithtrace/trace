@@ -1,0 +1,42 @@
+{
+  "id": "pcbway",
+  "display_name": "PCBWay",
+  "website": "https://www.pcbway.com",
+  "has_api": true,
+  "api_type": "partner",
+  "capabilities": {
+    "layers": [1, 2, 4, 6, 8, 10, 12, 14],
+    "materials": ["FR-4", "Aluminum board", "Rogers", "HDI", "Copper"],
+    "max_board_size_mm": [500, 1100],
+    "min_trace_spacing": {
+      "2layer_1oz": "5/5mil",
+      "2layer_2oz": "6/6mil",
+      "4layer_1oz": "3.5/3.5mil"
+    },
+    "min_hole_size_mm": {
+      "standard_via": 0.3,
+      "advanced_via": 0.15,
+      "pth": 0.2,
+      "npth": 0.5
+    },
+    "thickness_mm": [0.2, 0.3, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0, 2.4, 3.2],
+    "surface_finish": ["HASL with lead", "HASL lead free", "Immersion gold", "OSP", "Immersion Silver", "Immersion Tin", "ENEPIG", "Hard Gold"],
+    "solder_mask_colors": ["Green", "Red", "Yellow", "Blue", "White", "Black", "Purple", "Matt black", "Matt green"],
+    "copper_weight_oz": [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+    "via_process": ["Tenting vias", "Plugged vias", "Vias not covered"],
+    "special_features": ["Castellated holes", "Edge plating", "Impedance control", "Via in pad", "Blind/buried vias", "HDI"]
+  },
+  "assembly": {
+    "supported": true,
+    "types": ["Turnkey", "Kitted", "Combo"],
+    "sides": ["Top", "Bottom", "Both"],
+    "min_passive_size": "0201",
+    "min_ic_pitch_mm": 0.4,
+    "bga_supported": true
+  },
+  "order_form_params": {
+    "required": ["BoardType", "Length", "Width", "Qty", "Layers", "Material", "FR4Tg", "Thickness", "MinTrackSpacing", "MinHoleSize", "SolderMask", "Silkscreen", "SurfaceFinish", "ViaProcess", "FinishedCopper", "RemoveProductNo", "SilkSides", "Goldfingers"],
+    "all_params_reference": "See trace-backend/app/services/manufacturers/pcbway_schema.py"
+  },
+  "drc_presets": ["pcbway_2layer_1oz", "pcbway_2layer_2oz", "pcbway_4layer_1oz"]
+}

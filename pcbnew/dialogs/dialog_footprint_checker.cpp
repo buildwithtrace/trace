@@ -48,6 +48,7 @@ DIALOG_FOOTPRINT_CHECKER::DIALOG_FOOTPRINT_CHECKER( FOOTPRINT_EDIT_FRAME* aParen
 
     m_markersTreeModel = new RC_TREE_MODEL( m_frame, m_markersDataView );
     m_markersDataView->AssociateModel( m_markersTreeModel );
+    m_markersDataView->SetLayoutDirection( wxLayout_LeftToRight );
 
     if( m_frame->GetBoard()->GetFirstFootprint() == g_lastFootprint )
         m_checksRun = g_lastChecksRun;
@@ -88,15 +89,11 @@ void DIALOG_FOOTPRINT_CHECKER::runChecks()
 {
     BOARD*     board = m_frame->GetBoard();
     FOOTPRINT* footprint = board->GetFirstFootprint();
-    wxString   msg;
 
     deleteAllMarkers();
 
     if( !footprint )
-    {
-        msg = _( "No footprint loaded." );
         return;
-    }
 
     auto errorHandler =
             [&]( const BOARD_ITEM* aItemA, const BOARD_ITEM* aItemB, const BOARD_ITEM* aItemC,

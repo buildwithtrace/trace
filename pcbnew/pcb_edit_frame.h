@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2010 Jean-Pierre Charras, jp.charras@wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -26,6 +27,8 @@
 #include <mail_type.h>
 #include <settings/app_settings.h>
 #include <variant>
+#include <set>
+#include <nlohmann/json_fwd.hpp>
 
 class ACTION_PLUGIN;
 class PCB_SCREEN;
@@ -61,6 +64,23 @@ class ACTION_MENU;
 class TOOL_ACTION;
 class DIALOG_BOARD_SETUP;
 class PCB_DESIGN_BLOCK_PANE;
+class AI_CHAT_PANEL;
+struct DIFF_RESULT;
+
+
+/**
+ * Captures PCB edit state for incremental updates.
+ * Used to preserve selection, viewport, and zoom during AI edits.
+ */
+struct PcbEditState
+{
+    std::set<KIID> selectedItems;   ///< UUIDs of currently selected items
+    VECTOR2D       viewportCenter;  ///< Current viewport center
+    double         zoomLevel;       ///< Current zoom level
+
+    PcbEditState() : zoomLevel( 1.0 ) {}
+};
+
 
 #ifdef KICAD_IPC_API
 class KICAD_API_SERVER;
@@ -93,6 +113,10 @@ public:
     void LoadFootprints( NETLIST& aNetlist, REPORTER& aReporter );
 
     void OnQuit( wxCommandEvent& event );
+
+    void onSignIn( wxCommandEvent& event );
+    void onSignOut( wxCommandEvent& event );
+    void onAuthStateChanged( wxCommandEvent& event );
 
     /**
      * Get if the current board has been modified but not saved.
@@ -134,7 +158,7 @@ public:
      */
     void ExecuteRemoteCommand( const char* cmdline ) override;
 
-    void KiwayMailIn( KIWAY_EXPRESS& aEvent ) override;
+    void KiwayMailIn( KIWAY_MAIL_EVENT& aEvent ) override;
 
     /**
      * Used to find items by selection synchronization spec string.
@@ -166,6 +190,26 @@ public:
     void UpdateTrackWidthSelectBox( wxChoice* aTrackWidthSelectBox, bool aShowNetclass,
                                     bool aShowEdit );
     void UpdateViaSizeSelectBox( wxChoice* aViaSizeSelectBox, bool aShowNetclass, bool aShowEdit );
+
+    /**
+     * Update the variant selection dropdown with the current board's variant names.
+     *
+     * If the currently selected variant is no longer available, the default (no variant)
+     * will be selected.
+     */
+    void UpdateVariantSelectionCtrl();
+
+    /**
+     * Set the current variant on the board and update the drawing sheet's cached
+     * variant name and description accordingly.
+     */
+    void SetCurrentVariant( const wxString& aVariantName );
+
+    /**
+     * Event handler for variant selection changes in the toolbar.
+     */
+    void onVariantSelected( wxCommandEvent& aEvent );
+    void onManufacturerSelected( wxCommandEvent& aEvent );
 
     /**
      * Return the angle used for rotate operations.
@@ -309,6 +353,12 @@ public:
 
     void ToggleNetInspector();
 
+    void ToggleAIChat();
+
+    void ShowAIChatPanel();
+
+    AI_CHAT_PANEL* GetAIChatPanel() const { return m_aiChatPanel; }
+
     void ToggleSearch();
 
     bool IsSearchPaneShown() { return m_auimgr.GetPane( SearchPaneName() ).IsShown(); }
@@ -357,6 +407,69 @@ public:
                          bool aForceFileDialog = false );
      */
     bool OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl = 0 ) override;
+
+    /**
+     * Reload board from file. Used by AI chat panel to refresh board after AI edits.
+     *
+     * @param aFileName The file name to reload from.
+     * @return true if reload was successful, false otherwise.
+     */
+    bool ReloadBoardFromFile( const wxString& aFileName );
+
+    /**
+     * Capture board state before AI edit. Stores copies of all board items by UUID.
+     *
+     * @param aTracePcbPath Path to the trace_pcb file being edited.
+     * @return true if state was captured successfully, false otherwise.
+     */
+    bool CaptureBoardStateForAIEdit( const wxString& aTracePcbPath );
+
+    /**
+     * Compare before and after states and create undo entries for changes.
+     * This should be called after ReloadBoardFromFile() completes.
+     *
+     * @return true if changes were found and undo entries created, false otherwise.
+     */
+    bool CompareAndCreateAIEditUndoEntries();
+
+    /**
+     * Re-resolve stale item pointers in the undo/redo lists after a board reload.
+     * Matches items by UUID to their new post-reload counterparts.
+     */
+    void RemapUndoRedoAfterReload();
+
+    /**
+     * Snapshot the current board's NETINFO_ITEM pointers and their net names
+     * so that RemapUndoRedoAfterReload() can re-resolve stale net pointers
+     * on undo/redo link items after the board is destroyed and reloaded.
+     * Must be called BEFORE ReloadBoardFromFile().
+     */
+    void CaptureNetPointersBeforeReload();
+
+    /**
+     * Capture current PCB edit state (selection, viewport, zoom).
+     * Used before applying incremental diffs to preserve user context.
+     *
+     * @return Current edit state
+     */
+    PcbEditState CaptureEditState();
+
+    /**
+     * Restore PCB edit state (selection, viewport, zoom).
+     * Used after applying incremental diffs to restore user context.
+     *
+     * @param aState The state to restore
+     */
+    void RestoreEditState( const PcbEditState& aState );
+
+    /**
+     * Apply an incremental diff to the PCB without full reload.
+     * This preserves selection, viewport, and undo stack for simple edits.
+     *
+     * @param aDiff Diff result containing added/removed/modified elements
+     * @return true if diff was applied successfully, false if full reload needed
+     */
+    bool ApplyIncrementalDiff( const DIFF_RESULT& aDiff );
 
     /**
      * Write the board data structures to \a a aFileName.
@@ -416,9 +529,9 @@ public:
 
     bool SaveSelectionAsDesignBlock( const wxString& aLibraryName );
 
-    bool SaveBoardToDesignBlock( const LIB_ID& aLibId );
+    bool UpdateDesignBlockFromBoard( const LIB_ID& aLibId );
 
-    bool SaveSelectionToDesignBlock( const LIB_ID& aLibId );
+    bool UpdateDesignBlockFromSelection( const LIB_ID& aLibId );
 
     PCB_DESIGN_BLOCK_PANE* GetDesignBlockPane() const { return m_designBlocksPane; }
 
@@ -690,6 +803,8 @@ public:
      */
     bool DoAutoSave();
 
+    void ClearToolbarControl( int aId ) override;
+
     DECLARE_EVENT_TABLE()
 
 protected:
@@ -698,13 +813,13 @@ protected:
      */
     struct LAYER_TOOLBAR_ICON_VALUES
     {
-        int     previous_requested_scale;
+        int     previous_icon_size;
         COLOR4D previous_Route_Layer_TOP_color;
         COLOR4D previous_Route_Layer_BOTTOM_color;
         COLOR4D previous_background_color;
 
         LAYER_TOOLBAR_ICON_VALUES()
-                : previous_requested_scale( 0 ),
+                : previous_icon_size( 0 ),
                   previous_Route_Layer_TOP_color( COLOR4D::UNSPECIFIED ),
                   previous_Route_Layer_BOTTOM_color( COLOR4D::UNSPECIFIED ),
                   previous_background_color( COLOR4D::UNSPECIFIED )
@@ -816,23 +931,37 @@ protected:
 public:
     wxChoice* m_SelTrackWidthBox;        // a choice box to display and select current track width
     wxChoice* m_SelViaSizeBox;           // a choice box to display and select current via diameter
+    wxChoice* m_CurrentVariantCtrl;      // a choice box to display and select current variant
+    wxChoice* m_currentManufacturerCtrl; // a choice box to display and select preferred manufacturer
 
-    bool m_show_layer_manager_tools;
-    bool m_show_search;
-    bool m_show_net_inspector;
+    bool      m_ShowLayerManagerTools;
+    bool      m_ShowSearch;
+    bool      m_ShowNetInspector;
 
-    bool m_ZoneFillsDirty;          // Board has been modified since last zone fill.
+    bool      m_ZoneFillsDirty;          // Board has been modified since last zone fill.
 
-    bool m_probingSchToPcb;         // Recursion guard when synchronizing selection from schematic
-
-    // Cross-probe flashing support
-    wxTimer        m_crossProbeFlashTimer;   ///< Timer to toggle selection visibility for flash
-    int            m_crossProbeFlashPhase = 0; ///< Phase counter
-    std::vector<KIID> m_crossProbeFlashItems;  ///< Items to flash (by UUID)
-    bool           m_crossProbeFlashing = false; ///< Currently flashing guard
+    bool      m_ProbingSchToPcb;         // Recursion guard when synchronizing selection from schematic
 
     void StartCrossProbeFlash( const std::vector<BOARD_ITEM*>& aItems );
     void OnCrossProbeFlashTimer( wxTimerEvent& aEvent );
+
+    /**
+     * Serialize current DRC violations to JSON.
+     * @return JSON array of DRC violations.
+     */
+    nlohmann::json serializeDrcViolations();
+
+    /**
+     * Run DRC and return violations as JSON.
+     * This triggers a full DRC run and serializes the resulting markers.
+     * @return JSON array of DRC violations.
+     */
+    nlohmann::json runDrcAndSerialize();
+
+    /**
+     * Helper to convert severity enum to string.
+     */
+    std::string severityToString( SEVERITY aSeverity );
 
 private:
     friend struct PCB::IFACE;
@@ -845,29 +974,42 @@ private:
      * the list of assignable hot keys since it's only available as an advanced configuration
      * option.
      */
-    TOOL_ACTION* m_exportNetlistAction;
+    TOOL_ACTION*           m_exportNetlistAction;
 
-    DIALOG_FIND* m_findDialog;
-    DIALOG_BOOK_REPORTER* m_inspectDrcErrorDlg;
-    DIALOG_BOOK_REPORTER* m_inspectClearanceDlg;
-    DIALOG_BOOK_REPORTER* m_inspectConstraintsDlg;
-    DIALOG_BOOK_REPORTER* m_footprintDiffDlg;
-    DIALOG_BOARD_SETUP*   m_boardSetupDlg;
+    DIALOG_FIND*           m_findDialog;
+    DIALOG_BOOK_REPORTER*  m_inspectDrcErrorDlg;
+    DIALOG_BOOK_REPORTER*  m_inspectClearanceDlg;
+    DIALOG_BOOK_REPORTER*  m_inspectConstraintsDlg;
+    DIALOG_BOOK_REPORTER*  m_footprintDiffDlg;
+    DIALOG_BOARD_SETUP*    m_boardSetupDlg;
 
     std::vector<LIB_ID>    m_designBlockHistoryList;
     PCB_DESIGN_BLOCK_PANE* m_designBlocksPane;
+    AI_CHAT_PANEL*         m_aiChatPanel;
 
     const std::map<std::string, UTF8>* m_importProperties; // Properties used for non-KiCad import.
 
     /**
      * Keep track of viewport so that track net labels can be adjusted when it changes.
      */
-    BOX2D        m_lastNetnamesViewport;
+    BOX2D             m_lastNetnamesViewport;
 
-    wxTimer*     m_eventCounterTimer;
+    wxTimer*          m_eventCounterTimer;
+
+    // Cross-probe flashing support
+    wxTimer           m_crossProbeFlashTimer;          ///< Timer to toggle selection visibility for flash
+    int               m_crossProbeFlashPhase = 0;      ///< Phase counter
+    std::vector<KIID> m_crossProbeFlashItems;          ///< Items to flash (by UUID)
+    bool              m_crossProbeFlashing = false;    ///< Currently flashing guard
+
+    // AI edit undo/redo state tracking
+    std::map<KIID, std::unique_ptr<BOARD_ITEM>>  m_aiEditBeforeState;  ///< Map of UUID to BOARD_ITEM copy for items before AI edit
+    std::map<KIID, wxString>                    m_aiEditPadNets;      ///< Map of pad UUID to net name (captured before reload)
+    std::map<uintptr_t, wxString>              m_oldNetPtrToName;    ///< Old board's NETINFO_ITEM* -> net name (for undo link remapping)
+    wxString                                    m_aiEditTracePcbBackupPath;  ///< Path to backup of trace_pcb file
 
 #ifdef KICAD_IPC_API
-    std::unique_ptr<API_HANDLER_PCB> m_apiHandler;
+    std::unique_ptr<API_HANDLER_PCB>    m_apiHandler;
     std::unique_ptr<API_HANDLER_COMMON> m_apiHandlerCommon;
 #endif
 };

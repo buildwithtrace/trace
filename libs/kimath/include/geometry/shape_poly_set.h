@@ -1095,8 +1095,13 @@ public:
     void InflateWithLinkedHoles( int aFactor, CORNER_STRATEGY aCornerStrategy, int aMaxError );
 
     /// Convert a set of polygons with holes to a single outline with "slits"/"fractures"
-    /// connecting the outer ring to the inner holes
-    void Fracture();
+    /// connecting the outer ring to the inner holes.
+    ///
+    /// @param aSimplify when true (default), run Simplify() first to remove overlapping
+    ///                  holes and degenerate geometry via Clipper2 Union. Set to false when
+    ///                  the input is known to be well-formed (e.g. imported fill data) to
+    ///                  avoid the expensive boolean operation.
+    void Fracture( bool aSimplify = true );
 
     /// Convert a single outline slitted ("fractured") polygon into a set ouf outlines
     /// with holes.
@@ -1509,6 +1514,16 @@ private:
                        CORNER_STRATEGY aCornerStrategy, bool aSimplify = false );
 
     void splitCollinearOutlines();
+
+    /**
+     * Split outline segments at vertices that lie on them (self-touching polygons).
+     *
+     * This handles the case where a polygon vertex lies on a non-adjacent segment,
+     * creating a "pinch point" where the polygon touches itself. By inserting the
+     * vertex into the segment, the polygon can be properly processed by boolean
+     * operations.
+     */
+    void splitSelfTouchingOutlines();
 
     /**
      * Check if two line segments are collinear and overlap.

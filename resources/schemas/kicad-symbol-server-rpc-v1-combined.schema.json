@@ -1,0 +1,518 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://go.kicad.org/schemas/kicad-rpc-v1-message-combined.json",
+  "title": "KiCad Remote Provider Panel RPC Message (v1, combined)",
+  "description": "Embedded provider panel RPC schema. Provider-owned web UI runs inside KiCad. Typed RPC messages request KiCad-owned auth, download, import, and place operations.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "required": [
+    "version",
+    "session_id",
+    "message_id",
+    "command"
+  ],
+
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Protocol major version. For this schema: 1."
+    },
+
+    "session_id": {
+      "type": "string",
+      "description": "Session UUID (UUID-4).",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+
+    "message_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Monotonically increasing per-session message ID, starting at 1."
+    },
+
+    "response_to": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "If present, refers to the message_id of the message being responded to."
+    },
+
+    "command": {
+      "type": "string",
+      "description": "Command name for this message.",
+      "enum": [
+        "NEW_SESSION",
+        "GET_KICAD_VERSION",
+        "LIST_SUPPORTED_VERSIONS",
+        "CAPABILITIES",
+        "GET_SOURCE_INFO",
+        "REMOTE_LOGIN",
+        "DL_COMPONENT",
+        "DL_FOOTPRINT",
+        "DL_SYMBOL",
+        "DL_SPICE",
+        "DL_3DMODEL",
+        "PLACE_COMPONENT"
+      ]
+    },
+
+    "status": {
+      "type": "string",
+      "description": "Status of the message, especially for responses.",
+      "enum": ["OK", "ERROR", "PENDING"]
+    },
+
+    "error_code": {
+      "type": "string",
+      "description": "Machine-readable error code when status == ERROR.",
+      "enum": [
+        "UNKNOWN_COMMAND",
+        "UNSUPPORTED_VERSION",
+        "INVALID_PARAMETERS",
+        "INVALID_PAYLOAD",
+        "INTERNAL_ERROR",
+        "TOO_LARGE",
+        "SESSION_MISMATCH",
+        "UNAUTHORIZED_ORIGIN",
+        "NOT_FOUND",
+        "CONFLICT",
+        "NO_PROVIDER",
+        "LOGIN_FAILED",
+        "SIGN_OUT_FAILED",
+        "IMPORT_FAILED"
+      ]
+    },
+
+    "error_message": {
+      "type": "string",
+      "description": "Human-readable error description when status == ERROR."
+    },
+
+    "parameters": {
+      "type": "object",
+      "description": "Command-specific parameters. Keys are strings; values are arbitrary JSON.",
+      "additionalProperties": true
+    },
+
+    "data": {
+      "type": "string",
+      "description": "Optional payload data. Typically base64-encoded, possibly compressed.",
+      "contentEncoding": "base64"
+    }
+  },
+
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "ERROR" }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["error_code"]
+      }
+    },
+    {
+      "oneOf": [
+        {
+          "title": "NEW_SESSION message",
+          "properties": {
+            "command": { "const": "NEW_SESSION" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "client_name": { "type": "string" },
+                "client_version": { "type": "string" },
+                "supported_versions": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 1 }
+                },
+                "server_name": { "type": "string" },
+                "server_version": { "type": "string" },
+                "reason": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "GET_KICAD_VERSION message",
+          "properties": {
+            "command": { "const": "GET_KICAD_VERSION" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "kicad_version": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "LIST_SUPPORTED_VERSIONS message",
+          "properties": {
+            "command": { "const": "LIST_SUPPORTED_VERSIONS" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "supported_versions": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 1 }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "CAPABILITIES message",
+          "properties": {
+            "command": { "const": "CAPABILITIES" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "commands": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "max_message_size": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "compression": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["NONE", "ZSTD"]
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "GET_SOURCE_INFO message",
+          "properties": {
+            "command": { "const": "GET_SOURCE_INFO" },
+            "parameters": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "REMOTE_LOGIN message",
+          "description": "Requests KiCad-managed authentication or sign-out. KiCad owns token storage and embedded session bootstrap.",
+          "properties": {
+            "command": { "const": "REMOTE_LOGIN" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "interactive": {
+                  "type": "boolean"
+                },
+                "sign_out": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "DL_COMPONENT message",
+          "description": "Imports a component bundle. The manifest form uses an assets array with download URLs. The inline form uses a base64 payload in the data field.",
+          "properties": {
+            "command": { "const": "DL_COMPONENT" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "compression": {
+                  "type": "string",
+                  "enum": ["NONE", "ZSTD"]
+                },
+                "library": {
+                  "type": "string",
+                  "description": "Target library name applied to all entries in the bundle."
+                },
+                "part_id": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "license": {
+                  "type": "string"
+                },
+                "symbol_name": {
+                  "type": "string"
+                },
+                "library_name": {
+                  "type": "string"
+                },
+                "assets": {
+                  "type": "array",
+                  "description": "Manifest-style asset list. Each entry identifies a downloadable asset for one part of the component.",
+                  "items": {
+                    "$ref": "#/$defs/asset_entry"
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "DL_FOOTPRINT message",
+          "properties": {
+            "command": { "const": "DL_FOOTPRINT" },
+            "parameters": {
+              "type": "object",
+              "required": ["mode", "compression", "content_type"],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["SAVE", "PLACE"]
+                },
+                "compression": {
+                  "type": "string",
+                  "enum": ["NONE", "ZSTD"]
+                },
+                "content_type": {
+                  "type": "string",
+                  "enum": ["KICAD_FOOTPRINT_V1"]
+                },
+                "library": {
+                  "type": "string",
+                  "description": "Target library name. Downloads with the same library value are grouped together. Falls back to 'footprints' if not provided."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Footprint name within the library."
+                }
+              },
+              "additionalProperties": true
+            },
+            "required": ["command", "parameters", "data"]
+          }
+        },
+
+        {
+          "title": "DL_SYMBOL message",
+          "properties": {
+            "command": { "const": "DL_SYMBOL" },
+            "parameters": {
+              "type": "object",
+              "required": ["mode", "compression", "content_type"],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["SAVE", "PLACE"]
+                },
+                "compression": {
+                  "type": "string",
+                  "enum": ["NONE", "ZSTD"]
+                },
+                "content_type": {
+                  "type": "string",
+                  "enum": ["KICAD_SYMBOL_V1"]
+                },
+                "library": {
+                  "type": "string",
+                  "description": "Target library name. Downloads with the same library value are grouped together. Falls back to 'symbols' if not provided."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Symbol name within the library."
+                }
+              },
+              "additionalProperties": true
+            },
+            "required": ["command", "parameters", "data"]
+          }
+        },
+
+        {
+          "title": "DL_SPICE message",
+          "properties": {
+            "command": { "const": "DL_SPICE" },
+            "parameters": {
+              "type": "object",
+              "required": ["mode", "compression", "content_type"],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["SAVE", "PLACE"]
+                },
+                "compression": {
+                  "type": "string",
+                  "enum": ["NONE", "ZSTD"]
+                },
+                "content_type": {
+                  "type": "string",
+                  "enum": ["KICAD_SPICE_MODEL_V1"]
+                },
+                "library": {
+                  "type": "string",
+                  "description": "Target library/directory name for SPICE models."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "SPICE model filename."
+                }
+              },
+              "additionalProperties": true
+            },
+            "required": ["command", "parameters", "data"]
+          }
+        },
+
+        {
+          "title": "PLACE_COMPONENT message",
+          "description": "Imports and places a provider-selected component. Parameters mirror DL_COMPONENT.",
+          "properties": {
+            "command": { "const": "PLACE_COMPONENT" },
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "compression": {
+                  "type": "string",
+                  "enum": ["NONE", "ZSTD"]
+                },
+                "library": {
+                  "type": "string"
+                },
+                "part_id": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "license": {
+                  "type": "string"
+                },
+                "symbol_name": {
+                  "type": "string"
+                },
+                "library_name": {
+                  "type": "string"
+                },
+                "assets": {
+                  "type": "array",
+                  "description": "Manifest-style asset list. Each entry identifies a downloadable asset for one part of the component.",
+                  "items": {
+                    "$ref": "#/$defs/asset_entry"
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+
+        {
+          "title": "DL_3DMODEL message",
+          "properties": {
+            "command": { "const": "DL_3DMODEL" },
+            "parameters": {
+              "type": "object",
+              "required": ["mode", "compression", "content_type"],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["SAVE", "PLACE"]
+                },
+                "compression": {
+                  "type": "string",
+                  "enum": ["NONE", "ZSTD"]
+                },
+                "content_type": {
+                  "type": "string",
+                  "enum": [
+                    "KICAD_3D_MODEL_STEP",
+                    "KICAD_3D_MODEL_WRL"
+                  ]
+                },
+                "library": {
+                  "type": "string",
+                  "description": "Target library/directory name for 3D models."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "3D model filename."
+                }
+              },
+              "additionalProperties": true
+            },
+            "required": ["command", "parameters", "data"]
+          }
+        }
+      ]
+    }
+  ],
+
+  "$defs": {
+    "asset_entry": {
+      "type": "object",
+      "description": "A downloadable asset within a component manifest.",
+      "required": [
+        "asset_type",
+        "content_type",
+        "size_bytes",
+        "download_url"
+      ],
+      "properties": {
+        "asset_type": {
+          "type": "string",
+          "enum": ["symbol", "footprint", "3dmodel", "spice"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "target_library": {
+          "type": "string"
+        },
+        "target_name": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "download_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

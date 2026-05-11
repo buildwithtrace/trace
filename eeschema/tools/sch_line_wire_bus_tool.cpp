@@ -50,6 +50,7 @@
 #include <sch_bus_entry.h>
 #include <sch_connection.h>
 #include <sch_edit_frame.h>
+#include <widgets/wx_infobar.h>
 #include <sch_junction.h>
 #include <sch_line.h>
 #include <sch_screen.h>
@@ -196,7 +197,7 @@ private:
             }
             else
             {
-                Append( id, name, wxEmptyString );
+                Append( id, SCH_CONNECTION::PrintBusForUI( name ), name );
             }
         }
     }
@@ -1485,6 +1486,9 @@ SCH_JUNCTION* SCH_LINE_WIRE_BUS_TOOL::AddJunction( SCH_COMMIT* aCommit, SCH_SCRE
                                            const VECTOR2I& aPos )
 {
     SCH_JUNCTION* junction = new SCH_JUNCTION( aPos );
+
+    if( aScreen->GetBus( aPos ) )
+        junction->SetLayer( LAYER_BUS_JUNCTION );
 
     m_frame->AddToScreen( junction, aScreen );
     aCommit->Added( junction, aScreen );

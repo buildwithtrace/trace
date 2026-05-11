@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -55,7 +56,7 @@ public:
     // Generated library nickname prefix
     wxString m_PcmLibPrefix;
 
-    bool     m_KiCadUpdateCheck;
+    bool     m_TraceUpdateCheck;
     wxString m_lastUpdateCheckTime;
     wxString m_lastReceivedUpdate;
 
@@ -63,6 +64,11 @@ public:
     wxPoint m_TemplateWindowPos;
     // Last size of the template window
     wxSize m_TemplateWindowSize;
+    // Last used project template path (for pre-selection in dialog)
+    wxString m_LastUsedTemplate;
+
+    std::vector<wxString> m_RecentTemplates;
+    int                   m_TemplateFilterChoice = 0;
 
 protected:
     virtual std::string getLegacyFrameName() const override { return "KicadFrame"; }

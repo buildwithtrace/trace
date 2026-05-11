@@ -52,12 +52,13 @@ class ERC_TESTER
 {
 public:
 
-    ERC_TESTER( SCHEMATIC* aSchematic ) :
+    ERC_TESTER( SCHEMATIC* aSchematic, bool aShowAllErrors = false ) :
             m_schematic( aSchematic ),
             m_settings( aSchematic->ErcSettings() ),
             m_sheetList( aSchematic->BuildSheetListSortedByPageNumbers() ),
             m_screens( aSchematic->Root() ),
-            m_nets( aSchematic->ConnectionGraph()->GetNetMap() )
+            m_nets( aSchematic->ConnectionGraph()->GetNetMap() ),
+            m_showAllErrors( aShowAllErrors )
     {
         m_sheetList.GetMultiUnitSymbols( m_refMap, true );
     }
@@ -76,6 +77,12 @@ public:
      * Check for any unresolved text variable references.
      */
     void TestTextVars( DS_PROXY_VIEW_ITEM* aDrawingSheet );
+
+    /**
+     * Check for field names with leading or trailing whitespace.
+     * @return warning count
+     */
+    int TestFieldNameWhitespace();
 
     /**
      * Test if all units of each multiunit symbol have the same footprint assigned.
@@ -101,6 +108,14 @@ public:
      * @return the error count
      */
     int TestMultUnitPinConflicts();
+
+    /**
+     * Checks if duplicate pin numbers within a symbol are connected to different nets.
+     * Symbols may have multiple pins with the same number if they are all connected to
+     * the same net. If duplicate pins are on different nets, an error is reported.
+     * @return the error count
+     */
+    int TestDuplicatePinNets();
 
     /**
      * Checks for ground-labeled pins not on a ground net while another pin is.
@@ -191,6 +206,7 @@ private:
     SCH_SCREENS                  m_screens;
     SCH_MULTI_UNIT_REFERENCE_MAP m_refMap;
     const NET_MAP&               m_nets;
+    bool                         m_showAllErrors;
 };
 
 

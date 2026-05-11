@@ -24,6 +24,8 @@
 #include <dialogs/dialog_edit_library_tables.h>
 #include <panel_sym_lib_table_base.h>
 #include <lib_table_grid_data_model.h>
+#include <sch_io/sch_io_mgr.h>
+#include <io/io_base.h>
 
 
 class LIBRARY_TABLE;
@@ -43,6 +45,7 @@ public:
     bool TransferDataFromWindow() override;
 
     void AddTable( LIBRARY_TABLE* table, const wxString& aTitle, bool aClosable );
+    void OpenTable( const std::shared_ptr<LIBRARY_TABLE>& table, const wxString& aTitle );
 
 private:
     /**
@@ -61,6 +64,7 @@ private:
     void adjustPathSubsGridColumns( int aWidth );
     void onConvertLegacyLibraries( wxCommandEvent& event ) override;
 
+    void onNotebookPageChangeRequest( wxAuiNotebookEvent& aEvent );
     void onNotebookPageCloseRequest( wxAuiNotebookEvent& aEvent );
 
     void onPageChange( wxAuiNotebookEvent& event ) override;
@@ -69,6 +73,8 @@ private:
     /// Populate the readonly environment variable table with names and values
     /// by examining all the full_uri columns.
     void populateEnvironReadOnlyTable();
+
+    void populatePluginList();
 
     SYMBOL_LIB_TABLE_GRID_DATA_MODEL* get_model( int aPage ) const;
     SYMBOL_LIB_TABLE_GRID_DATA_MODEL* cur_model() const { return get_model( m_notebook->GetSelection() ); }
@@ -79,10 +85,15 @@ private:
 private:
     PROJECT*                    m_project;
     DIALOG_EDIT_LIBRARY_TABLES* m_parent;
+    bool                        m_suppressNotebookPageEvents;
     wxArrayString               m_pluginChoices;
 
     wxString                    m_lastProjectLibDir;   //< Transient (unsaved) last browsed folder when adding a
                                                        // project level library.
+
+    std::vector<std::shared_ptr<LIBRARY_TABLE>> m_nestedTables;
+
+    std::map<SCH_IO_MGR::SCH_FILE_T, IO_BASE::IO_FILE_DESC> m_supportedSymFiles;
 };
 
 

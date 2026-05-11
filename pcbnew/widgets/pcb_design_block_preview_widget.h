@@ -48,6 +48,12 @@ public:
     ~PCB_DESIGN_BLOCK_PREVIEW_WIDGET() override;
 
     /**
+     * Return whether the widget initialized properly. This could return false if Kiway is
+     * not available. If this returns false, no other methods should be called.
+     */
+    bool IsInitialized() const override { return m_preview != nullptr; }
+
+    /**
      * Set the contents of the status label and display it.
      */
     void SetStatusText( const wxString& aText ) override;

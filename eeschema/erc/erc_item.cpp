@@ -62,7 +62,7 @@ ERC_ITEM ERC_ITEM::powerpinNotDriven( ERCE_POWERPIN_NOT_DRIVEN,
         wxT( "power_pin_not_driven" ) );
 
 ERC_ITEM ERC_ITEM::duplicatePinError( ERCE_DUPLICATE_PIN_ERROR,
-        _HKI( "Multiple pins with the same pin number" ),
+        _HKI( "Duplicate pins with different nets" ),
         wxT( "duplicate_pins" ) );
 
 ERC_ITEM ERC_ITEM::pinTableWarning( ERCE_PIN_TO_PIN_WARNING,
@@ -164,6 +164,10 @@ ERC_ITEM ERC_ITEM::groundPinNotGround( ERCE_GROUND_PIN_NOT_GROUND,
 ERC_ITEM ERC_ITEM::stackedPinName( ERCE_STACKED_PIN_SYNTAX,
         _HKI( "Pin name resembles stacked pin" ),
         wxT( "stacked_pin_name" ) );
+
+ERC_ITEM ERC_ITEM::fieldNameWhitespace( ERCE_FIELD_NAME_WHITESPACE,
+        _HKI( "Field name has leading or trailing whitespace" ),
+        wxT( "field_name_whitespace" ) );
 
 ERC_ITEM ERC_ITEM::unresolvedVariable( ERCE_UNRESOLVED_VARIABLE,
         _HKI( "Unresolved text variable" ),
@@ -273,6 +277,7 @@ std::vector<std::reference_wrapper<RC_ITEM>> ERC_ITEM::allItemTypes(
 
             ERC_ITEM::heading_misc,
             ERC_ITEM::stackedPinName,
+            ERC_ITEM::fieldNameWhitespace,
             ERC_ITEM::unannotated,
             ERC_ITEM::unresolvedVariable,
             ERC_ITEM::undefinedNetclass,
@@ -357,6 +362,7 @@ std::shared_ptr<ERC_ITEM> ERC_ITEM::Create( int aErrorCode )
     case ERCE_MISSING_BIDI_PIN:        return std::make_shared<ERC_ITEM>( missingBidiPin );
     case ERCE_UNCONNECTED_WIRE_ENDPOINT: return std::make_shared<ERC_ITEM>( unconnectedWireEndpoint );
     case ERCE_STACKED_PIN_SYNTAX:      return std::make_shared<ERC_ITEM>( stackedPinName );
+    case ERCE_FIELD_NAME_WHITESPACE:   return std::make_shared<ERC_ITEM>( fieldNameWhitespace );
     case ERCE_UNSPECIFIED:
     default:
         wxFAIL_MSG( wxS( "Unknown ERC error code" ) );

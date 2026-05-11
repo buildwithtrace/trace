@@ -1,0 +1,7 @@
+version: "1.3.0-beta"
+summary: "Symbol and footprint generation for AI-assisted design and diagnostics"
+changes:
+  - category: "New Features"
+    items:
+      - "Symbol and footprint generation for AI-assisted design"
+      - "Diagnostic logging"

@@ -23,7 +23,6 @@
 #define FP_TREE_MODEL_ADAPTER_H
 
 #include <lib_tree_model_adapter.h>
-#include <footprint_info.h>
 
 class FOOTPRINT_LIBRARY_ADAPTER;
 class PCB_BASE_FRAME;
@@ -48,8 +47,6 @@ protected:
      * Constructor; takes a set of libraries to be included in the search.
      */
     FP_TREE_MODEL_ADAPTER( PCB_BASE_FRAME* aParent, FOOTPRINT_LIBRARY_ADAPTER* aLibs );
-
-    std::vector<LIB_TREE_ITEM*> getFootprints( const wxString& aLibName );
 
     PROJECT::LIB_TYPE_T getLibType() override { return PROJECT::LIB_TYPE_T::FOOTPRINT_LIB; }
 

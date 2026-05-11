@@ -33,10 +33,13 @@
 #define  EDA_BASE_FRAME_H_
 
 
+#include <functional>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
+#include <memory>
 #include <nlohmann/json_fwd.hpp>
 
 #include <wx/aui/aui.h>
@@ -44,10 +47,9 @@
 #include <frame_type.h>
 #include <hotkeys_basic.h>
 #include <kiway_holder.h>
-#include <tool/action_toolbar.h>
 #include <tool/tools_holder.h>
 #include <widgets/ui_common.h>
-#include <widgets/wx_infobar.h>
+#include <widgets/wx_infobar_message_type.h>
 #include <undo_redo_container.h>
 #include <units_provider.h>
 #include <origin_transforms.h>
@@ -89,8 +91,13 @@ class APPEARANCE_CONTROLS_3D;
 struct WINDOW_SETTINGS;
 struct WINDOW_STATE;
 class ACTION_MENU;
+class ACTION_TOOLBAR;
+class ACTION_TOOLBAR_CONTROL;
 class TOOL_INTERACTIVE;
 class TOOLBAR_SETTINGS;
+class WX_INFOBAR;
+
+using ACTION_TOOLBAR_CONTROL_FACTORY = std::function<void( ACTION_TOOLBAR* )>;
 
 #define DEFAULT_MAX_UNDO_ITEMS 0
 #define ABS_MAX_UNDO_ITEMS (INT_MAX / 2)
@@ -201,14 +208,10 @@ public:
     virtual void OnSize( wxSizeEvent& aEvent );
 
     /**
-     * Select the given action in the left toolbar group which contains it, if any.
+     * Select the given action in the toolbar group which contains it, if any.
      * This updates the displayed icon/tooltip and UI conditions for that group.
      */
-    void SelectLeftToolbarAction( const TOOL_ACTION& aAction )
-    {
-        if( m_tbLeft )
-            m_tbLeft->SelectAction( aAction );
-    }
+    void SelectToolbarAction( const TOOL_ACTION& aAction );
 
     void OnMaximize( wxMaximizeEvent& aEvent );
 
@@ -259,7 +262,7 @@ public:
      * @param aShowCloseButton true to show a close button on the right of the #WX_INFOBAR.
      */
     void ShowInfoBarError( const wxString& aErrorMsg, bool aShowCloseButton = false,
-                           WX_INFOBAR::MESSAGE_TYPE aType = WX_INFOBAR::MESSAGE_TYPE::GENERIC );
+                           INFOBAR_MESSAGE_TYPE aType = INFOBAR_MESSAGE_TYPE::GENERIC );
 
     /**
      * Show the #WX_INFOBAR displayed on the top of the canvas with a message and an error
@@ -537,7 +540,7 @@ public:
      */
     virtual void ProjectChanged() {}
 
-    const wxString& GetAboutTitle() const { return wxGetTranslation( m_aboutTitle ); }
+    wxString GetAboutTitle() const { return wxGetTranslation( m_aboutTitle ); }
 
     const wxString& GetUntranslatedAboutTitle() const { return m_aboutTitle; }
 
@@ -625,6 +628,8 @@ public:
         m_isNonUserClose = true;
         return Close( aForce );
     }
+
+    virtual void ClearToolbarControl( int aId ) { }
 
     /**
      * Update the UI in response to a change in the system colors.
@@ -729,6 +734,11 @@ protected:
     void AddMenuLanguageList( ACTION_MENU* aMasterMenu, TOOL_INTERACTIVE* aControlTool );
 
     /**
+     * An event handler called on a language menu selection.
+     */
+    void OnLanguageSelectionEvent( wxCommandEvent& aEvent );
+
+    /**
      * Execute action on accepted dropped file.
      *
      * Called in OnDropFiles() and should be populated with
@@ -740,6 +750,8 @@ protected:
     DECLARE_EVENT_TABLE()
 
 private:
+    void onUpdateUI( wxUpdateUIEvent& aEvent );
+
     /**
      * (with its unexpected name so it does not collide with the real OnWindowClose()
      * function provided in derived classes) is called just before a window
@@ -790,7 +802,7 @@ private:
 
     wxAuiManager            m_auimgr;
     wxString                m_perspective;       // wxAuiManager perspective.
-    nlohmann::json          m_auiLayoutState;
+    std::unique_ptr<nlohmann::json> m_auiLayoutState;
     WX_INFOBAR*             m_infoBar;           // Infobar for the frame
     APPEARANCE_CONTROLS_3D* m_appearancePanel;
     wxString                m_configName;        // Prefix used to identify some params (frame
@@ -816,6 +828,9 @@ private:
 
     /// Map containing the UI update handlers registered with wx for each action.
     std::map<int, UIUpdateHandler> m_uiUpdateMap;
+
+    /// True once the single wxID_ANY UPDATE_UI handler has been bound.
+    bool m_uiUpdateHandlerBound;
 
     /// Set by the close window event handler after frames are asked if they can close.
     /// Allows other functions when called to know our state is cleanup.

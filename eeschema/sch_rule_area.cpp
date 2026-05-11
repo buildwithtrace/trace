@@ -38,6 +38,20 @@
 #include <sch_screen.h>
 #include <sch_sheet_path.h>
 #include <geometry/shape_rect.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
+
+
+SCH_RULE_AREA::~SCH_RULE_AREA()
+{
+    // Break bidirectional references so that items destroyed after this rule area
+    // don't try to call RemoveItem() on freed memory.
+    for( SCH_ITEM* item : m_items )
+        item->RemoveRuleAreaFromCache( this );
+
+    for( SCH_DIRECTIVE_LABEL* label : m_directives )
+        label->RemoveConnectedRuleArea( this );
+}
 
 
 wxString SCH_RULE_AREA::GetClass() const
@@ -172,6 +186,9 @@ void SCH_RULE_AREA::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OP
 
     if( bg == COLOR4D::UNSPECIFIED || !aPlotter->GetColorMode() )
         bg = COLOR4D::WHITE;
+
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
 
     if( aDimmed )
     {
@@ -402,6 +419,20 @@ void SCH_RULE_AREA::addContainedItem( SCH_ITEM* item )
     item->AddRuleAreaToCache( this );
     m_items.insert( item );
     m_itemIDs.insert( item->m_Uuid );
+}
+
+
+void SCH_RULE_AREA::RemoveItem( SCH_ITEM* aItem )
+{
+    m_items.erase( aItem );
+    m_prev_items.erase( aItem->m_Uuid );
+}
+
+
+void SCH_RULE_AREA::RemoveDirective( SCH_DIRECTIVE_LABEL* aLabel )
+{
+    m_directives.erase( aLabel );
+    m_prev_directives.erase( aLabel->m_Uuid );
 }
 
 

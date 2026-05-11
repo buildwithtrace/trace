@@ -459,6 +459,12 @@ public:
      */
     void SetSheetLayer( const wxString& aSheetLayer ) { m_sheetLayer = aSheetLayer;  }
 
+    /**
+     * Set the current variant name and description to draw/plot
+     */
+    void SetVariantName( const wxString& aVariant ) { m_variantName = aVariant; }
+    void SetVariantDesc( const wxString& aDesc ) { m_variantDesc = aDesc; }
+
     void SetDefaultPenSize( int aPenSize ) { m_penSize = aPenSize; }
     int GetDefaultPenSize() const { return m_penSize; }
 
@@ -578,6 +584,8 @@ protected:
     wxString           m_sheetPath;       // for text variable references
     wxString           m_pageNumber;      ///< The actual page number displayed in the title block.
     wxString           m_sheetLayer;      // for text variable references
+    wxString           m_variantName;     // for ${VARIANT} text variable reference
+    wxString           m_variantDesc;     // for ${VARIANT_DESC} text variable reference
     const PROJECT*     m_project;         // for project-based text variable references
     int                m_flags;
 

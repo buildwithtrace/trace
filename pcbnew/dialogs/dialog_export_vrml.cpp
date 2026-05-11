@@ -45,6 +45,9 @@ DIALOG_EXPORT_VRML::DIALOG_EXPORT_VRML( PCB_EDIT_FRAME* aEditFrame ) :
 {
     m_filePicker->SetFocus();
 
+    m_xOrigin.SetCoordType( ORIGIN_TRANSFORMS::ABS_X_COORD );
+    m_yOrigin.SetCoordType( ORIGIN_TRANSFORMS::ABS_Y_COORD );
+
     SetupStandardButtons();
 
     // Now all widgets have the size fixed, call FinishDialogSettings
@@ -101,7 +104,7 @@ int BOARD_EDITOR_CONTROL::ExportVRML( const TOOL_EVENT& aEvent )
     else
     {
         // Origin = board center:
-        BOX2I  bbox = board->ComputeBoundingBox( true );
+        BOX2I  bbox = board->ComputeBoundingBox( true, true );
         aXRef = pcbIUScale.IUTomm( bbox.GetCenter().x );
         aYRef = pcbIUScale.IUTomm( bbox.GetCenter().y );
     }

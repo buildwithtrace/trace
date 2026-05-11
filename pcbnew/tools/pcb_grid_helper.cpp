@@ -29,6 +29,7 @@
 #include <algorithm>
 
 #include <advanced_config.h>
+#include <board_item.h>
 #include <pcb_dimension.h>
 #include <pcb_shape.h>
 #include <footprint.h>
@@ -36,6 +37,7 @@
 #include <pad.h>
 #include <pcb_group.h>
 #include <pcb_point.h>
+#include <pcb_barcode.h>
 #include <pcb_reference_image.h>
 #include <pcb_track.h>
 #include <zone.h>
@@ -177,6 +179,9 @@ PCB_GRID_HELPER::PCB_GRID_HELPER( TOOL_MANAGER* aToolMgr, MAGNETIC_SETTINGS* aMa
     m_viewSnapPoint.SetDrawAtZero( true );
     view->Add( &m_viewSnapPoint );
     view->SetVisible( &m_viewSnapPoint, false );
+
+    if( m_toolMgr->GetModel() )
+        static_cast<BOARD*>( aToolMgr->GetModel() )->AddListener( this );
 }
 
 
@@ -189,6 +194,9 @@ PCB_GRID_HELPER::~PCB_GRID_HELPER()
 
     view->Remove( &m_viewAxis );
     view->Remove( &m_viewSnapPoint );
+
+    if( m_toolMgr->GetModel() )
+        static_cast<BOARD*>( m_toolMgr->GetModel() )->RemoveListener( this );
 }
 
 
@@ -436,6 +444,7 @@ VECTOR2I PCB_GRID_HELPER::AlignToArc( const VECTOR2I& aPoint, const SHAPE_ARC& a
 
 VECTOR2I PCB_GRID_HELPER::SnapToPad( const VECTOR2I& aMousePos, std::deque<PAD*>& aPads )
 {
+    wxLogTrace( traceSnap, "SnapToPad: mouse pos (%d, %d), pads count: %zu", aMousePos.x, aMousePos.y, aPads.size() );
     clearAnchors();
 
     for( BOARD_ITEM* item : aPads )
@@ -465,11 +474,42 @@ VECTOR2I PCB_GRID_HELPER::SnapToPad( const VECTOR2I& aMousePos, std::deque<PAD*>
 }
 
 
+void PCB_GRID_HELPER::OnBoardItemRemoved( BOARD& aBoard, BOARD_ITEM* aRemovedItem )
+{
+    // If the item being removed is involved in the snap, clear the snap item
+    if( m_snapItem )
+    {
+        for( EDA_ITEM* eda_item : m_snapItem->items )
+        {
+            if( eda_item->IsBOARD_ITEM() )
+            {
+                BOARD_ITEM* item = static_cast<BOARD_ITEM*>( eda_item );
+
+                if( item == aRemovedItem || item->GetParentFootprint() == aRemovedItem )
+                {
+                    m_snapItem = std::nullopt;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+
+void PCB_GRID_HELPER::OnBoardItemsRemoved( BOARD& aBoard, std::vector<BOARD_ITEM*>& aBoardItems )
+{
+    // This is a bulk-remove.  Simply clearing the snap item will be the most performant.
+    m_snapItem = std::nullopt;
+}
+
+
 VECTOR2I PCB_GRID_HELPER::BestDragOrigin( const VECTOR2I &aMousePos,
                                           std::vector<BOARD_ITEM*>& aItems,
                                           GRID_HELPER_GRIDS aGrid,
                                           const PCB_SELECTION_FILTER_OPTIONS* aSelectionFilter )
 {
+    wxLogTrace( traceSnap, "BestDragOrigin: mouse pos (%d, %d), items count: %zu", aMousePos.x, aMousePos.y,
+                aItems.size() );
     clearAnchors();
 
     computeAnchors( aItems, aMousePos, true, aSelectionFilter, nullptr, true );
@@ -486,6 +526,9 @@ VECTOR2I PCB_GRID_HELPER::BestDragOrigin( const VECTOR2I &aMousePos,
     {
         minDist = nearestOrigin->Distance( aMousePos );
         best = nearestOrigin;
+
+        wxLogTrace( traceSnap, "  nearest origin winning at (%d, %d), distance=%f", nearestOrigin->pos.x,
+                    nearestOrigin->pos.y, minDist );
     }
 
     if( nearestCorner )
@@ -496,6 +539,9 @@ VECTOR2I PCB_GRID_HELPER::BestDragOrigin( const VECTOR2I &aMousePos,
         {
             minDist = dist;
             best = nearestCorner;
+
+            wxLogTrace( traceSnap, "  nearest corner winning at (%d, %d), distance=%f", nearestCorner->pos.x,
+                        nearestCorner->pos.y, dist );
         }
     }
 
@@ -504,10 +550,17 @@ VECTOR2I PCB_GRID_HELPER::BestDragOrigin( const VECTOR2I &aMousePos,
         double dist = nearestOutline->Distance( aMousePos );
 
         if( minDist > lineSnapMinCornerDistance && dist < minDist )
+        {
             best = nearestOutline;
+
+            wxLogTrace( traceSnap, "  nearest outline winning at (%d, %d), distance=%f", nearestOutline->pos.x,
+                        nearestOutline->pos.y, dist );
+        }
     }
 
-    return best ? best->pos : aMousePos;
+    VECTOR2I ret = best ? best->pos : aMousePos;
+    wxLogTrace( traceSnap, "  have best: %s, returning (%d, %d)", best ? "yes" : "no", ret.x, ret.y );
+    return ret;
 }
 
 
@@ -552,8 +605,8 @@ VECTOR2I PCB_GRID_HELPER::BestSnapAnchor( const VECTOR2I& aOrigin, const LSET& a
     int snapRange = KiROUND( m_enableGrid ? std::min( snapScale, GetVisibleGrid().x ) : snapScale );
 
     //Respect limits of coordinates representation
-    const BOX2I visibilityHorizon =
-            BOX2ISafe( VECTOR2D( aOrigin ) - snapRange / 2.0, VECTOR2D( snapRange, snapRange ) );
+    const BOX2I visibilityHorizon = BOX2ISafe( VECTOR2D( aOrigin ) - snapRange / 2.0,
+                                               VECTOR2D( snapRange, snapRange ) );
 
     clearAnchors();
 
@@ -564,8 +617,7 @@ VECTOR2I PCB_GRID_HELPER::BestSnapAnchor( const VECTOR2I& aOrigin, const LSET& a
     VECTOR2I nearestGrid = Align( aOrigin, aGrid );
     const VECTOR2D gridSize = GetGridSize( aGrid );
 
-    const int hysteresisWorld =
-            KiROUND( m_toolMgr->GetView()->ToWorld( ADVANCED_CFG::GetCfg().m_SnapHysteresis ) );
+    const int hysteresisWorld = KiROUND( m_toolMgr->GetView()->ToWorld( ADVANCED_CFG::GetCfg().m_SnapHysteresis ) );
     const int snapIn = std::max( 0, snapRange - hysteresisWorld );
     const int snapOut = snapRange + hysteresisWorld;
 
@@ -1432,414 +1484,438 @@ void PCB_GRID_HELPER::computeAnchors( BOARD_ITEM* aItem, const VECTOR2I& aRefPos
 
                 switch( shape->GetShape() )
                 {
-                    case SHAPE_T::CIRCLE:
+                case SHAPE_T::CIRCLE:
+                {
+                    const int r = ( start - end ).EuclideanNorm();
+
+                    addAnchor( start, ORIGIN | SNAPPABLE, shape, POINT_TYPE::PT_CENTER );
+
+                    addAnchor( start + VECTOR2I( -r, 0 ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
+                    addAnchor( start + VECTOR2I( r, 0 ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
+                    addAnchor( start + VECTOR2I( 0, -r ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
+                    addAnchor( start + VECTOR2I( 0, r ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
+                    break;
+                }
+
+                case SHAPE_T::ARC:
+                    addAnchor( shape->GetStart(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
+                    addAnchor( shape->GetEnd(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
+                    addAnchor( shape->GetArcMid(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_MID );
+                    addAnchor( shape->GetCenter(), ORIGIN | SNAPPABLE, shape, POINT_TYPE::PT_CENTER );
+                    break;
+
+                case SHAPE_T::RECTANGLE:
+                {
+                    addRectPoints( BOX2I::ByCorners( start, end ), *shape );
+                    break;
+                }
+
+                case SHAPE_T::SEGMENT:
+                    addAnchor( start, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
+                    addAnchor( end, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
+                    addAnchor( shape->GetCenter(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_MID );
+                    break;
+
+                case SHAPE_T::POLY:
+                {
+                    SHAPE_LINE_CHAIN lc;
+                    lc.SetClosed( true );
+                    for( const VECTOR2I& p : shape->GetPolyPoints() )
                     {
-                        const int r = ( start - end ).EuclideanNorm();
-
-                        addAnchor( start, ORIGIN | SNAPPABLE, shape, POINT_TYPE::PT_CENTER );
-
-                        addAnchor( start + VECTOR2I( -r, 0 ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
-                        addAnchor( start + VECTOR2I( r, 0 ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
-                        addAnchor( start + VECTOR2I( 0, -r ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
-                        addAnchor( start + VECTOR2I( 0, r ), OUTLINE | SNAPPABLE, shape, POINT_TYPE::PT_QUADRANT );
-                        break;
+                        addAnchor( p, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_CORNER );
+                        lc.Append( p );
                     }
 
-                    case SHAPE_T::ARC:
-                        addAnchor( shape->GetStart(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
-                        addAnchor( shape->GetEnd(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
-                        addAnchor( shape->GetArcMid(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_MID );
-                        addAnchor( shape->GetCenter(), ORIGIN | SNAPPABLE, shape, POINT_TYPE::PT_CENTER );
-                        break;
+                    addAnchor( lc.NearestPoint( aRefPos ), OUTLINE, aItem );
+                    break;
+                }
 
-                    case SHAPE_T::RECTANGLE:
-                    {
-                        addRectPoints( BOX2I::ByCorners( start, end ), *shape );
-                        break;
-                    }
+                case SHAPE_T::BEZIER:
+                    addAnchor( start, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
+                    addAnchor( end, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
+                    KI_FALLTHROUGH;
 
-                    case SHAPE_T::SEGMENT:
-                        addAnchor( start, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
-                        addAnchor( end, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
-                        addAnchor( shape->GetCenter(), CORNER | SNAPPABLE, shape, POINT_TYPE::PT_MID );
-                        break;
-
-                    case SHAPE_T::POLY:
-                    {
-                        SHAPE_LINE_CHAIN lc;
-                        lc.SetClosed( true );
-                        for( const VECTOR2I& p : shape->GetPolyPoints() )
-                        {
-                            addAnchor( p, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_CORNER );
-                            lc.Append( p );
-                        }
-
-                        addAnchor( lc.NearestPoint( aRefPos ), OUTLINE, aItem );
-                        break;
-                    }
-
-                    case SHAPE_T::BEZIER:
-                        addAnchor( start, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
-                        addAnchor( end, CORNER | SNAPPABLE, shape, POINT_TYPE::PT_END );
-                        KI_FALLTHROUGH;
-
-                    default:
-                        addAnchor( shape->GetPosition(), ORIGIN | SNAPPABLE, shape );
-                        break;
+                default:
+                    addAnchor( shape->GetPosition(), ORIGIN | SNAPPABLE, shape );
+                    break;
                 }
             };
 
     switch( aItem->Type() )
     {
-        case PCB_FOOTPRINT_T:
+    case PCB_FOOTPRINT_T:
+    {
+        FOOTPRINT* footprint = static_cast<FOOTPRINT*>( aItem );
+        bool       footprintVisible = checkVisibility( footprint );
+
+        for( PAD* pad : footprint->Pads() )
         {
-            FOOTPRINT* footprint = static_cast<FOOTPRINT*>( aItem );
-
-            for( PAD* pad : footprint->Pads() )
-            {
-                if( aFrom )
-                {
-                    if( aSelectionFilter && !aSelectionFilter->pads )
-                        continue;
-                }
-                else
-                {
-                    if( m_magneticSettings->pads != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
-                        continue;
-                }
-
-                if( !checkVisibility( pad ) )
-                    continue;
-
-                if( !pad->GetBoundingBox().Contains( aRefPos ) )
-                    continue;
-
-                pad->Padstack().ForEachUniqueLayer(
-                        [&]( PCB_LAYER_ID aLayer )
-                        {
-                            if( !isHighContrast
-                                || PadstackUniqueLayerAppliesToLayer( pad->Padstack(), aLayer,
-                                                                      activeHighContrastPrimaryLayer ) )
-                            {
-                                handlePadShape( pad, aLayer );
-                            }
-                        } );
-            }
-
-            // Points are also pick-up points
-            for( const PCB_POINT* pt : footprint->Points() )
-            {
-                if( aSelectionFilter && !aSelectionFilter->points )
-                    continue;
-
-                if( !checkVisibility( pt ) )
-                    continue;
-
-                addAnchor( pt->GetPosition(), ORIGIN | SNAPPABLE, footprint, POINT_TYPE::PT_CENTER );
-            }
-
-            if( aFrom && aSelectionFilter && !aSelectionFilter->footprints )
-                break;
-
-            // If the cursor is not over a pad, snap to the anchor (if visible) or the center
-            // (if markedly different from the anchor).
-            VECTOR2I position = footprint->GetPosition();
-            VECTOR2I center = footprint->GetBoundingBox( false ).Centre();
-            VECTOR2I grid( GetGrid() );
-
-            if( view->IsLayerVisible( LAYER_ANCHOR ) )
-                addAnchor( position, ORIGIN | SNAPPABLE, footprint, POINT_TYPE::PT_CENTER );
-
-            if( ( center - position ).SquaredEuclideanNorm() > grid.SquaredEuclideanNorm() )
-                addAnchor( center, ORIGIN | SNAPPABLE, footprint, POINT_TYPE::PT_CENTER );
-
-            break;
-        }
-
-        case PCB_PAD_T:
             if( aFrom )
             {
                 if( aSelectionFilter && !aSelectionFilter->pads )
-                    break;
+                    continue;
             }
             else
             {
                 if( m_magneticSettings->pads != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
-                    break;
+                    continue;
             }
 
-            if( checkVisibility( aItem ) )
-            {
-                PAD* pad = static_cast<PAD*>( aItem );
+            if( !checkVisibility( pad ) )
+                continue;
 
-                pad->Padstack().ForEachUniqueLayer(
-                        [&]( PCB_LAYER_ID aLayer )
+            if( !pad->GetBoundingBox().Contains( aRefPos ) )
+                continue;
+
+            pad->Padstack().ForEachUniqueLayer(
+                    [&]( PCB_LAYER_ID aLayer )
+                    {
+                        if( !isHighContrast
+                            || PadstackUniqueLayerAppliesToLayer( pad->Padstack(), aLayer,
+                                                                  activeHighContrastPrimaryLayer ) )
                         {
-                            if( !isHighContrast
-                                || PadstackUniqueLayerAppliesToLayer( pad->Padstack(), aLayer,
-                                                                      activeHighContrastPrimaryLayer ) )
-                            {
-                                handlePadShape( pad, aLayer );
-                            }
-                        } );
-            }
+                            handlePadShape( pad, aLayer );
+                        }
+                    } );
+        }
 
-            break;
-
-        case PCB_TEXTBOX_T:
-            if( aFrom )
-            {
-                if( aSelectionFilter && !aSelectionFilter->text )
-                    break;
-            }
-            else
-            {
-                if( !m_magneticSettings->graphics )
-                    break;
-            }
-
-            if( checkVisibility( aItem ) )
-                handleShape( static_cast<PCB_SHAPE*>( aItem ) );
-
-            break;
-
-        case PCB_TABLE_T:
-            if( aFrom )
-            {
-                if( aSelectionFilter && !aSelectionFilter->text )
-                    break;
-            }
-            else
-            {
-                if( !m_magneticSettings->graphics )
-                    break;
-            }
-
-            if( checkVisibility( aItem ) )
-            {
-                PCB_TABLE* table = static_cast<PCB_TABLE*>( aItem );
-
-                EDA_ANGLE drawAngle = table->GetCell( 0, 0 )->GetDrawRotation();
-                VECTOR2I  topLeft = table->GetCell( 0, 0 )->GetCornersInSequence( drawAngle )[0];
-                VECTOR2I  bottomLeft =
-                        table->GetCell( table->GetRowCount() - 1, 0 )->GetCornersInSequence( drawAngle )[3];
-                VECTOR2I topRight = table->GetCell( 0, table->GetColCount() - 1 )->GetCornersInSequence( drawAngle )[1];
-                VECTOR2I bottomRight = table->GetCell( table->GetRowCount() - 1, table->GetColCount() - 1 )
-                                               ->GetCornersInSequence( drawAngle )[2];
-
-                addAnchor( topLeft, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
-                addAnchor( bottomLeft, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
-                addAnchor( topRight, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
-                addAnchor( bottomRight, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
-
-                addAnchor( table->GetCenter(), ORIGIN, table, POINT_TYPE::PT_MID );
-            }
-
-            break;
-
-        case PCB_SHAPE_T:
-            if( aFrom )
-            {
-                if( aSelectionFilter && !aSelectionFilter->graphics )
-                    break;
-            }
-            else
-            {
-                if( !m_magneticSettings->graphics )
-                    break;
-            }
-
-            if( checkVisibility( aItem ) )
-                handleShape( static_cast<PCB_SHAPE*>( aItem ) );
-
-            break;
-
-        case PCB_TRACE_T:
-        case PCB_ARC_T:
-            if( aFrom )
-            {
-                if( aSelectionFilter && !aSelectionFilter->tracks )
-                    break;
-            }
-            else
-            {
-                if( m_magneticSettings->tracks != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
-                    break;
-            }
-
-            if( checkVisibility( aItem ) )
-            {
-                PCB_TRACK* track = static_cast<PCB_TRACK*>( aItem );
-
-                addAnchor( track->GetStart(), CORNER | SNAPPABLE, track, POINT_TYPE::PT_END );
-                addAnchor( track->GetEnd(), CORNER | SNAPPABLE, track, POINT_TYPE::PT_END );
-                addAnchor( track->GetCenter(), ORIGIN, track, POINT_TYPE::PT_MID );
-            }
-
-            break;
-
-        case PCB_MARKER_T:
-        case PCB_TARGET_T:
-            addAnchor( aItem->GetPosition(), ORIGIN | CORNER | SNAPPABLE, aItem, POINT_TYPE::PT_CENTER );
-            break;
-
-        case PCB_POINT_T:
+        // Points are also pick-up points
+        for( const PCB_POINT* pt : footprint->Points() )
+        {
             if( aSelectionFilter && !aSelectionFilter->points )
+                continue;
+
+            if( !checkVisibility( pt ) )
+                continue;
+
+            addAnchor( pt->GetPosition(), ORIGIN | SNAPPABLE, footprint, POINT_TYPE::PT_CENTER );
+        }
+
+        if( !footprintVisible )
+            break;
+
+        if( aFrom && aSelectionFilter && !aSelectionFilter->footprints )
+            break;
+
+        // If the cursor is not over a pad, snap to the anchor (if visible) or the center
+        // (if markedly different from the anchor).
+        VECTOR2I position = footprint->GetPosition();
+        VECTOR2I center = footprint->GetBoundingBox( false ).Centre();
+        VECTOR2I grid( GetGrid() );
+
+        // Don't snap to invisible anchors, which may be invisible because anchors are off,
+        // or the footprint is on a layer not currently visible.
+        if( view->IsLayerVisible( LAYER_ANCHOR )
+            && footprint->ViewGetLOD( LAYER_ANCHOR, view ) < view->GetScale() )
+        {
+            addAnchor( position, ORIGIN | SNAPPABLE, footprint, POINT_TYPE::PT_CENTER );
+        }
+
+        if( ( center - position ).SquaredEuclideanNorm() > grid.SquaredEuclideanNorm() )
+            addAnchor( center, ORIGIN | SNAPPABLE, footprint, POINT_TYPE::PT_CENTER );
+
+        break;
+    }
+
+    case PCB_PAD_T:
+        if( aFrom )
+        {
+            if( aSelectionFilter && !aSelectionFilter->pads )
                 break;
-
-            if( checkVisibility( aItem ) )
-                addAnchor( aItem->GetPosition(), ORIGIN | SNAPPABLE, aItem, POINT_TYPE::PT_CENTER );
-
-            break;
-
-        case PCB_VIA_T:
-            if( aFrom )
-            {
-                if( aSelectionFilter && !aSelectionFilter->vias )
-                    break;
-            }
-            else
-            {
-                if( m_magneticSettings->tracks != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
-                    break;
-            }
-
-            if( checkVisibility( aItem ) )
-                addAnchor( aItem->GetPosition(), ORIGIN | CORNER | SNAPPABLE, aItem, POINT_TYPE::PT_CENTER );
-
-            break;
-
-        case PCB_ZONE_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->zones )
+        }
+        else
+        {
+            if( m_magneticSettings->pads != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
                 break;
+        }
 
-            if( checkVisibility( aItem ) )
-            {
-                const SHAPE_POLY_SET* outline = static_cast<const ZONE*>( aItem )->Outline();
+        if( checkVisibility( aItem ) )
+        {
+            PAD* pad = static_cast<PAD*>( aItem );
 
-                SHAPE_LINE_CHAIN lc;
-                lc.SetClosed( true );
+            pad->Padstack().ForEachUniqueLayer(
+                    [&]( PCB_LAYER_ID aLayer )
+                    {
+                        if( !isHighContrast
+                            || PadstackUniqueLayerAppliesToLayer( pad->Padstack(), aLayer,
+                                                                  activeHighContrastPrimaryLayer ) )
+                        {
+                            handlePadShape( pad, aLayer );
+                        }
+                    } );
+        }
 
-                for( auto iter = outline->CIterateWithHoles(); iter; iter++ )
-                {
-                    addAnchor( *iter, CORNER | SNAPPABLE, aItem, POINT_TYPE::PT_CORNER );
-                    lc.Append( *iter );
-                }
+        break;
 
-                addAnchor( lc.NearestPoint( aRefPos ), OUTLINE, aItem );
-            }
-
-            break;
-
-        case PCB_DIM_ALIGNED_T:
-        case PCB_DIM_ORTHOGONAL_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
+    case PCB_TEXTBOX_T:
+        if( aFrom )
+        {
+            if( aSelectionFilter && !aSelectionFilter->text )
                 break;
-
-            if( checkVisibility( aItem ) )
-            {
-                const PCB_DIM_ALIGNED* dim = static_cast<const PCB_DIM_ALIGNED*>( aItem );
-                addAnchor( dim->GetCrossbarStart(), CORNER | SNAPPABLE, aItem );
-                addAnchor( dim->GetCrossbarEnd(), CORNER | SNAPPABLE, aItem );
-                addAnchor( dim->GetStart(), CORNER | SNAPPABLE, aItem );
-                addAnchor( dim->GetEnd(), CORNER | SNAPPABLE, aItem );
-            }
-
-            break;
-
-        case PCB_DIM_CENTER_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
+        }
+        else
+        {
+            if( !m_magneticSettings->graphics )
                 break;
+        }
 
-            if( checkVisibility( aItem ) )
-            {
-                const PCB_DIM_CENTER* dim = static_cast<const PCB_DIM_CENTER*>( aItem );
-                addAnchor( dim->GetStart(), CORNER | SNAPPABLE, aItem );
-                addAnchor( dim->GetEnd(), CORNER | SNAPPABLE, aItem );
+        if( checkVisibility( aItem ) )
+            handleShape( static_cast<PCB_SHAPE*>( aItem ) );
 
-                VECTOR2I start( dim->GetStart() );
-                VECTOR2I radial( dim->GetEnd() - dim->GetStart() );
+        break;
 
-                for( int i = 0; i < 2; i++ )
-                {
-                    RotatePoint( radial, -ANGLE_90 );
-                    addAnchor( start + radial, CORNER | SNAPPABLE, aItem );
-                }
-            }
-
-            break;
-
-        case PCB_DIM_RADIAL_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
+    case PCB_TABLE_T:
+        if( aFrom )
+        {
+            if( aSelectionFilter && !aSelectionFilter->text )
                 break;
-
-            if( checkVisibility( aItem ) )
-            {
-                const PCB_DIM_RADIAL* radialDim = static_cast<const PCB_DIM_RADIAL*>( aItem );
-                addAnchor( radialDim->GetStart(), CORNER | SNAPPABLE, aItem );
-                addAnchor( radialDim->GetEnd(), CORNER | SNAPPABLE, aItem );
-                addAnchor( radialDim->GetKnee(), CORNER | SNAPPABLE, aItem );
-                addAnchor( radialDim->GetTextPos(), CORNER | SNAPPABLE, aItem );
-            }
-
-            break;
-
-        case PCB_DIM_LEADER_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
+        }
+        else
+        {
+            if( !m_magneticSettings->graphics )
                 break;
+        }
 
-            if( checkVisibility( aItem ) )
-            {
-                const PCB_DIM_LEADER* leader = static_cast<const PCB_DIM_LEADER*>( aItem );
-                addAnchor( leader->GetStart(), CORNER | SNAPPABLE, aItem );
-                addAnchor( leader->GetEnd(), CORNER | SNAPPABLE, aItem );
-                addAnchor( leader->GetTextPos(), CORNER | SNAPPABLE, aItem );
-            }
+        if( checkVisibility( aItem ) )
+        {
+            PCB_TABLE* table = static_cast<PCB_TABLE*>( aItem );
 
-            break;
+            EDA_ANGLE drawAngle = table->GetCell( 0, 0 )->GetDrawRotation();
+            VECTOR2I  topLeft = table->GetCell( 0, 0 )->GetCornersInSequence( drawAngle )[0];
+            VECTOR2I  bottomLeft =
+                    table->GetCell( table->GetRowCount() - 1, 0 )->GetCornersInSequence( drawAngle )[3];
+            VECTOR2I topRight = table->GetCell( 0, table->GetColCount() - 1 )->GetCornersInSequence( drawAngle )[1];
+            VECTOR2I bottomRight = table->GetCell( table->GetRowCount() - 1, table->GetColCount() - 1 )
+                                           ->GetCornersInSequence( drawAngle )[2];
 
-        case PCB_FIELD_T:
-        case PCB_TEXT_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->text )
+            addAnchor( topLeft, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
+            addAnchor( bottomLeft, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
+            addAnchor( topRight, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
+            addAnchor( bottomRight, CORNER | SNAPPABLE, table, POINT_TYPE::PT_END );
+
+            addAnchor( table->GetCenter(), ORIGIN, table, POINT_TYPE::PT_MID );
+        }
+
+        break;
+
+    case PCB_SHAPE_T:
+        if( aFrom )
+        {
+            if( aSelectionFilter && !aSelectionFilter->graphics )
                 break;
-
-            if( checkVisibility( aItem ) )
-                addAnchor( aItem->GetPosition(), ORIGIN, aItem );
-
-            break;
-
-        case PCB_GROUP_T:
-            for( BOARD_ITEM* item : static_cast<PCB_GROUP*>( aItem )->GetBoardItems() )
-            {
-                if( checkVisibility( item ) )
-                    computeAnchors( item, aRefPos, aFrom, nullptr );
-            }
-
-            break;
-
-        case PCB_REFERENCE_IMAGE_T:
-            if( aFrom && aSelectionFilter && !aSelectionFilter->graphics )
+        }
+        else
+        {
+            if( !m_magneticSettings->graphics )
                 break;
+        }
 
-            if( checkVisibility( aItem ) )
+        if( checkVisibility( aItem ) )
+            handleShape( static_cast<PCB_SHAPE*>( aItem ) );
+
+        break;
+
+    case PCB_TRACE_T:
+    case PCB_ARC_T:
+        if( aFrom )
+        {
+            if( aSelectionFilter && !aSelectionFilter->tracks )
+                break;
+        }
+        else
+        {
+            if( m_magneticSettings->tracks != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
+                break;
+        }
+
+        if( checkVisibility( aItem ) )
+        {
+            PCB_TRACK* track = static_cast<PCB_TRACK*>( aItem );
+
+            addAnchor( track->GetStart(), CORNER | SNAPPABLE, track, POINT_TYPE::PT_END );
+            addAnchor( track->GetEnd(), CORNER | SNAPPABLE, track, POINT_TYPE::PT_END );
+            addAnchor( track->GetCenter(), ORIGIN, track, POINT_TYPE::PT_MID );
+        }
+
+        break;
+
+    case PCB_MARKER_T:
+    case PCB_TARGET_T:
+        addAnchor( aItem->GetPosition(), ORIGIN | CORNER | SNAPPABLE, aItem, POINT_TYPE::PT_CENTER );
+        break;
+
+    case PCB_POINT_T:
+        if( aSelectionFilter && !aSelectionFilter->points )
+            break;
+
+        if( checkVisibility( aItem ) )
+            addAnchor( aItem->GetPosition(), ORIGIN | SNAPPABLE, aItem, POINT_TYPE::PT_CENTER );
+
+        break;
+
+    case PCB_VIA_T:
+        if( aFrom )
+        {
+            if( aSelectionFilter && !aSelectionFilter->vias )
+                break;
+        }
+        else
+        {
+            if( m_magneticSettings->tracks != MAGNETIC_OPTIONS::CAPTURE_ALWAYS )
+                break;
+        }
+
+        if( checkVisibility( aItem ) )
+            addAnchor( aItem->GetPosition(), ORIGIN | CORNER | SNAPPABLE, aItem, POINT_TYPE::PT_CENTER );
+
+        break;
+
+    case PCB_ZONE_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->zones )
+            break;
+
+        if( checkVisibility( aItem ) )
+        {
+            const SHAPE_POLY_SET* outline = static_cast<const ZONE*>( aItem )->Outline();
+
+            SHAPE_LINE_CHAIN lc;
+            lc.SetClosed( true );
+
+            for( auto iter = outline->CIterateWithHoles(); iter; iter++ )
             {
-                const PCB_REFERENCE_IMAGE& image = static_cast<const PCB_REFERENCE_IMAGE&>( *aItem );
-                const REFERENCE_IMAGE&     refImg = image.GetReferenceImage();
-                const BOX2I                bbox = refImg.GetBoundingBox();
-
-                addRectPoints( bbox, *aItem );
-
-                if( refImg.GetTransformOriginOffset() != VECTOR2I( 0, 0 ) )
-                {
-                    addAnchor( aItem->GetPosition() + refImg.GetTransformOriginOffset(), ORIGIN,
-                               aItem, POINT_TYPE::PT_CENTER );
-                }
+                addAnchor( *iter, CORNER | SNAPPABLE, aItem, POINT_TYPE::PT_CORNER );
+                lc.Append( *iter );
             }
 
+            addAnchor( lc.NearestPoint( aRefPos ), OUTLINE, aItem );
+        }
+
+        break;
+
+    case PCB_DIM_ALIGNED_T:
+    case PCB_DIM_ORTHOGONAL_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
             break;
 
-        default:
+        if( checkVisibility( aItem ) )
+        {
+            PCB_DIM_ALIGNED* dim = static_cast<PCB_DIM_ALIGNED*>( aItem );
+            addAnchor( dim->GetCrossbarStart(), CORNER | SNAPPABLE, dim );
+            addAnchor( dim->GetCrossbarEnd(), CORNER | SNAPPABLE, dim );
+            addAnchor( dim->GetStart(), CORNER | SNAPPABLE, dim );
+            addAnchor( dim->GetEnd(), CORNER | SNAPPABLE, dim );
+        }
+
+        break;
+
+    case PCB_DIM_CENTER_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
             break;
+
+        if( checkVisibility( aItem ) )
+        {
+            PCB_DIM_CENTER* dim = static_cast<PCB_DIM_CENTER*>( aItem );
+            addAnchor( dim->GetStart(), CORNER | SNAPPABLE, dim );
+            addAnchor( dim->GetEnd(), CORNER | SNAPPABLE, dim );
+
+            VECTOR2I start( dim->GetStart() );
+            VECTOR2I radial( dim->GetEnd() - dim->GetStart() );
+
+            for( int i = 0; i < 2; i++ )
+            {
+                RotatePoint( radial, -ANGLE_90 );
+                addAnchor( start + radial, CORNER | SNAPPABLE, dim );
+            }
+        }
+
+        break;
+
+    case PCB_DIM_RADIAL_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
+            break;
+
+        if( checkVisibility( aItem ) )
+        {
+            PCB_DIM_RADIAL* radialDim = static_cast<PCB_DIM_RADIAL*>( aItem );
+            addAnchor( radialDim->GetStart(), CORNER | SNAPPABLE, radialDim );
+            addAnchor( radialDim->GetEnd(), CORNER | SNAPPABLE, radialDim );
+            addAnchor( radialDim->GetKnee(), CORNER | SNAPPABLE, radialDim );
+            addAnchor( radialDim->GetTextPos(), CORNER | SNAPPABLE, radialDim );
+        }
+
+        break;
+
+    case PCB_DIM_LEADER_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->dimensions )
+            break;
+
+        if( checkVisibility( aItem ) )
+        {
+            PCB_DIM_LEADER* leader = static_cast<PCB_DIM_LEADER*>( aItem );
+            addAnchor( leader->GetStart(), CORNER | SNAPPABLE, leader );
+            addAnchor( leader->GetEnd(), CORNER | SNAPPABLE, leader );
+            addAnchor( leader->GetTextPos(), CORNER | SNAPPABLE, leader );
+        }
+
+        break;
+
+    case PCB_FIELD_T:
+    case PCB_TEXT_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->text )
+            break;
+
+        if( checkVisibility( aItem ) )
+            addAnchor( aItem->GetPosition(), ORIGIN, aItem );
+
+        break;
+
+    case PCB_BARCODE_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->otherItems )
+            break;
+
+        if( checkVisibility( aItem ) )
+        {
+            PCB_BARCODE* barcode = static_cast<PCB_BARCODE*>( aItem );
+            const BOX2I  bbox = barcode->GetSymbolPoly().BBox();
+
+            addAnchor( aItem->GetPosition(), ORIGIN, barcode, POINT_TYPE::PT_CENTER );
+            addRectPoints( bbox, *barcode );
+        }
+
+        break;
+
+    case PCB_GROUP_T:
+        for( BOARD_ITEM* item : static_cast<PCB_GROUP*>( aItem )->GetBoardItems() )
+        {
+            if( checkVisibility( item ) )
+                computeAnchors( item, aRefPos, aFrom, nullptr );
+        }
+
+        break;
+
+    case PCB_REFERENCE_IMAGE_T:
+        if( aFrom && aSelectionFilter && !aSelectionFilter->graphics )
+            break;
+
+        if( checkVisibility( aItem ) )
+        {
+            PCB_REFERENCE_IMAGE*   image = static_cast<PCB_REFERENCE_IMAGE*>( aItem );
+            const REFERENCE_IMAGE& refImg = image->GetReferenceImage();
+            const BOX2I            bbox = refImg.GetBoundingBox();
+
+            addRectPoints( bbox, *image );
+
+            if( refImg.GetTransformOriginOffset() != VECTOR2I( 0, 0 ) )
+            {
+                addAnchor( image->GetPosition() + refImg.GetTransformOriginOffset(), ORIGIN,
+                           image, POINT_TYPE::PT_CENTER );
+            }
+        }
+
+        break;
+
+    default:
+        break;
    }
 }
 
@@ -1886,25 +1962,27 @@ PCB_GRID_HELPER::ANCHOR* PCB_GRID_HELPER::nearestAnchor( const VECTOR2I& aPos, i
     // as some users will think it's fiddly; without 'activation', others will
     // think the snaps are intrusive.
     SNAP_MANAGER& snapManager = getSnapManager();
-    const auto    noRealItemsInAnchorAreInvolved = [&]( ANCHOR* aAnchor ) -> bool
-    {
-        // If no extension snaps are enabled, don't inhibit
-        static const bool haveExtensions = ADVANCED_CFG::GetCfg().m_EnableExtensionSnaps;
 
-        if( !haveExtensions )
-            return false;
+    auto noRealItemsInAnchorAreInvolved =
+            [&]( ANCHOR* aAnchor ) -> bool
+            {
+                // If no extension snaps are enabled, don't inhibit
+                static const bool haveExtensions = ADVANCED_CFG::GetCfg().m_EnableExtensionSnaps;
 
-        // If the anchor is not constructed, it may be involved (because it is one
-        // of the nearest anchors). The items will only be activated later, but don't
-        // discard the anchor yet.
-        const bool anchorIsConstructed = aAnchor->flags & ANCHOR_FLAGS::CONSTRUCTED;
+                if( !haveExtensions )
+                    return false;
 
-        if( !anchorIsConstructed )
-            return false;
+                // If the anchor is not constructed, it may be involved (because it is one
+                // of the nearest anchors). The items will only be activated later, but don't
+                // discard the anchor yet.
+                const bool anchorIsConstructed = aAnchor->flags & ANCHOR_FLAGS::CONSTRUCTED;
 
-        bool allRealAreInvolved = snapManager.GetConstructionManager().InvolvesAllGivenRealItems( aAnchor->items );
-        return !allRealAreInvolved;
-    };
+                if( !anchorIsConstructed )
+                    return false;
+
+                bool allRealAreInvolved = snapManager.GetConstructionManager().InvolvesAllGivenRealItems( aAnchor->items );
+                return !allRealAreInvolved;
+            };
 
     // Trim out items that aren't involved
     std::erase_if( anchorsAtMinDistance, noRealItemsInAnchorAreInvolved );

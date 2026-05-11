@@ -18,9 +18,12 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <../3d_rendering/opengl/render_3d_opengl.h> // Must be included before any GL header
+
 #include <dialogs/appearance_controls_3D.h>
 
 #include <bitmaps.h>
+#include <settings/color_settings.h>
 #include <confirm.h>
 #include <pgm_base.h>
 #include <dpi_scaling_common.h>
@@ -35,6 +38,7 @@
 #include <tools/eda_3d_actions.h>
 #include <widgets/bitmap_toggle.h>
 #include <widgets/color_swatch.h>
+#include <widgets/wx_infobar.h>
 #include <widgets/grid_bitmap_toggle.h>
 #include <dialogs/eda_view_switcher.h>
 #include <wx/bmpbuttn.h>
@@ -42,7 +46,6 @@
 #include <wx/textdlg.h>
 #include <wx/checkbox.h>
 
-#include <../3d_rendering/opengl/render_3d_opengl.h>
 #include <algorithm>
 
 /// Render Row abbreviation to reduce source width.

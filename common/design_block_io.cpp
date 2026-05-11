@@ -23,7 +23,9 @@
  */
 
 #include <common.h>
+#include <json_common.h>
 #include <i18n_utility.h>
+#include <kiplatform/io.h>
 #include <wx/dir.h>
 #include <wx/ffile.h>
 #include <wx/filename.h>
@@ -166,7 +168,7 @@ long long DESIGN_BLOCK_IO::GetLibraryTimestamp( const wxString& aLibraryPath ) c
 
         // Check if the directory ends with ".kicad_block", if so hash all the files in it.
         if( blockDir.GetFullName().EndsWith( FILEEXT::KiCadDesignBlockPathExtension ) )
-            ts += TimestampDir( blockDir.GetFullPath(), wxT( "*" ) );
+            ts += KIPLATFORM::IO::TimestampDir( blockDir.GetFullPath(), wxT( "*" ) );
 
         hasMoreFiles = libDir.GetNext( &filename );
     }
@@ -328,10 +330,10 @@ DESIGN_BLOCK* DESIGN_BLOCK_IO::DesignBlockLoad( const wxString& aLibraryPath,
             dbMetadataFile >> dbMetadata;
 
             if( dbMetadata.contains( "description" ) )
-                newDB->SetLibDescription( dbMetadata["description"] );
+                newDB->SetLibDescription( dbMetadata["description"].get<std::string>() );
 
             if( dbMetadata.contains( "keywords" ) )
-                newDB->SetKeywords( dbMetadata["keywords"] );
+                newDB->SetKeywords( dbMetadata["keywords"].get<std::string>() );
 
             // Read the "fields" object from the JSON
             if( dbMetadata.contains( "fields" ) )

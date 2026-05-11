@@ -192,16 +192,17 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testSingleLayerItemAgainstItem( BOARD_I
     int            actual;
     VECTOR2I       pos;
     bool           has_error = false;
-    NETINFO_ITEM*  net = nullptr;
+    NETINFO_ITEM*  itemNet = nullptr;
     NETINFO_ITEM*  otherNet = nullptr;
 
     if( BOARD_CONNECTED_ITEM* connectedItem = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
-        net = connectedItem->GetNet();
-
-    NETINFO_ITEM*  itemNet = net;
+        itemNet = connectedItem->GetNet();
 
     if( BOARD_CONNECTED_ITEM* connectedItem = dynamic_cast<BOARD_CONNECTED_ITEM*>( other ) )
         otherNet = connectedItem->GetNet();
+
+    if( itemNet == otherNet )
+        testClearance = testShorting = false;
 
     std::shared_ptr<SHAPE> otherShape_shared_ptr;
 
@@ -230,6 +231,15 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testSingleLayerItemAgainstItem( BOARD_I
 
     SHAPE* otherShape = otherShape_shared_ptr.get();
 
+    // Collide (and generate violations) based on a well-defined order so that exclusion checking
+    // against previously-generated violations will work.
+    if( item->m_Uuid > other->m_Uuid )
+    {
+        std::swap( item, other );
+        std::swap( itemShape, otherShape );
+        std::swap( itemNet, otherNet );
+    }
+
     if( testClearance || testShorting )
     {
         constraint = m_drcEngine->EvalRules( CLEARANCE_CONSTRAINT, item, other, layer );
@@ -238,15 +248,6 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testSingleLayerItemAgainstItem( BOARD_I
 
     if( constraint.GetSeverity() != RPT_SEVERITY_IGNORE && clearance > 0 )
     {
-        // Collide (and generate violations) based on a well-defined order so that exclusion
-        // checking against previously-generated violations will work.
-        if( item->m_Uuid > other->m_Uuid )
-        {
-            std::swap( item, other );
-            std::swap( itemShape, otherShape );
-            std::swap( net, otherNet );
-        }
-
         // Special processing for track:track intersections
         if( item->Type() == PCB_TRACE_T && other->Type() == PCB_TRACE_T )
         {
@@ -277,7 +278,7 @@ bool DRC_TEST_PROVIDER_COPPER_CLEARANCE::testSingleLayerItemAgainstItem( BOARD_I
             {
                 std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_SHORTING_ITEMS );
                 drcItem->SetErrorDetail( wxString::Format( _( "(nets %s and %s)" ),
-                                                           net ? net->GetNetname() : _( "<no net>" ),
+                                                           itemNet ? itemNet->GetNetname() : _( "<no net>" ),
                                                            otherNet ? otherNet->GetNetname() : _( "<no net>" ) ) );
                 drcItem->SetItems( item, other );
                 reportTwoPointGeometry( drcItem, pos, pos, pos, layer );
@@ -1000,6 +1001,11 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testPadClearances( )
                                         BOARD_ITEM* a = pad;
                                         BOARD_ITEM* b = other;
 
+                                        // store canonical order so we don't collide in both
+                                        // directions (a:b and b:a)
+                                        if( static_cast<void*>( a ) > static_cast<void*>( b ) )
+                                            std::swap( a, b );
+
                                         std::lock_guard<std::mutex> lock( checkedPairsMutex );
                                         auto it = checkedPairs.find( { a, b } );
 
@@ -1102,6 +1108,14 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testGraphicClearances()
 
                             // Track clearances are tested in testTrackClearances()
                             if( dynamic_cast<PCB_TRACK*>( other) )
+                                return false;
+
+                            BOARD_CONNECTED_ITEM* graphic_bci = dynamic_cast<BOARD_CONNECTED_ITEM*>( graphic );
+                            BOARD_CONNECTED_ITEM* other_bci = dynamic_cast<BOARD_CONNECTED_ITEM*>( other );
+                            int                   graphicNet = graphic_bci ? graphic_bci->GetNetCode() : 0;
+                            int                   otherNet = other_bci ? other_bci->GetNetCode() : 0;
+
+                            if( graphicNet && graphicNet == otherNet )
                                 return false;
 
                             BOARD_ITEM* a = graphic;
@@ -1329,7 +1343,24 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testZonesToZones()
                     zone_layer_poly_segs.push_back( seg );
                 }
 
-                std::sort( zone_layer_poly_segs.begin(), zone_layer_poly_segs.end() );
+                // Sort by x-coordinates for the sweep-line optimization in the inner
+                // loop. SEG::operator< must not be used here because it delegates to
+                // VECTOR2I::operator< which compares by magnitude, violating strict
+                // weak ordering when mixed with VECTOR2I::operator== for tie-breaking.
+                std::sort( zone_layer_poly_segs.begin(), zone_layer_poly_segs.end(),
+                           []( const SEG& a, const SEG& b ) -> bool
+                           {
+                               if( a.A.x != b.A.x )
+                                   return a.A.x < b.A.x;
+
+                               if( a.A.y != b.A.y )
+                                   return a.A.y < b.A.y;
+
+                               if( a.B.x != b.B.x )
+                                   return a.B.x < b.B.x;
+
+                               return a.B.y < b.B.y;
+                           } );
             }
         }
 
@@ -1367,7 +1398,8 @@ void DRC_TEST_PROVIDER_COPPER_CLEARANCE::testZonesToZones()
                     polyB = zoneB->GetFill( layer );
                 }
 
-                if( !polyA->BBoxFromCaches().Intersects( polyB->BBoxFromCaches() ) )
+                if( !polyA || !polyB
+                        || !polyA->BBoxFromCaches().Intersects( polyB->BBoxFromCaches() ) )
                     continue;
 
                 count++;

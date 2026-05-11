@@ -34,6 +34,7 @@
 #include <3d_canvas/board_adapter.h>
 #include <3d_rendering/track_ball.h>
 
+class EDA_3D_CANVAS;
 class PANEL_FOOTPRINT_CHOOSER;
 class wxCheckBox;
 class BITMAP_BUTTON;
@@ -57,7 +58,7 @@ public:
      */
     bool ShowModal( wxString* aFootprint, wxWindow* aParent ) override;
 
-    void KiwayMailIn( KIWAY_EXPRESS& mail ) override;
+    void KiwayMailIn( KIWAY_MAIL_EVENT& mail ) override;
 
     /**
      * Force the position of the dialog to a new position.  This mimics the DIALOG_SHIM

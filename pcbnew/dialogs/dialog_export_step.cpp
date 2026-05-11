@@ -30,8 +30,10 @@
 #include <wx/process.h>
 #include <wx/string.h>
 #include <wx/filedlg.h>
+#include <kiplatform/ui.h>
 
 #include <pgm_base.h>
+#include <settings/common_settings.h>
 #include <board.h>
 #include <confirm.h>
 #include <kidialog.h>
@@ -112,6 +114,9 @@ DIALOG_EXPORT_STEP::DIALOG_EXPORT_STEP( PCB_EDIT_FRAME* aEditFrame, wxWindow* aP
     // non-job versions.
     m_hash_key = TO_UTF8( GetTitle() );
 
+    m_choiceVariant->Append( m_editFrame->GetBoard()->GetVariantNamesForUI() );
+    m_choiceVariant->SetSelection( 0 );
+
     Layout();
     bSizerSTEPFile->Fit( this );
 
@@ -169,6 +174,16 @@ bool DIALOG_EXPORT_STEP::TransferDataToWindow()
             brdFile.SetExt( wxT( "step" ) );
             m_outputFileName->SetValue( brdFile.GetFullPath() );
         }
+
+        wxString currentVariant = m_editFrame->GetBoard()->GetCurrentVariant();
+
+        if( !currentVariant.IsEmpty() )
+        {
+            int idx = m_choiceVariant->FindString( currentVariant );
+
+            if( idx != wxNOT_FOUND )
+                m_choiceVariant->SetSelection( idx );
+        }
     }
     else
     {
@@ -213,6 +228,14 @@ bool DIALOG_EXPORT_STEP::TransferDataToWindow()
 
         m_txtComponentFilter->SetValue( m_job->m_3dparams.m_ComponentFilter );
         m_outputFileName->SetValue( m_job->GetConfiguredOutputPath() );
+
+        if( !m_job->m_variant.IsEmpty() )
+        {
+            int idx = m_choiceVariant->FindString( m_job->m_variant );
+
+            if( idx != wxNOT_FOUND )
+                m_choiceVariant->SetSelection( idx );
+        }
     }
 
     // Sync the enabled states
@@ -220,6 +243,18 @@ bool DIALOG_EXPORT_STEP::TransferDataToWindow()
     DIALOG_EXPORT_STEP::onCbExportComponents( dummy );
 
     return true;
+}
+
+
+wxString DIALOG_EXPORT_STEP::getSelectedVariant() const
+{
+    wxString variant;
+    int      selection = m_choiceVariant->GetSelection();
+
+    if( ( selection != 0 ) && ( selection != wxNOT_FOUND ) )
+        variant = m_choiceVariant->GetString( selection );
+
+    return variant;
 }
 
 
@@ -273,6 +308,8 @@ void DIALOG_EXPORT_STEP::onBrowseClicked( wxCommandEvent& aEvent )
     wxFileName fn( Prj().AbsolutePath( path ) );
 
     wxFileDialog dlg( this, _( "3D Model Output File" ), fn.GetPath(), fn.GetFullName(), filter, wxFD_SAVE );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
@@ -380,7 +417,7 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         // Arc to segment approximation error (not critical here: we do not use the outline shape):
         int maxError = pcbIUScale.mmToIU( 0.05 );
 
-        if( !BuildBoardPolygonOutlines( m_editFrame->GetBoard(), outline, maxError, chainingEpsilon ) )
+        if( !BuildBoardPolygonOutlines( m_editFrame->GetBoard(), outline, maxError, chainingEpsilon, false ) )
         {
             DisplayErrorMessage( this, wxString::Format( _( "Board outline is missing or not closed using "
                                                             "%.3f mm tolerance.\n"
@@ -481,6 +518,14 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         int quote = '\'';
         int dblquote = '"';
 
+        wxString selectedVariant = getSelectedVariant();
+
+        if( !selectedVariant.IsEmpty() )
+        {
+            cmdK2S.Append( wxString::Format( wxT( " --variant %c%s%c" ),
+                                             dblquote, selectedVariant, dblquote ) );
+        }
+
         if( !m_txtNetFilter->GetValue().empty() )
         {
             cmdK2S.Append( wxString::Format( wxT( " --net-filter %c%s%c" ),
@@ -527,7 +572,7 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         }
         else if( m_rbBoardCenterOrigin->GetValue() )
         {
-            BOX2I     bbox = m_editFrame->GetBoard()->ComputeBoundingBox( true );
+            BOX2I     bbox = m_editFrame->GetBoard()->ComputeBoundingBox( true, true );
             double    xOrg = pcbIUScale.IUTomm( bbox.GetCenter().x );
             double    yOrg = pcbIUScale.IUTomm( bbox.GetCenter().y );
             LOCALE_IO dummy;
@@ -562,6 +607,7 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
     else
     {
         m_job->SetConfiguredOutputPath( path );
+        m_job->m_variant = getSelectedVariant();
         m_job->m_3dparams.m_NetFilter = m_txtNetFilter->GetValue();
         m_job->m_3dparams.m_ComponentFilter = m_txtComponentFilter->GetValue();
         m_job->m_3dparams.m_ExportBoardBody = m_cbExportBody->GetValue();
@@ -587,15 +633,15 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         // ensure the main format on the job is populated
         switch( m_job->m_3dparams.m_Format )
         {
-        case EXPORTER_STEP_PARAMS::FORMAT::STEP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STEP; break;
+        case EXPORTER_STEP_PARAMS::FORMAT::STEP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STEP;  break;
         case EXPORTER_STEP_PARAMS::FORMAT::STEPZ: m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STEPZ; break;
-        case EXPORTER_STEP_PARAMS::FORMAT::GLB:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::GLB;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::XAO:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::XAO;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::BREP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::BREP; break;
-        case EXPORTER_STEP_PARAMS::FORMAT::PLY:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PLY;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::STL:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STL;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::U3D:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::U3D;  break;
-        case EXPORTER_STEP_PARAMS::FORMAT::PDF:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PDF;  break;
+        case EXPORTER_STEP_PARAMS::FORMAT::GLB:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::GLB;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::XAO:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::XAO;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::BREP:  m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::BREP;  break;
+        case EXPORTER_STEP_PARAMS::FORMAT::PLY:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PLY;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::STL:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::STL;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::U3D:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::U3D;   break;
+        case EXPORTER_STEP_PARAMS::FORMAT::PDF:   m_job->m_format = JOB_EXPORT_PCB_3D::FORMAT::PDF;   break;
         }
 
         m_job->m_3dparams.m_UseDrillOrigin = false;
@@ -621,7 +667,7 @@ void DIALOG_EXPORT_STEP::onExportButton( wxCommandEvent& aEvent )
         }
         else if( m_rbBoardCenterOrigin->GetValue() )
         {
-            BOX2I     bbox = m_editFrame->GetBoard()->ComputeBoundingBox( true );
+            BOX2I     bbox = m_editFrame->GetBoard()->ComputeBoundingBox( true, true );
             double    xOrg = pcbIUScale.IUTomm( bbox.GetCenter().x );
             double    yOrg = pcbIUScale.IUTomm( bbox.GetCenter().y );
             LOCALE_IO dummy;

@@ -11,6 +11,7 @@ pagelayout_editor
 pcb_calculator
 pcbnew
 plugins
+scripting
 tools
 resources/linux/launchers
 resources/linux/metainfo

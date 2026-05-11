@@ -24,7 +24,6 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <limits>
 #include <cmath>
 #include <functional>
 #include <stack>
@@ -34,9 +33,12 @@ using namespace std::placeholders;
 #include <macros.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <footprint.h>
+#include <pad.h>
 #include <pcb_point.h>
 #include <pcb_table.h>
 #include <pcb_tablecell.h>
+#include <pcb_track.h>
 #include <pcb_marker.h>
 #include <pcb_generator.h>
 #include <pcb_base_edit_frame.h>
@@ -62,7 +64,6 @@ using namespace std::placeholders;
 #include <wx/debug.h>
 #include <core/profile.h>
 #include <math/vector2wx.h>
-
 
 struct LAYER_OPACITY_ITEM
 {
@@ -1480,6 +1481,7 @@ int PCB_SELECTION_TOOL::unrouteSelected( const TOOL_EVENT& aEvent )
 
     // Get all footprints and pads
     std::vector<BOARD_CONNECTED_ITEM*> toUnroute;
+    std::set<EDA_ITEM*>                toDelete;
 
     for( EDA_ITEM* item : selectedItems )
     {
@@ -1488,9 +1490,109 @@ int PCB_SELECTION_TOOL::unrouteSelected( const TOOL_EVENT& aEvent )
             for( PAD* pad : static_cast<FOOTPRINT*>( item )->Pads() )
                 toUnroute.push_back( pad );
         }
+        else if( item->Type() == PCB_GENERATOR_T )
+        {
+            toDelete.insert( item );
+
+            for( BOARD_ITEM* generatedItem : static_cast<PCB_GENERATOR*>( item )->GetBoardItems() )
+            {
+                if( BOARD_CONNECTED_ITEM::ClassOf( generatedItem ) )
+                    toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( generatedItem ) );
+            }
+        }
         else if( BOARD_CONNECTED_ITEM::ClassOf( item ) )
         {
             toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( item ) );
+        }
+    }
+
+    // Find generators connected to tracks and add their children to toUnroute
+    // so selectAllConnectedTracks can traverse through meanders
+    std::set<int> selectedNets;
+
+    for( BOARD_CONNECTED_ITEM* item : toUnroute )
+        if( item->GetNetCode() > 0 )
+            selectedNets.insert( item->GetNetCode() );
+
+    std::set<VECTOR2I> endpointSet;
+
+    for( BOARD_CONNECTED_ITEM* item : toUnroute )
+    {
+        if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( item ) )
+        {
+            endpointSet.insert( track->GetStart() );
+            endpointSet.insert( track->GetEnd() );
+        }
+        else if( item->Type() == PCB_VIA_T )
+        {
+            endpointSet.insert( item->GetPosition() );
+        }
+        else if( item->Type() == PCB_PAD_T )
+        {
+            endpointSet.insert( item->GetPosition() );
+        }
+    }
+
+    bool expanded = true;
+
+    while( expanded )
+    {
+        expanded = false;
+
+        for( PCB_GENERATOR* gen : board()->Generators() )
+        {
+            if( toDelete.count( gen ) )
+                continue;
+
+            // Find this generator's external endpoints (meander entry/exit)
+            std::map<VECTOR2I, int> epCount;
+
+            for( BOARD_ITEM* child : gen->GetBoardItems() )
+            {
+                PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( child );
+
+                if( track && selectedNets.count( track->GetNetCode() ) )
+                {
+                    epCount[track->GetStart()]++;
+                    epCount[track->GetEnd()]++;
+                }
+            }
+
+            // Check if any external endpoint matches our track endpoints
+            bool connected = false;
+
+            for( auto& [pt, count] : epCount )
+            {
+                if( count == 1 && endpointSet.count( pt ) )
+                {
+                    connected = true;
+                    break;
+                }
+            }
+
+            if( connected )
+            {
+                toDelete.insert( gen );
+
+                for( BOARD_ITEM* c : gen->GetBoardItems() )
+                {
+                    if( !BOARD_CONNECTED_ITEM::ClassOf( c ) )
+                        continue;
+
+                    if( !selectedNets.count( static_cast<BOARD_CONNECTED_ITEM*>( c )->GetNetCode() ) )
+                        continue;
+
+                    toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( c ) );
+
+                    if( PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( c ) )
+                    {
+                        endpointSet.insert( track->GetStart() );
+                        endpointSet.insert( track->GetEnd() );
+                    }
+
+                    expanded = true;
+                }
+            }
         }
     }
 
@@ -1506,8 +1608,61 @@ int PCB_SELECTION_TOOL::unrouteSelected( const TOOL_EVENT& aEvent )
 
     // Get the tracks on our list of pads, then delete them
     selectAllConnectedTracks( toUnroute, STOP_CONDITION::STOP_AT_PAD );
-    m_toolMgr->RunAction( ACTIONS::doDelete );
+
+    BOARD_COMMIT          commit( m_toolMgr );
+    std::set<BOARD_ITEM*> removed;
+
+    for( EDA_ITEM* item : m_selection )
+    {
+        if( !item->IsBOARD_ITEM() )
+            continue;
+
+        BOARD_ITEM* bi = static_cast<BOARD_ITEM*>( item );
+
+        if( bi->Type() == PCB_GENERATOR_T )
+            toDelete.insert( bi );
+
+        commit.Remove( bi );
+        removed.insert( bi );
+    }
+
+    // Find generators whose children were removed
+    for( PCB_GENERATOR* gen : board()->Generators() )
+    {
+        for( BOARD_ITEM* child : gen->GetBoardItems() )
+        {
+            if( removed.count( child ) )
+            {
+                toDelete.insert( gen );
+                break;
+            }
+        }
+    }
+
+    for( EDA_ITEM* item : toDelete )
+    {
+        if( !item->IsBOARD_ITEM() )
+            continue;
+
+        BOARD_ITEM* boardItem = static_cast<BOARD_ITEM*>( item );
+
+        boardItem->RunOnChildren(
+                [&commit, &removed]( BOARD_ITEM* aItem )
+                {
+                    if( removed.find( aItem ) == removed.end() )
+                    {
+                        commit.Remove( aItem );
+                        removed.insert( aItem );
+                    }
+                },
+                RECURSE_MODE::RECURSE );
+
+        if( removed.find( boardItem ) == removed.end() )
+            commit.Remove( boardItem );
+    }
+
     ClearSelection( true );
+    commit.Push( _( "Unroute Selected" ) );
 
     m_filter = save_filter;     // restore current filter options
 
@@ -1529,10 +1684,50 @@ int PCB_SELECTION_TOOL::unrouteSegment( const TOOL_EVENT& aEvent )
     // Get all footprints and pads
     std::vector<BOARD_CONNECTED_ITEM*> toUnroute;
 
+    std::set<EDA_ITEM*> toDelete;
+
     for( EDA_ITEM* item : selectedItems )
     {
         if( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T || item->Type() == PCB_VIA_T )
-            toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( item ) );
+        {
+            BOARD_ITEM* bi = static_cast<BOARD_ITEM*>( item );
+            EDA_GROUP*  parentGroup = bi->GetParentGroup();
+
+            if( parentGroup && parentGroup->AsEdaItem()->Type() == PCB_GENERATOR_T )
+            {
+                PCB_GENERATOR* gen = static_cast<PCB_GENERATOR*>( parentGroup->AsEdaItem() );
+
+                if( !toDelete.count( gen ) )
+                {
+                    toDelete.insert( gen );
+
+                    for( BOARD_ITEM* generatedItem : gen->GetBoardItems() )
+                    {
+                        toDelete.insert( generatedItem );
+
+                        if( BOARD_CONNECTED_ITEM::ClassOf( generatedItem ) )
+                            toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( generatedItem ) );
+                    }
+                }
+            }
+            else
+            {
+                toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( item ) );
+                toDelete.insert( item );
+            }
+        }
+        else if( item->Type() == PCB_GENERATOR_T )
+        {
+            toDelete.insert( item );
+
+            for( BOARD_ITEM* generatedItem : static_cast<PCB_GENERATOR*>( item )->GetBoardItems() )
+            {
+                toDelete.insert( generatedItem );
+
+                if( BOARD_CONNECTED_ITEM::ClassOf( generatedItem ) )
+                    toUnroute.push_back( static_cast<BOARD_CONNECTED_ITEM*>( generatedItem ) );
+            }
+        }
     }
 
     // Get the tracks connecting to our starting objects
@@ -1545,22 +1740,50 @@ int PCB_SELECTION_TOOL::unrouteSegment( const TOOL_EVENT& aEvent )
         if( !item->IsBOARD_ITEM() )
             continue;
 
-        if( std::find( toUnroute.begin(), toUnroute.end(), item ) == toUnroute.end() )
+        if( toDelete.find( item ) == toDelete.end() )
             toSelectAfter.push_back( item );
     }
 
-    ClearSelection( true );
+    BOARD_COMMIT          commit( m_toolMgr );
+    std::set<BOARD_ITEM*> removed;
 
-    for( EDA_ITEM* item : toUnroute )
-        select( item );
+    for( EDA_ITEM* item : toDelete )
+    {
+        if( !item->IsBOARD_ITEM() )
+            continue;
 
-    m_toolMgr->RunAction( ACTIONS::doDelete );
+        BOARD_ITEM* boardItem = static_cast<BOARD_ITEM*>( item );
+
+        if( item->Type() == PCB_GENERATOR_T )
+        {
+            boardItem->RunOnChildren(
+                    [&commit, &removed]( BOARD_ITEM* aItem )
+                    {
+                        if( removed.insert( aItem ).second )
+                            commit.Remove( aItem );
+                    },
+                    RECURSE_MODE::RECURSE );
+
+            if( removed.insert( boardItem ).second )
+                commit.Remove( boardItem );
+        }
+        else
+        {
+            if( removed.insert( boardItem ).second )
+                commit.Remove( boardItem );
+        }
+    }
+
+    commit.Push( _( "Unroute Segment" ) );
 
     // Now our after tracks so the user can continue backing up as desired
     ClearSelection( true );
 
     for( EDA_ITEM* item : toSelectAfter )
-        select( item );
+    {
+        if( !toDelete.count( item ) )
+            select( item );
+    }
 
     return 0;
 }
@@ -2367,6 +2590,14 @@ void PCB_SELECTION_TOOL::doSyncSelection( const std::vector<BOARD_ITEM*>& aItems
     if( m_selection.Front() && m_selection.Front()->IsMoving() )
         return;
 
+    // Also check the incoming items. If the cross-probe flash timer cleared the selection
+    // during a move, Front() would be null but the items are still being actively moved.
+    for( const BOARD_ITEM* item : aItems )
+    {
+        if( item->IsMoving() )
+            return;
+    }
+
     ClearSelection( true /*quiet mode*/ );
 
     // Perform individual selection of each item before processing the event.
@@ -3130,15 +3361,6 @@ bool PCB_SELECTION_TOOL::Selectable( const BOARD_ITEM* aItem, bool checkVisibili
         // In footprint editor, we do not want to select the footprint itself.
         if( m_isFootprintEditor )
             return false;
-
-        // Allow selection of footprints if some part of the footprint is visible.
-        if( footprint->GetSide() != UNDEFINED_LAYER && !m_skip_heuristics )
-        {
-            LSET boardSide = footprint->IsFlipped() ? LSET::BackMask() : LSET::FrontMask();
-
-            if( !( visibleLayers() & boardSide ).any() )
-                return false;
-        }
 
         // If the footprint has no items except the reference and value fields, include the
         // footprint in the selections.

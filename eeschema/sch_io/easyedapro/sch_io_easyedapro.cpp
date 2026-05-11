@@ -26,6 +26,7 @@
 #include "sch_io_easyedapro.h"
 
 #include <font/fontconfig.h>
+#include <reporter.h>
 #include <schematic.h>
 #include <sch_sheet.h>
 #include <sch_screen.h>
@@ -432,8 +433,8 @@ SCH_SHEET* SCH_IO_EASYEDAPRO::LoadSchematicFile( const wxString& aFileName,
 {
     wxCHECK( !aFileName.IsEmpty() && aSchematic, nullptr );
 
-    // Show the font substitution warnings
-    fontconfig::FONTCONFIG::SetReporter( &WXLOG_REPORTER::GetInstance() );
+    // Collect the font substitution warnings (RAII - automatically reset on scope exit)
+    FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
 
     SCH_SHEET* rootSheet = nullptr;
 
@@ -442,13 +443,13 @@ SCH_SHEET* SCH_IO_EASYEDAPRO::LoadSchematicFile( const wxString& aFileName,
         wxCHECK_MSG( aSchematic->IsValid(), nullptr,
                      wxS( "Can't append to a schematic with no root!" ) );
 
-        rootSheet = &aSchematic->Root();
+        rootSheet = aAppendToMe;
     }
     else
     {
         rootSheet = new SCH_SHEET( aSchematic );
         rootSheet->SetFileName( aFileName );
-        aSchematic->SetRoot( rootSheet );
+        aSchematic->SetTopLevelSheets( { rootSheet } );
     }
 
     if( !rootSheet->GetScreen() )

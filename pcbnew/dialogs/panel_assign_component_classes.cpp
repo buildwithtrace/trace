@@ -70,7 +70,11 @@ PANEL_ASSIGN_COMPONENT_CLASSES::PANEL_ASSIGN_COMPONENT_CLASSES(
         }
 
         for( const PCB_FIELD* field : fp->GetFields() )
+        {
+            wxCHECK2( field, continue );
+
             fieldsSet.insert( field->GetName() );
+        }
     }
 
     // Sort field names
@@ -135,18 +139,17 @@ bool PANEL_ASSIGN_COMPONENT_CLASSES::TransferDataToWindow()
     m_assignSheetClasses->SetValue( m_componentClassSettings->GetEnableSheetComponentClasses() );
 
     // Load dynamic component class assignments
-    for( const COMPONENT_CLASS_ASSIGNMENT_DATA& assignmentData :
-         m_componentClassSettings->GetComponentClassAssignments() )
+    for( const auto& assignmentData : m_componentClassSettings->GetComponentClassAssignments() )
     {
         PANEL_COMPONENT_CLASS_ASSIGNMENT* assignment = addAssignment();
         assignment->SetComponentClass( assignmentData.GetComponentClass() );
         assignment->SetConditionsOperator( assignmentData.GetConditionsOperator() );
 
-        for( const auto& [conditionType, conditionData] : assignmentData.GetConditions() )
+        for( const auto& [conditionType, primaryData, secondaryData] : assignmentData.GetConditions() )
         {
             CONDITION_DATA* match = assignment->AddCondition( conditionType );
-            match->SetPrimaryField( conditionData.first );
-            match->SetSecondaryField( conditionData.second );
+            match->SetPrimaryField( primaryData );
+            match->SetSecondaryField( secondaryData );
         }
     }
 
@@ -177,22 +180,18 @@ bool PANEL_ASSIGN_COMPONENT_CLASSES::TransferDataFromWindow()
 
 bool PANEL_ASSIGN_COMPONENT_CLASSES::Validate()
 {
-    PCB_EDIT_FRAME* frame = GetFrame();
-    BOARD*          board = dynamic_cast<BOARD*>( frame->GetModel() );
-
-    frame->GetCanvas()->Refresh();
+    GetFrame()->GetCanvas()->Refresh();
 
     for( PANEL_COMPONENT_CLASS_ASSIGNMENT* assignment : m_assignments )
     {
         const COMPONENT_CLASS_ASSIGNMENT_DATA assignmentData = assignment->GenerateAssignmentData();
         const std::shared_ptr<COMPONENT_CLASS_ASSIGNMENT_RULE> rule =
-                board->GetComponentClassManager().CompileAssignmentRule( assignmentData );
+                COMPONENT_CLASS_MANAGER::CompileAssignmentRule( assignmentData );
 
         if( !rule )
         {
-            const wxString msg = wxString::Format(
-                    _( "Error with conditions for component class assignment %s" ),
-                    assignment->GetComponentClass() );
+            const wxString msg = wxString::Format( _( "Error with conditions for component class assignment %s" ),
+                                                   assignment->GetComponentClass() );
             PAGED_DIALOG::GetDialog( this )->SetError( msg, this, assignment );
             scrollToAssignment( assignment );
             assignment->SetFocus();
@@ -323,24 +322,25 @@ void CONDITION_DATA::SetSecondaryField( const wxString& aVal )
  *
  *************************************************************************************************/
 
-PANEL_COMPONENT_CLASS_ASSIGNMENT::PANEL_COMPONENT_CLASS_ASSIGNMENT(
-        wxWindow* aParent, PANEL_ASSIGN_COMPONENT_CLASSES* aPanelParent, DIALOG_SHIM* aDlg ) :
-        PANEL_COMPONENT_CLASS_ASSIGNMENT_BASE( aParent ), m_parentPanel( aPanelParent ),
-        m_matchesList( static_cast<wxStaticBoxSizer*>( GetSizer() ) ), m_dlg( aDlg )
+PANEL_COMPONENT_CLASS_ASSIGNMENT::PANEL_COMPONENT_CLASS_ASSIGNMENT( wxWindow* aParent,
+                                                                    PANEL_ASSIGN_COMPONENT_CLASSES* aPanelParent,
+                                                                    DIALOG_SHIM* aDlg ) :
+        PANEL_COMPONENT_CLASS_ASSIGNMENT_BASE( aParent ),
+        m_parentPanel( aPanelParent ),
+        m_matchesList( static_cast<wxStaticBoxSizer*>( GetSizer() ) ),
+        m_dlg( aDlg )
 {
     m_buttonAddCondition->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
     m_buttonDeleteAssignment->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
     m_buttonHighlightItems->SetBitmap( KiBitmapBundle( BITMAPS::net_highlight ) );
 
-    Connect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_ASSIGNMENT::onMenu ), nullptr,
-             this );
+    Connect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_ASSIGNMENT::onMenu ), nullptr, this );
 }
 
 
 PANEL_COMPONENT_CLASS_ASSIGNMENT::~PANEL_COMPONENT_CLASS_ASSIGNMENT()
 {
-    Disconnect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_ASSIGNMENT::onMenu ),
-                nullptr, this );
+    Disconnect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_ASSIGNMENT::onMenu ), nullptr, this );
 }
 
 
@@ -352,7 +352,7 @@ COMPONENT_CLASS_ASSIGNMENT_DATA PANEL_COMPONENT_CLASS_ASSIGNMENT::GenerateAssign
 
     for( const auto& condition : GetConditions() )
     {
-        assignmentData.SetCondition( condition->GetConditionType(), condition->GetPrimaryField(),
+        assignmentData.AddCondition( condition->GetConditionType(), condition->GetPrimaryField(),
                                      condition->GetSecondaryField() );
     }
 
@@ -362,33 +362,14 @@ COMPONENT_CLASS_ASSIGNMENT_DATA PANEL_COMPONENT_CLASS_ASSIGNMENT::GenerateAssign
 
 void PANEL_COMPONENT_CLASS_ASSIGNMENT::OnAddConditionClick( wxCommandEvent& event )
 {
-    auto hasCondition = [this]( const COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE aCondition )
-    {
-        return m_conditionTypes.contains( aCondition );
-    };
-
     wxMenu menu;
-    menu.Append( ID_REFERENCE, _( "Reference..." ) );
-    menu.Append( ID_FOOTPRINT, _( "Footprint..." ) );
-    menu.Append( ID_SIDE, _( "Side..." ) );
-    menu.Append( ID_ROTATION, _( "Rotation..." ) );
-    menu.Append( ID_FOOTPRINT_FIELD, _( "Footprint Field..." ) );
-    menu.Append( ID_SHEET_NAME, _( "Sheet Name..." ) );
-    menu.Append( ID_CUSTOM, _( "Custom..." ) );
-    menu.Enable( ID_REFERENCE,
-                 !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::REFERENCE ) );
-    menu.Enable( ID_FOOTPRINT,
-                 !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT ) );
-    menu.Enable( ID_SIDE, !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SIDE ) );
-    menu.Enable( ID_ROTATION,
-                 !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::ROTATION ) );
-    menu.Enable(
-            ID_FOOTPRINT_FIELD,
-            !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT_FIELD ) );
-    menu.Enable( ID_CUSTOM,
-                 !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM ) );
-    menu.Enable( ID_SHEET_NAME,
-                 !hasCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME ) );
+    menu.Append( ID_REFERENCE, _( "Add Reference Condition" ) );
+    menu.Append( ID_FOOTPRINT, _( "Add Footprint Condition" ) );
+    menu.Append( ID_SIDE, _( "Add Side Condition" ) );
+    menu.Append( ID_ROTATION, _( "Add Rotation Condition" ) );
+    menu.Append( ID_FOOTPRINT_FIELD, _( "Add Footprint Field Value Condition" ) );
+    menu.Append( ID_SHEET_NAME, _( "Add Sheet Condition" ) );
+    menu.Append( ID_CUSTOM, _( "Add Custom Expression Condition" ) );
     PopupMenu( &menu );
 }
 
@@ -421,19 +402,24 @@ void PANEL_COMPONENT_CLASS_ASSIGNMENT::onMenu( wxCommandEvent& aEvent )
     case ID_FOOTPRINT:
         AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT );
         break;
-    case ID_SIDE: AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SIDE ); break;
+    case ID_SIDE:
+        AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SIDE );
+        break;
     case ID_ROTATION:
         AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::ROTATION );
         break;
     case ID_FOOTPRINT_FIELD:
         AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT_FIELD );
         break;
-    case ID_CUSTOM: AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM ); break;
+    case ID_CUSTOM:
+        AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM );
+        break;
     case ID_SHEET_NAME:
         AddCondition( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME );
         break;
 
-    default: wxFAIL_MSG( wxT( "Unknown ID in context menu event" ) );
+    default:
+        wxFAIL_MSG( wxT( "Unknown ID in context menu event" ) );
     }
 }
 
@@ -441,67 +427,55 @@ void PANEL_COMPONENT_CLASS_ASSIGNMENT::onMenu( wxCommandEvent& aEvent )
 CONDITION_DATA* PANEL_COMPONENT_CLASS_ASSIGNMENT::AddCondition(
         const COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE aCondition )
 {
-    wxASSERT_MSG( !m_conditionTypes.contains( aCondition ), "Condition type already exists" );
-
     wxPanel* panelToAdd = nullptr;
 
     switch( aCondition )
     {
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::REFERENCE:
     {
-        PANEL_COMPONENT_CLASS_CONDITION_REFERENCE* refsPanel =
-                new PANEL_COMPONENT_CLASS_CONDITION_REFERENCE( this );
+        PANEL_COMPONENT_CLASS_CONDITION_REFERENCE* refsPanel = new PANEL_COMPONENT_CLASS_CONDITION_REFERENCE( this );
         refsPanel->SetSelectionRefs( m_parentPanel->GetSelectionRefs() );
         panelToAdd = refsPanel;
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::REFERENCE );
         break;
     }
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT:
     {
         panelToAdd = new PANEL_COMPONENT_CLASS_CONDITION_FOOTPRINT( this, m_dlg );
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT );
         break;
     }
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SIDE:
     {
         panelToAdd = new PANEL_COMPONENT_CLASS_CONDITION_SIDE( this );
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SIDE );
         break;
     }
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::ROTATION:
     {
         panelToAdd = new PANEL_COMPONENT_CLASS_CONDITION_ROTATION( this );
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::ROTATION );
         break;
     }
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT_FIELD:
     {
-        PANEL_COMPONENT_CLASS_CONDITION_FIELD* fieldPanel =
-                new PANEL_COMPONENT_CLASS_CONDITION_FIELD( this );
+        PANEL_COMPONENT_CLASS_CONDITION_FIELD* fieldPanel = new PANEL_COMPONENT_CLASS_CONDITION_FIELD( this );
         fieldPanel->SetFieldsList( m_parentPanel->GetFieldNames() );
         panelToAdd = fieldPanel;
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT_FIELD );
         break;
     }
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM:
     {
         panelToAdd = new PANEL_COMPONENT_CLASS_CONDITION_CUSTOM( this );
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM );
         break;
     }
     case COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME:
     {
-        PANEL_COMPONENT_CLASS_CONDITION_SHEET* sheetPanel =
-                new PANEL_COMPONENT_CLASS_CONDITION_SHEET( this );
+        PANEL_COMPONENT_CLASS_CONDITION_SHEET* sheetPanel = new PANEL_COMPONENT_CLASS_CONDITION_SHEET( this );
         sheetPanel->SetSheetsList( m_parentPanel->GetSheetNames() );
         panelToAdd = sheetPanel;
-        m_conditionTypes.insert( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME );
         break;
     }
     }
 
     const size_t numItems = m_matchesList->GetItemCount();
-    m_matchesList->Insert( numItems - 1, panelToAdd, 0, wxEXPAND | wxTOP, 5 );
+    m_matchesList->Insert( numItems - 1, panelToAdd, 0, wxEXPAND | wxALL, 5 );
     Layout();
     GetParent()->Layout();
     m_parentPanel->Layout();
@@ -516,10 +490,7 @@ CONDITION_DATA* PANEL_COMPONENT_CLASS_ASSIGNMENT::AddCondition(
 void PANEL_COMPONENT_CLASS_ASSIGNMENT::RemoveCondition( wxPanel* aMatch )
 {
     if( CONDITION_DATA* matchData = dynamic_cast<CONDITION_DATA*>( aMatch ) )
-    {
-        m_conditionTypes.erase( matchData->GetConditionType() );
         m_matches.erase( std::ranges::find( m_matches, matchData ) );
-    }
 
     m_matchesList->Detach( aMatch );
     aMatch->Destroy();
@@ -586,26 +557,23 @@ void PANEL_COMPONENT_CLASS_ASSIGNMENT::OnHighlightItemsClick( wxCommandEvent& ev
  *
  *************************************************************************************************/
 
-PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::PANEL_COMPONENT_CLASS_CONDITION_REFERENCE(
-        wxWindow* aParent ) :
+PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::PANEL_COMPONENT_CLASS_CONDITION_REFERENCE( wxWindow* aParent ) :
         PANEL_COMPONENT_CLASS_CONDITION_REFERENCE_BASE( aParent ),
         CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::REFERENCE, m_refs ),
         m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
 
     m_buttonImportRefs->SetBitmap( KiBitmapBundle( BITMAPS::config ) );
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
 
-    Connect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::onMenu ),
-             nullptr, this );
+    Connect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::onMenu ), nullptr, this );
 }
 
 
 void PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::OnDeleteConditionClick( wxCommandEvent& event )
 {
-    Disconnect( wxEVT_MENU,
-                wxCommandEventHandler( PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::onMenu ), nullptr,
+    Disconnect( wxEVT_MENU, wxCommandEventHandler( PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::onMenu ), nullptr,
                 this );
     m_panelParent->RemoveCondition( this );
 }
@@ -640,13 +608,14 @@ void PANEL_COMPONENT_CLASS_CONDITION_REFERENCE::onMenu( wxCommandEvent& aEvent )
 }
 
 
-PANEL_COMPONENT_CLASS_CONDITION_FOOTPRINT::PANEL_COMPONENT_CLASS_CONDITION_FOOTPRINT(
-        wxWindow* aParent, DIALOG_SHIM* aDlg ) :
+PANEL_COMPONENT_CLASS_CONDITION_FOOTPRINT::PANEL_COMPONENT_CLASS_CONDITION_FOOTPRINT( wxWindow* aParent,
+                                                                                      DIALOG_SHIM* aDlg ) :
         PANEL_COMPONENT_CLASS_CONDITION_FOOTPRINT_BASE( aParent ),
         CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT, m_footprint ),
-        m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) ), m_dlg( aDlg )
+        m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) ),
+        m_dlg( aDlg )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
 
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
     m_buttonShowLibrary->SetBitmap( KiBitmapBundle( BITMAPS::small_library ) );
@@ -680,7 +649,7 @@ PANEL_COMPONENT_CLASS_CONDITION_SIDE::PANEL_COMPONENT_CLASS_CONDITION_SIDE( wxWi
         CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SIDE, m_side ),
         m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
 
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
     m_side->Append( wxT( "Any" ) );
@@ -696,13 +665,12 @@ void PANEL_COMPONENT_CLASS_CONDITION_SIDE::OnDeleteConditionClick( wxCommandEven
 }
 
 
-PANEL_COMPONENT_CLASS_CONDITION_ROTATION::PANEL_COMPONENT_CLASS_CONDITION_ROTATION(
-        wxWindow* aParent ) :
+PANEL_COMPONENT_CLASS_CONDITION_ROTATION::PANEL_COMPONENT_CLASS_CONDITION_ROTATION( wxWindow* aParent ) :
         PANEL_COMPONENT_CLASS_CONDITION_ROTATION_BASE( aParent ),
         CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::ROTATION, m_rotation ),
         m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
     m_rotUnit->SetLabel( wxT( "°" ) );
 
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
@@ -723,11 +691,10 @@ void PANEL_COMPONENT_CLASS_CONDITION_ROTATION::OnDeleteConditionClick( wxCommand
 
 PANEL_COMPONENT_CLASS_CONDITION_FIELD::PANEL_COMPONENT_CLASS_CONDITION_FIELD( wxWindow* aParent ) :
         PANEL_COMPONENT_CLASS_CONDITION_FIELD_BASE( aParent ),
-        CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT_FIELD,
-                        m_fieldName, m_fieldValue ),
+        CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::FOOTPRINT_FIELD, m_fieldName, m_fieldValue ),
         m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
 
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
 }
@@ -745,14 +712,12 @@ void PANEL_COMPONENT_CLASS_CONDITION_FIELD::SetFieldsList( const std::vector<wxS
 }
 
 
-PANEL_COMPONENT_CLASS_CONDITION_CUSTOM::PANEL_COMPONENT_CLASS_CONDITION_CUSTOM(
-        wxWindow* aParent ) :
+PANEL_COMPONENT_CLASS_CONDITION_CUSTOM::PANEL_COMPONENT_CLASS_CONDITION_CUSTOM( wxWindow* aParent ) :
         PANEL_COMPONENT_CLASS_CONDITION_CUSTOM_BASE( aParent ),
-        CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM,
-                        m_customCondition ),
+        CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::CUSTOM, m_customCondition ),
         m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
 
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
 }
@@ -769,7 +734,7 @@ PANEL_COMPONENT_CLASS_CONDITION_SHEET::PANEL_COMPONENT_CLASS_CONDITION_SHEET( wx
         CONDITION_DATA( COMPONENT_CLASS_ASSIGNMENT_DATA::CONDITION_TYPE::SHEET_NAME, m_sheetName ),
         m_panelParent( static_cast<PANEL_COMPONENT_CLASS_ASSIGNMENT*>( aParent ) )
 {
-    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) ).x, -1 } );
+    m_title->SetMinSize( { GetTextExtent( _( "Footprint Field:" ) + wxS( "M" ) ).x, -1 } );
 
     m_buttonDeleteMatch->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
 }

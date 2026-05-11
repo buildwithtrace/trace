@@ -24,10 +24,12 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <3d_rendering/opengl/render_3d_opengl.h> // Must be included before any GL header
+
 #include "panel_preview_3d_model.h"
 #include <dialogs/dialog_unit_entry.h>
+#include <libeval/numeric_evaluator.h>
 #include <3d_canvas/eda_3d_canvas.h>
-#include <3d_rendering/opengl/render_3d_opengl.h>
 #include <tool/tool_manager.h>
 #include <tool/tool_dispatcher.h>
 #include <tools/eda_3d_actions.h>
@@ -37,6 +39,7 @@
 #include <board.h>
 #include <common_ogl/ogl_attr_list.h>
 #include <dpi_scaling_common.h>
+#include <footprint.h>
 #include <lset.h>
 #include <pgm_base.h>
 #include <project_pcb.h>
@@ -47,14 +50,57 @@
 #include <eda_3d_viewer_settings.h>
 #include <board_design_settings.h>
 
-#ifndef __linux__
-#include <3d_navlib/nl_footprint_properties_plugin.h>
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
 #include <3d_spacenav/spnav_viewer_plugin.h>
+#else
+#include <3d_navlib/nl_footprint_properties_plugin.h>
 #endif
 
-PANEL_PREVIEW_3D_MODEL::PANEL_PREVIEW_3D_MODEL( wxWindow* aParent, PCB_BASE_FRAME* aFrame,
-                                                FOOTPRINT* aFootprint,
+static wxString evaluateTextCtrl( const wxString& aValue )
+{
+    // NUMERIC_EVALUATOR doesn't handle UTF-8 multi-byte characters properly,
+    // so skip evaluation if the string contains non-ASCII characters (e.g., degree symbols)
+    for( wxUniChar c : aValue )
+    {
+        if( !c.IsAscii() )
+            return aValue;
+    }
+
+    // Attempt to evaluate formula; if successful return result, otherwise return original
+    NUMERIC_EVALUATOR eval( EDA_UNITS::UNSCALED );
+
+    if( eval.Process( aValue ) )
+        return eval.Result();
+
+    return aValue;
+}
+
+
+/**
+ * Ensure -MAX_ROTATION <= rotation <= MAX_ROTATION.
+ *
+ * @param \a aRotation will be normalized between -MAX_ROTATION and MAX_ROTATION.
+ */
+static double rotationFromString( const wxString& aValue )
+{
+    double rotation = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::DEGREES, aValue );
+
+    if( rotation > MAX_ROTATION )
+    {
+        int n = KiROUND( rotation / MAX_ROTATION );
+        rotation -= MAX_ROTATION * n;
+    }
+    else if( rotation < -MAX_ROTATION )
+    {
+        int n = KiROUND( -rotation / MAX_ROTATION );
+        rotation += MAX_ROTATION * n;
+    }
+
+    return rotation;
+}
+
+
+PANEL_PREVIEW_3D_MODEL::PANEL_PREVIEW_3D_MODEL( wxWindow* aParent, PCB_BASE_FRAME* aFrame, FOOTPRINT* aFootprint,
                                                 std::vector<FP_3DMODEL>* aParentModelList ) :
         PANEL_PREVIEW_3D_MODEL_BASE( aParent, PANEL_PREVIEW_3D_MODEL_ID ),
         m_parentFrame( aFrame ),
@@ -113,6 +159,27 @@ PANEL_PREVIEW_3D_MODEL::PANEL_PREVIEW_3D_MODEL( wxWindow* aParent, PCB_BASE_FRAM
     for( wxSpinButton* button : spinButtonList )
         button->SetRange(INT_MIN, INT_MAX );
 
+    for( TEXT_CTRL_EVAL* rotCtrl : { xrot, yrot, zrot } )
+    {
+        rotCtrl->SetCustomEval(
+                [&]( TEXT_CTRL_EVAL* aCtrl )
+                {
+                    double value = rotationFromString( evaluateTextCtrl( aCtrl->GetValue() ) );
+                    aCtrl->SetValue( formatRotationValue( value ) );
+                } );
+    }
+
+    for( TEXT_CTRL_EVAL* scaleCtrl : { xscale, yscale, zscale } )
+    {
+        scaleCtrl->SetCustomEval(
+                [&]( TEXT_CTRL_EVAL* aCtrl )
+                {
+                    double value = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::UNSCALED,
+                                                                              evaluateTextCtrl( aCtrl->GetValue() ) );
+                    aCtrl->SetValue( formatScaleValue( value ) );
+                } );
+    }
+
     m_parentModelList = aParentModelList;
 
     m_dummyFootprint = new FOOTPRINT( *aFootprint );
@@ -125,21 +192,19 @@ PANEL_PREVIEW_3D_MODEL::PANEL_PREVIEW_3D_MODEL( wxWindow* aParent, PCB_BASE_FRAM
 
     m_dummyFootprint->SetOrientation( ANGLE_0 );
 
-
     m_dummyBoard->Add( m_dummyFootprint );
 
     // Create the 3D canvas
-    m_previewPane = new EDA_3D_CANVAS( this,
-                                       OGL_ATT_LIST::GetAttributesList( ANTIALIASING_MODE::AA_8X ),
+    m_previewPane = new EDA_3D_CANVAS( this, OGL_ATT_LIST::GetAttributesList( ANTIALIASING_MODE::AA_8X ),
                                        m_boardAdapter, m_currentCamera,
                                        PROJECT_PCB::Get3DCacheManager( &aFrame->Prj() ) );
 
     try
     {
-#ifndef __linux__
-        m_spaceMouse = std::make_unique<NL_FOOTPRINT_PROPERTIES_PLUGIN>( m_previewPane );
-#else
+#if defined(__linux__) || defined(__FreeBSD__)
         m_spaceMouse = std::make_unique<SPNAV_VIEWER_PLUGIN>( m_previewPane );
+#else
+        m_spaceMouse = std::make_unique<NL_FOOTPRINT_PROPERTIES_PLUGIN>( m_previewPane );
 #endif
         m_spaceMouse->SetFocus( true );
     }
@@ -178,13 +243,9 @@ PANEL_PREVIEW_3D_MODEL::PANEL_PREVIEW_3D_MODEL( wxWindow* aParent, PCB_BASE_FRAM
     m_SizerPanelView->Add( m_previewPane, 1, wxEXPAND, 5 );
 
     for( wxEventType eventType : { wxEVT_MENU_OPEN, wxEVT_MENU_CLOSE, wxEVT_MENU_HIGHLIGHT } )
-    {
-        Connect( eventType, wxMenuEventHandler( PANEL_PREVIEW_3D_MODEL::OnMenuEvent ), nullptr,
-                 this );
-    }
+        Connect( eventType, wxMenuEventHandler( PANEL_PREVIEW_3D_MODEL::OnMenuEvent ), nullptr, this );
 
-    aFrame->Connect( EDA_EVT_UNITS_CHANGED,
-                     wxCommandEventHandler( PANEL_PREVIEW_3D_MODEL::onUnitsChanged ),
+    aFrame->Connect( EDA_EVT_UNITS_CHANGED, wxCommandEventHandler( PANEL_PREVIEW_3D_MODEL::onUnitsChanged ),
                      nullptr, this );
 
     Bind( wxCUSTOM_PANEL_SHOWN_EVENT, &PANEL_PREVIEW_3D_MODEL::onPanelShownEvent, this );
@@ -193,6 +254,10 @@ PANEL_PREVIEW_3D_MODEL::PANEL_PREVIEW_3D_MODEL( wxWindow* aParent, PCB_BASE_FRAM
 
 PANEL_PREVIEW_3D_MODEL::~PANEL_PREVIEW_3D_MODEL()
 {
+    // Shutdown all running tools
+    if( m_toolManager )
+        m_toolManager->ShutdownAllTools();
+
     // Restore the 3D viewer Render settings, that can be modified by the panel tools
     if( m_boardAdapter.m_Cfg )
         m_boardAdapter.m_Cfg->m_Render = m_initialRender;
@@ -231,31 +296,6 @@ void PANEL_PREVIEW_3D_MODEL::loadSettings()
         m_previewPane->SetMovingSpeedMultiplier( cfg->m_Camera.moving_speed_multiplier );
         m_previewPane->SetProjectionMode( cfg->m_Camera.projection_mode );
     }
-}
-
-
-/**
- * Ensure -MAX_ROTATION <= rotation <= MAX_ROTATION.
- *
- * @param \a aRotation will be normalized between -MAX_ROTATION and MAX_ROTATION.
- */
-static double rotationFromString( const wxString& aValue )
-{
-    double rotation = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::DEGREES,
-                                                                 aValue );
-
-    if( rotation > MAX_ROTATION )
-    {
-        int n = KiROUND( rotation / MAX_ROTATION );
-        rotation -= MAX_ROTATION * n;
-    }
-    else if( rotation < -MAX_ROTATION )
-    {
-        int n = KiROUND( -rotation / MAX_ROTATION );
-        rotation += MAX_ROTATION * n;
-    }
-
-    return rotation;
 }
 
 
@@ -345,27 +385,27 @@ void PANEL_PREVIEW_3D_MODEL::updateOrientation( wxCommandEvent &event )
         // Write settings back to the parent
         FP_3DMODEL* modelInfo = &m_parentModelList->at( (unsigned) m_selected );
 
-        modelInfo->m_Scale.x = EDA_UNIT_UTILS::UI::DoubleValueFromString(
-                pcbIUScale, EDA_UNITS::UNSCALED, xscale->GetValue() );
-        modelInfo->m_Scale.y = EDA_UNIT_UTILS::UI::DoubleValueFromString(
-                pcbIUScale, EDA_UNITS::UNSCALED, yscale->GetValue() );
-        modelInfo->m_Scale.z = EDA_UNIT_UTILS::UI::DoubleValueFromString(
-                pcbIUScale, EDA_UNITS::UNSCALED, zscale->GetValue() );
+        modelInfo->m_Scale.x = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::UNSCALED,
+                                                                          evaluateTextCtrl( xscale->GetValue() ) );
+        modelInfo->m_Scale.y = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::UNSCALED,
+                                                                          evaluateTextCtrl( yscale->GetValue() ) );
+        modelInfo->m_Scale.z = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::UNSCALED,
+                                                                          evaluateTextCtrl( zscale->GetValue() ) );
 
         // Rotation is stored in the file as positive-is-CW, but we use positive-is-CCW in the GUI
         // to match the rest of KiCad
-        modelInfo->m_Rotation.x = -rotationFromString( xrot->GetValue() );
-        modelInfo->m_Rotation.y = -rotationFromString( yrot->GetValue() );
-        modelInfo->m_Rotation.z = -rotationFromString( zrot->GetValue() );
+        modelInfo->m_Rotation.x = -rotationFromString( evaluateTextCtrl( xrot->GetValue() ) );
+        modelInfo->m_Rotation.y = -rotationFromString( evaluateTextCtrl( yrot->GetValue() ) );
+        modelInfo->m_Rotation.z = -rotationFromString( evaluateTextCtrl( zrot->GetValue() ) );
 
         modelInfo->m_Offset.x = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                           xoff->GetValue() )
+                                                                           evaluateTextCtrl( xoff->GetValue() ) )
                                 / pcbIUScale.IU_PER_MM;
         modelInfo->m_Offset.y = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                           yoff->GetValue() )
+                                                                           evaluateTextCtrl( yoff->GetValue() ) )
                                 / pcbIUScale.IU_PER_MM;
         modelInfo->m_Offset.z = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                           zoff->GetValue() )
+                                                                           evaluateTextCtrl( zoff->GetValue() ) )
                                 / pcbIUScale.IU_PER_MM;
 
         // Update the dummy footprint for the preview
@@ -412,8 +452,7 @@ void PANEL_PREVIEW_3D_MODEL::View3DSettings( wxCommandEvent& event )
     BOARD_DESIGN_SETTINGS bds = m_dummyBoard->GetDesignSettings();
     int                   thickness = bds.GetBoardThickness();
 
-    WX_UNIT_ENTRY_DIALOG dlg( m_parentFrame, _( "3D Preview Options" ), _( "Board thickness:" ),
-                              thickness );
+    WX_UNIT_ENTRY_DIALOG dlg( m_parentFrame, _( "3D Preview Options" ), _( "Board thickness:" ), thickness );
 
     if( dlg.ShowModal() != wxID_OK )
         return;
@@ -449,14 +488,13 @@ void PANEL_PREVIEW_3D_MODEL::doIncrementScale( wxSpinEvent& event, double aSign 
     if( wxGetMouseState().ShiftDown( ) )
         step = SCALE_INCREMENT_FINE;
 
-    double curr_value = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, EDA_UNITS::UNSCALED,
-                                                                   textCtrl->GetValue() );
+    double value = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::UNSCALED, textCtrl->GetValue() );
 
-    curr_value += ( step * aSign );
-    curr_value = std::max( 1/MAX_SCALE, curr_value );
-    curr_value = std::min( curr_value, MAX_SCALE );
+    value += ( step * aSign );
+    value = std::max( 1/MAX_SCALE, value );
+    value = std::min( value, MAX_SCALE );
 
-    textCtrl->SetValue( formatScaleValue( curr_value ) );
+    textCtrl->SetValue( formatScaleValue( value ) );
 }
 
 
@@ -478,14 +516,11 @@ void PANEL_PREVIEW_3D_MODEL::doIncrementRotation( wxSpinEvent& aEvent, double aS
     if( wxGetMouseState().ShiftDown( ) )
         step = ROTATION_INCREMENT_FINE;
 
-    double curr_value = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::DEGREES,
-                                                                   textCtrl->GetValue() );
+    double value = rotationFromString( textCtrl->GetValue() );
 
-    curr_value += ( step * aSign );
-    curr_value = std::max( -MAX_ROTATION, curr_value );
-    curr_value = std::min( curr_value, MAX_ROTATION );
+    value += ( step * aSign );
 
-    textCtrl->SetValue( formatRotationValue( curr_value ) );
+    textCtrl->SetValue( formatRotationValue( value ) );
 }
 
 
@@ -515,15 +550,14 @@ void PANEL_PREVIEW_3D_MODEL::doIncrementOffset( wxSpinEvent& event, double aSign
             step_mm = 25.4*OFFSET_INCREMENT_MIL_FINE/1000;;
     }
 
-    double curr_value_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                      textCtrl->GetValue() )
-                           / pcbIUScale.IU_PER_MM;
+    double value_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits, textCtrl->GetValue() )
+                      / pcbIUScale.IU_PER_MM;
 
-    curr_value_mm += ( step_mm * aSign );
-    curr_value_mm = std::max( -MAX_OFFSET, curr_value_mm );
-    curr_value_mm = std::min( curr_value_mm, MAX_OFFSET );
+    value_mm += ( step_mm * aSign );
+    value_mm = std::max( -MAX_OFFSET, value_mm );
+    value_mm = std::min( value_mm, MAX_OFFSET );
 
-    textCtrl->SetValue( formatOffsetValue( curr_value_mm ) );
+    textCtrl->SetValue( formatOffsetValue( value_mm ) );
 }
 
 
@@ -541,14 +575,13 @@ void PANEL_PREVIEW_3D_MODEL::onMouseWheelScale( wxMouseEvent& event )
     if( event.GetWheelRotation() >= 0 )
         step = -step;
 
-    double curr_value = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, EDA_UNITS::UNSCALED,
-                                                                   textCtrl->GetValue() );
+    double value = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::UNSCALED, textCtrl->GetValue() );
 
-    curr_value += step;
-    curr_value = std::max( 1/MAX_SCALE, curr_value );
-    curr_value = std::min( curr_value, MAX_SCALE );
+    value += step;
+    value = std::max( 1/MAX_SCALE, value );
+    value = std::min( value, MAX_SCALE );
 
-    textCtrl->SetValue( formatScaleValue( curr_value ) );
+    textCtrl->SetValue( formatScaleValue( value ) );
 }
 
 
@@ -566,14 +599,11 @@ void PANEL_PREVIEW_3D_MODEL::onMouseWheelRot( wxMouseEvent& event )
     if( event.GetWheelRotation() >= 0 )
         step = -step;
 
-    double curr_value = EDA_UNIT_UTILS::UI::DoubleValueFromString( unityScale, EDA_UNITS::DEGREES,
-                                                                   textCtrl->GetValue() );
+    double value = rotationFromString( textCtrl->GetValue() );
 
-    curr_value += step;
-    curr_value = std::max( -MAX_ROTATION, curr_value );
-    curr_value = std::min( curr_value, MAX_ROTATION );
+    value += step;
 
-    textCtrl->SetValue( formatRotationValue( curr_value ) );
+    textCtrl->SetValue( formatRotationValue( value ) );
 }
 
 
@@ -599,28 +629,24 @@ void PANEL_PREVIEW_3D_MODEL::onMouseWheelOffset( wxMouseEvent& event )
     if( event.GetWheelRotation() >= 0 )
         step_mm = -step_mm;
 
-    double curr_value_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                      textCtrl->GetValue() )
-                           / pcbIUScale.IU_PER_MM;
+    double value_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits, textCtrl->GetValue() )
+                      / pcbIUScale.IU_PER_MM;
 
-    curr_value_mm += step_mm;
-    curr_value_mm = std::max( -MAX_OFFSET, curr_value_mm );
-    curr_value_mm = std::min( curr_value_mm, MAX_OFFSET );
+    value_mm += step_mm;
+    value_mm = std::max( -MAX_OFFSET, value_mm );
+    value_mm = std::min( value_mm, MAX_OFFSET );
 
-    textCtrl->SetValue( formatOffsetValue( curr_value_mm ) );
+    textCtrl->SetValue( formatOffsetValue( value_mm ) );
 }
 
 
 void PANEL_PREVIEW_3D_MODEL::onUnitsChanged( wxCommandEvent& aEvent )
 {
-    double xoff_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                xoff->GetValue() )
+    double xoff_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits, xoff->GetValue() )
                      / pcbIUScale.IU_PER_MM;
-    double yoff_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                yoff->GetValue() )
+    double yoff_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits, yoff->GetValue() )
                      / pcbIUScale.IU_PER_MM;
-    double zoff_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits,
-                                                                zoff->GetValue() )
+    double zoff_mm = EDA_UNIT_UTILS::UI::DoubleValueFromString( pcbIUScale, m_userUnits, zoff->GetValue() )
                      / pcbIUScale.IU_PER_MM;
 
     PCB_BASE_FRAME* frame = static_cast<PCB_BASE_FRAME*>( aEvent.GetClientData() );

@@ -24,8 +24,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <wx/evtloop.h>
 #include <thread>
+#include <widgets/wx_event_utils.h>
 #include <widgets/wx_progress_reporters.h>
 
 
@@ -87,13 +87,16 @@ bool WX_PROGRESS_REPORTER::updateUI()
             Fit();
         }
 
-        Raise();
-
         m_messageChanged = false;
     }
 
+    // Allowing interaction with other windows has unintended consequences
+    wxWindowDisabler ed( this );
+
     // Returns false when cancelled (if it's a cancellable dialog)
     bool diag = WX_PROGRESS_REPORTER_BASE::Update( cur, message );
+
+    DrainPendingEvents();
 
     return diag;
 }
@@ -115,7 +118,8 @@ bool GAUGE_PROGRESS_REPORTER::updateUI()
         cur = 0;
 
     wxGauge::SetValue( cur );
-    wxEventLoopBase::GetActive()->YieldFor( wxEVT_CATEGORY_UI );
+
+    DrainPendingEvents( wxEVT_CATEGORY_UI );
 
     return true;  // No cancel button on a wxGauge
 }

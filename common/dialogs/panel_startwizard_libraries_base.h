@@ -45,9 +45,13 @@ class PANEL_STARTWIZARD_LIBRARIES_BASE : public wxPanel
 		wxStaticBitmap* m_bmpWarning;
 		wxStaticText* m_stWarning;
 
+		// Virtual event handlers, override them in your derived class
+		virtual void OnSize( wxSizeEvent& event ) { event.Skip(); }
+
+
 	public:
 
-		PANEL_STARTWIZARD_LIBRARIES_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 550,-1 ), long style = wxTAB_TRAVERSAL, const wxString& name = wxEmptyString );
+		PANEL_STARTWIZARD_LIBRARIES_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( -1,-1 ), long style = wxTAB_TRAVERSAL, const wxString& name = wxEmptyString );
 
 		~PANEL_STARTWIZARD_LIBRARIES_BASE();
 

@@ -38,6 +38,7 @@
 #include <sch_actions.h>
 #include <sch_tool_utils.h>
 #include <sch_edit_frame.h>
+#include <widgets/wx_infobar.h>
 #include <pgm_base.h>
 #include <design_block.h>
 #include <widgets/sch_design_block_pane.h>
@@ -70,7 +71,7 @@
 #include <import_gfx/dialog_import_gfx_sch.h>
 #include <sync_sheet_pin/sheet_synchronization_agent.h>
 #include <string_utils.h>
-//#include <wildcards_and_files_ext.h>
+#include <wildcards_and_files_ext.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 
@@ -588,7 +589,7 @@ int SCH_DRAWING_TOOLS::PlaceSymbol( const TOOL_EVENT& aEvent )
                             || evt->IsAction( &SCH_ACTIONS::cycleBodyStyle )
                             || evt->IsAction( &SCH_ACTIONS::setExcludeFromBOM )
                             || evt->IsAction( &SCH_ACTIONS::setExcludeFromBoard )
-                            || evt->IsAction( &SCH_ACTIONS::setExcludeFromSimulation )
+                            || evt->IsAction( &SCH_ACTIONS::setExcludeFromSim )
                             || evt->IsAction( &SCH_ACTIONS::setDNP )
                             || evt->IsAction( &SCH_ACTIONS::rotateCW )
                             || evt->IsAction( &SCH_ACTIONS::rotateCCW )
@@ -677,7 +678,10 @@ int SCH_DRAWING_TOOLS::PlaceNextSymbolUnit( const TOOL_EVENT& aEvent )
     std::unique_ptr<SCH_SYMBOL> newSymbol = std::make_unique<SCH_SYMBOL>( *symbol );
     const SCH_SHEET_PATH&       sheetPath = m_frame->GetCurrentSheet();
 
-    newSymbol->SetUnitSelection( &sheetPath, nextMissing );
+    // Use SetUnitSelection(int) to update ALL instance references at once.
+    // This is important for shared sheets where the same screen is used by multiple
+    // sheet instances - we want the new symbol unit to appear correctly on all instances.
+    newSymbol->SetUnitSelection( nextMissing );
     newSymbol->SetUnit( nextMissing );
     newSymbol->SetRefProp( symbol->GetRef( &sheetPath, false ) );
 
@@ -699,6 +703,16 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
     KIGFX::VIEW_CONTROLS* controls = getViewControls();
     EE_GRID_HELPER        grid( m_toolMgr );
     VECTOR2I              cursorPos;
+
+    // Guard to reset forced cursor positioning on exit, regardless of error path
+    struct RESET_FORCED_CURSOR_GUARD
+    {
+        KIGFX::VIEW_CONTROLS* m_controls;
+
+        ~RESET_FORCED_CURSOR_GUARD() { m_controls->ForceCursorPosition( false ); }
+    };
+
+    RESET_FORCED_CURSOR_GUARD forcedCursorGuard{ controls };
 
     if( !cfg || !common_settings )
         return 0;
@@ -722,9 +736,21 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
                                                                 true, true ) );
 
             if( !designBlock )
+            {
+                wxString msg;
+                msg.Printf( _( "Could not find design block %s." ),
+                            designBlockPane->GetSelectedLibId().GetUniStringLibId() );
+                m_frame->ShowInfoBarError( msg, true );
                 return 0;
+            }
 
             sheetFileName = designBlock->GetSchematicFile();
+
+            if( sheetFileName.IsEmpty() || !wxFileExists( sheetFileName ) )
+            {
+                m_frame->ShowInfoBarError( _( "Design block has no schematic to place." ), true );
+                return 0;
+            }
         }
     }
     else
@@ -791,22 +817,33 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
                         group->SetName( group->GetName() + wxString::Format( "%d", suffix++ ) );
                 }
 
+                bool autoAnnotate = !keepAnnotations && cfg->m_AnnotatePanel.automatic;
+
                 // Select all new items
                 for( EDA_ITEM* item : screen->Items() )
                 {
                     if( !item->HasFlag( SKIP_STRUCT ) )
                     {
-                        if( item->Type() == SCH_SYMBOL_T && !keepAnnotations )
+                        // When auto-annotating, preserve original refs so that
+                        // AnnotateSymbols can build correct locked groups for
+                        // multi-unit symbols before assigning new references.
+                        // Clearing first would leave locked groups empty, causing
+                        // units from different same-value arrays to get mixed.
+                        if( item->Type() == SCH_SYMBOL_T && !keepAnnotations && !autoAnnotate )
                             static_cast<SCH_SYMBOL*>( item )->ClearAnnotation( &sheetPath, false );
 
                         if( item->Type() == SCH_LINE_T )
                             item->SetFlags( STARTPOINT | ENDPOINT );
 
-                        if( placeAsGroup )
-                            group->AddItem( item );
+                        if( !item->GetParentGroup() )
+                        {
+                            if( placeAsGroup )
+                                group->AddItem( item );
+
+                            newItems.emplace_back( item );
+                        }
 
                         commit.Added( item, screen );
-                        newItems.emplace_back( item );
                     }
                     else
                     {
@@ -839,13 +876,16 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
 
                 if( !keepAnnotations )
                 {
-                    if( cfg->m_AnnotatePanel.automatic )
+                    if( autoAnnotate )
                     {
                         NULL_REPORTER reporter;
                         m_frame->AnnotateSymbols( &commit, ANNOTATE_SELECTION,
                                                   (ANNOTATE_ORDER_T) schSettings.m_AnnotateSortOrder,
-                                                  (ANNOTATE_ALGO_T) schSettings.m_AnnotateMethod, true /* recursive */,
-                                                  schSettings.m_AnnotateStartNum, false, false, reporter );
+                                                  (ANNOTATE_ALGO_T) schSettings.m_AnnotateMethod,
+                                                  true /* recursive */,
+                                                  schSettings.m_AnnotateStartNum,
+                                                  true /* aResetAnnotation */,
+                                                  false, false, reporter );
                     }
 
                     // Annotation will clear selection, so we need to restore it
@@ -855,7 +895,10 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
                             item->SetFlags( STARTPOINT | ENDPOINT );
                     }
 
-                    selectionTool->AddItemsToSel( &newItems, true );
+                    if( placeAsGroup )
+                        selectionTool->AddItemToSel( group );
+                    else
+                        selectionTool->AddItemsToSel( &newItems, true );
                 }
 
                 // Start moving selection, cancel undoes the insertion
@@ -874,6 +917,7 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
                     commit.Revert();
                 }
 
+                selectionTool->RebuildSelection();
                 m_frame->UpdateHierarchyNavigator();
 
                 return placed;
@@ -906,6 +950,8 @@ int SCH_DRAWING_TOOLS::ImportSheet( const TOOL_EVENT& aEvent )
 
             FILEDLG_IMPORT_SHEET_CONTENTS dlgHook( cfg );
             dlg.SetCustomizeHook( dlgHook );
+
+            KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
             if( dlg.ShowModal() == wxID_CANCEL )
                 return 0;
@@ -1151,7 +1197,9 @@ int SCH_DRAWING_TOOLS::PlaceImage( const TOOL_EVENT& aEvent )
                 m_toolMgr->RunAction( ACTIONS::selectionClear );
 
                 wxFileDialog dlg( m_frame, _( "Choose Image" ), m_mruPath, wxEmptyString,
-                                  _( "Image Files" ) + wxS( " " ) + wxImage::GetImageExtWildcard(), wxFD_OPEN );
+                                  FILEEXT::ImageFileWildcard(), wxFD_OPEN );
+
+                KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
                 bool cancelled = false;
 
@@ -1941,6 +1989,8 @@ int SCH_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
     SCH_SHEET*            sheet = nullptr;
     wxString              description;
 
+    std::list<std::unique_ptr<SCH_LABEL_BASE>> itemsToPlace;
+
     if( m_inDrawingTool )
         return 0;
 
@@ -1972,10 +2022,8 @@ int SCH_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
                     m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::TEXT );
                 else if( isGlobalLabel )
                     m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::LABEL_GLOBAL );
-                else if( isNetLabel )
+                else if( isNetLabel || isClassLabel )
                     m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::LABEL_NET );
-                else if( isClassLabel )
-                    m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::LABEL_NET );    // JEY TODO: netclass directive cursor
                 else if( isHierLabel )
                     m_frame->GetCanvas()->SetCurrentCursor( KICURSOR::LABEL_HIER );
                 else
@@ -2002,6 +2050,12 @@ int SCH_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
                 m_view->ClearPreview();
                 delete item;
                 item = nullptr;
+
+                while( !itemsToPlace.empty() )
+                {
+                    itemsToPlace.front().release();
+                    itemsToPlace.pop_front();
+                }
             };
 
     auto prepItemForPlacement =
@@ -2043,7 +2097,6 @@ int SCH_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
     }
 
     SCH_COMMIT commit( m_toolMgr );
-    std::list<std::unique_ptr<SCH_LABEL_BASE>> itemsToPlace;
 
     // Main loop: keep receiving events
     while( TOOL_EVENT* evt = Wait() )
@@ -3119,6 +3172,7 @@ int SCH_DRAWING_TOOLS::DrawSheet( const TOOL_EVENT& aEvent )
 
     SCH_SHEET* sheet = nullptr;
     wxString   filename;
+    SCH_GROUP* sheetGroup = nullptr;
 
     if( isDrawSheetCopy )
     {
@@ -3371,6 +3425,10 @@ int SCH_DRAWING_TOOLS::DrawSheet( const TOOL_EVENT& aEvent )
                 m_frame->AddToScreen( sheet );
                 c.Added( sheet, m_frame->GetScreen() );
 
+                // Refresh the hierarchy so the new sheet and its symbols are found during annotation.
+                // The cached hierarchy was built before this sheet was added.
+                m_frame->Schematic().RefreshHierarchy();
+
                 // This convoluted logic means we always annotate unless we are drawing a copy/design block
                 // and the user has explicitly requested we keep the annotations via checkbox
 
@@ -3389,13 +3447,34 @@ int SCH_DRAWING_TOOLS::DrawSheet( const TOOL_EVENT& aEvent )
                                               true,   /* recursive */
                                               schSettings.m_AnnotateStartNum,
                                               true,   /* reset */
+                                              false,  /* regroup */
                                               false,  /* repair */
                                               reporter );
                 }
 
+                if( isDrawSheetFromDesignBlock && cfg->m_DesignBlockChooserPanel.place_as_group )
+                {
+                    sheetGroup = new SCH_GROUP( m_frame->GetScreen() );
+                    sheetGroup->SetName( designBlock->GetLibId().GetLibItemName() );
+                    sheetGroup->SetDesignBlockLibId( designBlock->GetLibId() );
+                    c.Add( sheetGroup, m_frame->GetScreen() );
+                    c.Modify( sheet, m_frame->GetScreen(), RECURSE_MODE::NO_RECURSE );
+                    sheetGroup->AddItem( sheet );
+                }
+
                 c.Push( isDrawSheetCopy ? "Import Sheet Copy" : "Draw Sheet" );
 
-                m_selectionTool->AddItemToSel( sheet );
+                if( sheetGroup )
+                    m_selectionTool->AddItemToSel( sheetGroup );
+                else
+                    m_selectionTool->AddItemToSel( sheet );
+
+                if( ( isDrawSheetCopy || isDrawSheetFromDesignBlock )
+                    && !cfg->m_DesignBlockChooserPanel.repeated_placement )
+                {
+                    m_frame->PopTool( aEvent );
+                    break;
+                }
             }
             else
             {
@@ -3471,7 +3550,8 @@ void SCH_DRAWING_TOOLS::sizeSheet( SCH_SHEET* aSheet, const VECTOR2I& aPos )
 }
 
 
-int SCH_DRAWING_TOOLS::doSyncSheetsPins( std::list<SCH_SHEET_PATH> sheetPaths )
+int SCH_DRAWING_TOOLS::doSyncSheetsPins( std::list<SCH_SHEET_PATH> sheetPaths,
+                                         SCH_SHEET* aInitialSheet )
 {
     if( !sheetPaths.size() )
         return 0;
@@ -3537,7 +3617,8 @@ int SCH_DRAWING_TOOLS::doSyncSheetsPins( std::list<SCH_SHEET_PATH> sheetPaths )
                         }
                         }
                     },
-                    m_toolMgr, m_frame ) );
+                    m_toolMgr, m_frame ),
+            aInitialSheet );
     m_dialogSyncSheetPin->Show( true );
     return 0;
 }
@@ -3720,8 +3801,10 @@ int SCH_DRAWING_TOOLS::SyncAllSheetsPins( const TOOL_EVENT& aEvent )
         return 0;
     }
 
+    // If a sheet is currently selected, pre-select its tab in the dialog
+    SCH_SHEET* selectedSheet = dynamic_cast<SCH_SHEET*>( m_selectionTool->GetSelection().Front() );
 
-    return doSyncSheetsPins( std::move( sheetPaths ) );
+    return doSyncSheetsPins( std::move( sheetPaths ), selectedSheet );
 }
 
 SCH_HIERLABEL* SCH_DRAWING_TOOLS::importHierLabel( SCH_SHEET* aSheet )

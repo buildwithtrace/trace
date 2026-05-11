@@ -48,6 +48,7 @@ public:
 public:
     wxString        m_filename;
     wxString        m_drawingSheet;
+    wxString        m_variant;
 
     IPC2581_UNITS   m_units;
     IPC2581_VERSION m_version;
@@ -60,6 +61,7 @@ public:
     wxString        m_colMfg;
     wxString        m_colDistPn;
     wxString        m_colDist;
+    wxString        m_bomRev;
 };
 
 #endif

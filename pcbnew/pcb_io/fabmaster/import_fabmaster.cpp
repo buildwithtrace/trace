@@ -356,18 +356,8 @@ size_t FABMASTER::processPadStackLayers( size_t aRow )
 
     const single_row& header = rows[aRow];
 
-    int pad_name_col        = getColFromName( aRow, "PADNAME" );
-    int pad_num_col         = getColFromName( aRow, "RECNUMBER" );
-    int pad_lay_col         = getColFromName( aRow, "LAYER" );
-    int pad_fix_col         = getColFromName( aRow, "FIXFLAG" );
-    int pad_via_col         = getColFromName( aRow, "VIAFLAG" );
-    int pad_shape_col       = getColFromName( aRow, "PADSHAPE1" );
-    int pad_width_col       = getColFromName( aRow, "PADWIDTH" );
-    int pad_height_col      = getColFromName( aRow, "PADHGHT" );
-    int pad_xoff_col        = getColFromName( aRow, "PADXOFF" );
-    int pad_yoff_col        = getColFromName( aRow, "PADYOFF" );
-    int pad_flash_col       = getColFromName( aRow, "PADFLASH" );
-    int pad_shape_name_col  = getColFromName( aRow, "PADSHAPENAME" );
+    int pad_num_col = getColFromName( aRow, "RECNUMBER" );
+    int pad_lay_col = getColFromName( aRow, "LAYER" );
 
     for( ; rownum < rows.size() && rows[rownum].size() > 0 && rows[rownum][0] == "S"; ++rownum )
     {
@@ -382,18 +372,8 @@ size_t FABMASTER::processPadStackLayers( size_t aRow )
             continue;
         }
 
-        auto& pad_name = row[pad_name_col];
         auto& pad_num = row[pad_num_col];
         auto& pad_layer = row[pad_lay_col];
-        auto& pad_is_fixed = row[pad_fix_col];
-        auto& pad_is_via = row[pad_via_col];
-        auto& pad_shape = row[pad_shape_col];
-        auto& pad_width = row[pad_width_col];
-        auto& pad_height = row[pad_height_col];
-        auto& pad_xoff = row[pad_xoff_col];
-        auto& pad_yoff = row[pad_yoff_col];
-        auto& pad_flash = row[pad_flash_col];
-        auto& pad_shapename = row[pad_shape_name_col];
 
         // This layer setting seems to be unused
         if( pad_layer == "INTERNAL_PAD_DEF" || pad_layer == "internal_pad_def" )
@@ -438,18 +418,16 @@ size_t FABMASTER::processPadStacks( size_t aRow )
     if( scale_factor <= 0.0 )
         return -1;
 
-    int pad_name_col        = getColFromName( aRow, "PADNAME" );
-    int pad_num_col         = getColFromName( aRow, "RECNUMBER" );
-    int pad_lay_col         = getColFromName( aRow, "LAYER" );
-    int pad_fix_col         = getColFromName( aRow, "FIXFLAG" );
-    int pad_via_col         = getColFromName( aRow, "VIAFLAG" );
-    int pad_shape_col       = getColFromName( aRow, "PADSHAPE1" );
-    int pad_width_col       = getColFromName( aRow, "PADWIDTH" );
-    int pad_height_col      = getColFromName( aRow, "PADHGHT" );
-    int pad_xoff_col        = getColFromName( aRow, "PADXOFF" );
-    int pad_yoff_col        = getColFromName( aRow, "PADYOFF" );
-    int pad_flash_col       = getColFromName( aRow, "PADFLASH" );
-    int pad_shape_name_col  = getColFromName( aRow, "PADSHAPENAME" );
+    int pad_name_col       = getColFromName( aRow, "PADNAME" );
+    int pad_num_col        = getColFromName( aRow, "RECNUMBER" );
+    int pad_lay_col        = getColFromName( aRow, "LAYER" );
+    int pad_via_col        = getColFromName( aRow, "VIAFLAG" );
+    int pad_shape_col      = getColFromName( aRow, "PADSHAPE1" );
+    int pad_width_col      = getColFromName( aRow, "PADWIDTH" );
+    int pad_height_col     = getColFromName( aRow, "PADHGHT" );
+    int pad_xoff_col       = getColFromName( aRow, "PADXOFF" );
+    int pad_yoff_col       = getColFromName( aRow, "PADYOFF" );
+    int pad_shape_name_col = getColFromName( aRow, "PADSHAPENAME" );
 
     for( ; rownum < rows.size() && rows[rownum].size() > 0 && rows[rownum][0] == "S"; ++rownum )
     {
@@ -468,14 +446,12 @@ size_t FABMASTER::processPadStacks( size_t aRow )
         auto& pad_name = row[pad_name_col];
         auto& pad_num = row[pad_num_col];
         auto& pad_layer = row[pad_lay_col];
-        auto& pad_is_fixed = row[pad_fix_col];
         auto& pad_is_via = row[pad_via_col];
         auto& pad_shape = row[pad_shape_col];
         auto& pad_width = row[pad_width_col];
         auto& pad_height = row[pad_height_col];
         auto& pad_xoff = row[pad_xoff_col];
         auto& pad_yoff = row[pad_yoff_col];
-        auto& pad_flash = row[pad_flash_col];
         auto& pad_shapename = row[pad_shape_name_col];
 
         // This layer setting seems to be unused
@@ -565,10 +541,13 @@ size_t FABMASTER::processPadStacks( size_t aRow )
             continue;
         }
 
+        auto layer = layers.find( pad_layer );
+
+        if( w > 0.0 && layer != layers.end() && layer->second.conductive )
+            pad->copper_layers.insert( pad_layer );
+
         if( w <= 0.0 )
             continue;
-
-        auto layer = layers.find( pad_layer );
 
         if( layer != layers.end() )
         {
@@ -729,10 +708,6 @@ size_t FABMASTER::processSimpleLayers( size_t aRow )
 
 bool FABMASTER::assignLayers()
 {
-    bool has_l1 = false;
-    int max_layer = 0;
-    std::string max_layer_name;
-
     std::vector<std::pair<std::string, int>> extra_layers
     {
         { "ASSEMBLY_TOP", F_Fab },
@@ -895,10 +870,7 @@ size_t FABMASTER::processLayers( size_t aRow )
         auto& layer_sort = row[layer_sort_col];
         auto& layer_subclass = row[layer_subclass_col];
         auto& layer_art = row[layer_art_col];
-        auto& layer_use = row[layer_use_col];
         auto& layer_cond = row[layer_cond_col];
-        auto& layer_er = row[layer_er_col];
-        auto& layer_rho = row[layer_rho_col];
         auto& layer_mat = row[layer_mat_col];
 
         if( layer_mat == "AIR" )
@@ -1311,8 +1283,6 @@ FABMASTER::GRAPHIC_POLYGON* FABMASTER::processPolygon( const FABMASTER::GRAPHIC_
 
     if( s.x != s.y )
     {
-        wxLogDebug( "FABMASTER::processPolygon: Expected x and y to be the same, got x = %s and y = %s ",
-                    aData.graphic_data3, aData.graphic_data4 );
     }
 
     auto new_poly = std::make_unique<GRAPHIC_POLYGON>();
@@ -1571,13 +1541,7 @@ size_t FABMASTER::processGeometry( size_t aRow )
         auto gr_item = std::unique_ptr<GRAPHIC_ITEM>( processGraphic( gr_data, scale_factor ) );
 
         if( !gr_item )
-        {
-            wxLogDebug( wxT( "Unhandled graphic item '%s' in row %zu." ),
-                        gr_data.graphic_dataname.c_str(),
-                        geo_tag.c_str(),
-                        rownum );
             continue;
-        }
 
         gr_item->layer = row[geo_subclass_col];
         gr_item->seq = seq;
@@ -1615,7 +1579,7 @@ size_t FABMASTER::processGeometry( size_t aRow )
                 gr->second.elements = std::make_unique<graphic_element>();
             }
 
-            auto result = gr->second.elements->emplace( std::move( gr_item ) );
+            gr->second.elements->emplace( std::move( gr_item ) );
         }
     }
 
@@ -1912,19 +1876,19 @@ size_t FABMASTER::processFootprints( size_t aRow )
             continue;
         }
 
-        const wxString& refdes = row[refdes_col];
+        const wxString& comp_refdes = row[refdes_col];
 
         if( row[symx_col].empty() || row[symy_col].empty() || row[symrotate_col].empty() )
         {
             wxLogError( _( "Missing X, Y, or rotation data in row %zu for refdes %s. "
                            "This may be an unplaced component." ),
-                        rownum, refdes );
+                        rownum, comp_refdes );
             continue;
         }
 
         auto cmp = std::make_unique<COMPONENT>();
 
-        cmp->refdes = refdes;
+        cmp->refdes = comp_refdes;
         cmp->cclass = parseCompClass( row[compclass_col] );
         cmp->pn = row[comppartnum_col];
         cmp->height = row[compheight_col];
@@ -2014,11 +1978,16 @@ size_t FABMASTER::processPins( size_t aRow )
         pin->refdes = row[refdes_col];
         pin->rotation = readDouble( row[pinrot_col] );
 
-        auto map_it = pins.find( pin->refdes );
+        // Use refdes as the key if available, otherwise fall back to sym_name.
+        // Some fabmaster exports (e.g., boards with only components and no netlist)
+        // have empty refdes fields, but the sym_name still links pins to their symbol.
+        std::string pin_key = pin->refdes.empty() ? pin->name : pin->refdes;
+
+        auto map_it = pins.find( pin_key );
 
         if( map_it == pins.end() )
         {
-            auto retval = pins.insert( std::make_pair( pin->refdes, std::set<std::unique_ptr<PIN>,
+            auto retval = pins.insert( std::make_pair( pin_key, std::set<std::unique_ptr<PIN>,
                                                        PIN::BY_NUM>{} ) );
             map_it = retval.first;
         }
@@ -2224,25 +2193,22 @@ bool FABMASTER::loadZones( BOARD* aBoard )
      * outline.
      */
     std::set<ZONE*> zones_to_delete;
+    std::set<ZONE*> matched_fills;
 
     for( auto zone : aBoard->Zones() )
     {
-        /// Remove the filled areas in favor of the outlines
         if( zone->GetNetCode() > 0 )
-        {
             zones_to_delete.insert( zone );
-        }
     }
 
     for( auto zone1 : aBoard->Zones() )
     {
-        /// Zone1 will be the destination zone for the new net
         if( zone1->GetNetCode() > 0 )
             continue;
 
         SHAPE_LINE_CHAIN& outline1 = zone1->Outline()->Outline( 0 );
         std::vector<size_t> overlaps( aBoard->GetNetInfo().GetNetCount() + 1, 0 );
-        std::vector<std::vector<ZONE*>> possible_deletions( overlaps.size() );
+        std::map<int, std::vector<ZONE*>> net_to_fills;
 
         for( auto zone2 : aBoard->Zones() )
         {
@@ -2257,19 +2223,24 @@ bool FABMASTER::loadZones( BOARD* aBoard )
             if( !outline1.BBox().Intersects( outline2.BBox() ) )
                 continue;
 
+            size_t match_count = 0;
+
             for( auto& pt1 : outline1.CPoints() )
             {
-                /// We're looking for the netcode with the most overlaps to the un-netted zone
                 if( outline2.PointOnEdge( pt1, 1 ) )
-                    overlaps[ zone2->GetNetCode() ]++;
+                    match_count++;
             }
 
             for( auto& pt2 : outline2.CPoints() )
             {
-                /// The overlap between outline1 and outline2 isn't perfect, so look for overlaps
-                /// in both directions
-                if( outline1.PointOnEdge( pt2,  1 ) )
-                    overlaps[ zone2->GetNetCode() ]++;
+                if( outline1.PointOnEdge( pt2, 1 ) )
+                    match_count++;
+            }
+
+            if( match_count > 0 )
+            {
+                overlaps[zone2->GetNetCode()] += match_count;
+                net_to_fills[zone2->GetNetCode()].push_back( zone2 );
             }
         }
 
@@ -2286,13 +2257,21 @@ bool FABMASTER::loadZones( BOARD* aBoard )
         }
 
         if( max_net > 0 )
+        {
             zone1->SetNetCode( max_net_id );
+
+            for( ZONE* fill : net_to_fills[max_net_id] )
+                matched_fills.insert( fill );
+        }
     }
 
     for( auto zone : zones_to_delete )
     {
-        aBoard->Remove( zone );
-        delete zone;
+        if( matched_fills.find( zone ) != matched_fills.end() )
+        {
+            aBoard->Remove( zone );
+            delete zone;
+        }
     }
 
     return true;
@@ -2340,6 +2319,48 @@ void FABMASTER::setupText( const FABMASTER::GRAPHIC_TEXT& aGText, PCB_LAYER_ID a
 }
 
 
+void FABMASTER::createComponentsFromOrphanPins()
+{
+    for( const auto& [pinKey, pinSet] : pins )
+    {
+        if( pinSet.empty() )
+            continue;
+
+        if( components.find( pinKey ) != components.end() )
+            continue;
+
+        const auto& firstPin = *pinSet.begin();
+
+        int minX = firstPin->pin_x;
+        int maxX = firstPin->pin_x;
+        int minY = firstPin->pin_y;
+        int maxY = firstPin->pin_y;
+
+        for( const auto& pin : pinSet )
+        {
+            minX = std::min( minX, pin->pin_x );
+            maxX = std::max( maxX, pin->pin_x );
+            minY = std::min( minY, pin->pin_y );
+            maxY = std::max( maxY, pin->pin_y );
+        }
+
+        auto cmp = std::make_unique<COMPONENT>();
+        cmp->refdes = pinKey;
+        cmp->name = firstPin->name;
+        cmp->mirror = firstPin->mirror;
+        cmp->rotate = 0.0;
+        cmp->x = ( minX + maxX ) / 2;
+        cmp->y = ( minY + maxY ) / 2;
+        cmp->type = SYMTYPE_PACKAGE;
+        cmp->cclass = COMPCLASS_IC;
+
+        std::vector<std::unique_ptr<COMPONENT>> compVec;
+        compVec.push_back( std::move( cmp ) );
+        components.insert( std::make_pair( pinKey, std::move( compVec ) ) );
+    }
+}
+
+
 bool FABMASTER::loadFootprints( BOARD* aBoard )
 {
     const NETNAMES_MAP& netinfo = aBoard->GetNetInfo().NetsByName();
@@ -2351,7 +2372,7 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
 
         bool has_multiple = mod.second.size() > 1;
 
-        for( int i = 0; i < mod.second.size(); ++i )
+        for( int i = 0; i < (int) mod.second.size(); ++i )
         {
             auto& src = mod.second[i];
 
@@ -2436,13 +2457,9 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
 
             auto gr_it = comp_graphics.find( src->refdes );
 
-            if( gr_it == comp_graphics.end() )
+            if( gr_it != comp_graphics.end() )
             {
-                continue;
-                //TODO: Error
-            }
-
-            for( auto& gr_ref : gr_it->second )
+                for( auto& gr_ref : gr_it->second )
             {
                 auto& graphic = gr_ref.second;
 
@@ -2457,7 +2474,6 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
 
                     switch( seg->shape )
                     {
-
                     case GR_SHAPE_LINE:
                     {
                         const GRAPHIC_LINE* lsrc = static_cast<const GRAPHIC_LINE*>( seg.get() );
@@ -2485,6 +2501,7 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                         fp->Add( line, ADD_MODE::APPEND );
                         break;
                     }
+
                     case GR_SHAPE_CIRCLE:
                     {
                         const GRAPHIC_ARC& lsrc = static_cast<const GRAPHIC_ARC&>( *seg );
@@ -2521,6 +2538,7 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                         fp->Add( circle, ADD_MODE::APPEND );
                         break;
                     }
+
                     case GR_SHAPE_ARC:
                     {
                         const GRAPHIC_ARC* lsrc = static_cast<const GRAPHIC_ARC*>( seg.get() );
@@ -2552,6 +2570,7 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                         fp->Add( arc.release(), ADD_MODE::APPEND );
                         break;
                     }
+
                     case GR_SHAPE_RECTANGLE:
                     {
                         const GRAPHIC_RECTANGLE *lsrc =
@@ -2577,6 +2596,7 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                         fp->Add( rect, ADD_MODE::APPEND );
                         break;
                     }
+
                     case GR_SHAPE_TEXT:
                     {
                         const GRAPHIC_TEXT& lsrc = static_cast<const GRAPHIC_TEXT&>( *seg );
@@ -2605,13 +2625,19 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
 
                         break;
                     }
+
                     default:
                         continue;
                     }
                 }
             }
+            }
 
             auto pin_it = pins.find( src->refdes );
+
+            // If no pins found by refdes, try by symbol name (for fabmaster exports without netlists)
+            if( pin_it == pins.end() )
+                pin_it = pins.find( src->name );
 
             if( pin_it != pins.end() )
             {
@@ -2683,7 +2709,6 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
                                 {
                                     // For now, we are only processing the custom pad for the
                                     // top layer
-                                    // TODO: Use full padstacks when implementing in KiCad
                                     PCB_LAYER_ID primary_layer = src->mirror ? B_Cu : F_Cu;
 
                                     if( getLayer( ( *( el.second.begin() ) )->layer ) != primary_layer )
@@ -2699,21 +2724,21 @@ bool FABMASTER::loadFootprints( BOARD* aBoard )
 
                                         if( seg->shape == GR_SHAPE_LINE )
                                         {
-                                            const GRAPHIC_LINE* src = static_cast<const GRAPHIC_LINE*>( seg.get() );
+                                            const GRAPHIC_LINE* line_seg = static_cast<const GRAPHIC_LINE*>( seg.get() );
 
                                             if( poly_outline.VertexCount( 0, hole_idx ) == 0 )
-                                                poly_outline.Append( src->start_x, src->start_y,
+                                                poly_outline.Append( line_seg->start_x, line_seg->start_y,
                                                                      0, hole_idx );
 
-                                            poly_outline.Append( src->end_x, src->end_y, 0,
+                                            poly_outline.Append( line_seg->end_x, line_seg->end_y, 0,
                                                                  hole_idx );
                                         }
                                         else if( seg->shape == GR_SHAPE_ARC )
                                         {
-                                            const GRAPHIC_ARC* src = static_cast<const GRAPHIC_ARC*>( seg.get() );
+                                            const GRAPHIC_ARC* arc_seg = static_cast<const GRAPHIC_ARC*>( seg.get() );
                                             SHAPE_LINE_CHAIN&  chain = poly_outline.Hole( 0, hole_idx );
 
-                                            chain.Append( src->result );
+                                            chain.Append( arc_seg->result );
                                         }
                                     }
                                 }
@@ -2870,6 +2895,17 @@ bool FABMASTER::loadVias( BOARD* aBoard )
     const NETNAMES_MAP& netinfo = aBoard->GetNetInfo().NetsByName();
     const auto& ds = aBoard->GetDesignSettings();
 
+    // Build a sorted list of conductive layers by their layer id for via span determination
+    std::vector<const FABMASTER_LAYER*> conductiveLayers;
+
+    for( const auto& layer : layers )
+    {
+        if( layer.second.conductive )
+            conductiveLayers.push_back( &layer.second );
+    }
+
+    std::sort( conductiveLayers.begin(), conductiveLayers.end(), FABMASTER_LAYER::BY_ID() );
+
     for( auto& via : vias )
     {
         checkpoint();
@@ -2903,6 +2939,47 @@ bool FABMASTER::loadVias( BOARD* aBoard )
         {
             new_via->SetDrill( padstack->second.drill_size_x );
             new_via->SetWidth( PADSTACK::ALL_LAYERS, padstack->second.width );
+
+            const std::set<std::string>& viaLayers = padstack->second.copper_layers;
+
+            if( viaLayers.size() >= 2 )
+            {
+                // Find the first and last conductive layers that have annular rings
+                const FABMASTER_LAYER* topLayer = nullptr;
+                const FABMASTER_LAYER* botLayer = nullptr;
+
+                for( const FABMASTER_LAYER* layer : conductiveLayers )
+                {
+                    if( viaLayers.count( layer->name ) )
+                    {
+                        if( !topLayer )
+                            topLayer = layer;
+
+                        botLayer = layer;
+                    }
+                }
+
+                if( topLayer && botLayer && topLayer != botLayer )
+                {
+                    PCB_LAYER_ID topLayerId = static_cast<PCB_LAYER_ID>( topLayer->layerid );
+                    PCB_LAYER_ID botLayerId = static_cast<PCB_LAYER_ID>( botLayer->layerid );
+
+                    // Check if this spans all copper layers
+                    bool isThrough = ( topLayerId == F_Cu && botLayerId == B_Cu );
+
+                    if( !isThrough )
+                    {
+                        // Blind via connects to an outer layer (F_Cu or B_Cu)
+                        // Buried via connects only to inner layers
+                        if( topLayerId == F_Cu || botLayerId == B_Cu )
+                            new_via->SetViaType( VIATYPE::BLIND );
+                        else
+                            new_via->SetViaType( VIATYPE::BURIED );
+
+                        new_via->SetLayerPair( topLayerId, botLayerId );
+                    }
+                }
+            }
         }
 
         aBoard->Add( new_via, ADD_MODE::APPEND );
@@ -2931,9 +3008,6 @@ bool FABMASTER::loadEtch( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>
     const NETNAMES_MAP& netinfo = aBoard->GetNetInfo().NetsByName();
     auto net_it = netinfo.find( aLine->netname );
 
-    int  last_subseq = 0;
-    ZONE* new_zone = nullptr;
-
     for( const auto& seg : aLine->segment )
     {
         PCB_LAYER_ID layer = getLayer( seg->layer );
@@ -2959,6 +3033,7 @@ bool FABMASTER::loadEtch( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>
                 aBoard->Add( trk, ADD_MODE::APPEND );
                 break;
             }
+
             case GR_SHAPE_ARC:
             {
                 const GRAPHIC_ARC* src = static_cast<const GRAPHIC_ARC*>( seg.get() );
@@ -2973,16 +3048,13 @@ bool FABMASTER::loadEtch( BOARD* aBoard, const std::unique_ptr<FABMASTER::TRACE>
                 aBoard->Add( trk, ADD_MODE::APPEND );
                 break;
             }
+
             default:
-            {
                 // Defer to the generic graphics factory
-                for( std::unique_ptr<BOARD_ITEM>& new_item :
-                     createBoardItems( *aBoard, layer, *seg ) )
-                {
+                for( std::unique_ptr<BOARD_ITEM>& new_item : createBoardItems( *aBoard, layer, *seg ) )
                     aBoard->Add( new_item.release(), ADD_MODE::APPEND );
-                }
+
                 break;
-            }
             }
         }
         else
@@ -3108,12 +3180,14 @@ bool FABMASTER::traceIsOpen( const FABMASTER::TRACE& aLine )
         end = VECTOR2I{ line.end_x, line.end_y };
         break;
     }
+
     case GR_SHAPE_ARC:
     {
         const GRAPHIC_ARC& arc = static_cast<const GRAPHIC_ARC&>( *last );
         end = VECTOR2I{ arc.end_x, arc.end_y };
         break;
     }
+
     default:
         // These shapes don't have "ends" that make sense for a polyline
         break;
@@ -3162,6 +3236,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
         new_items.emplace_back( std::move( new_text ) );
         break;
     }
+
     case GR_SHAPE_CROSS:
     {
         const GRAPHIC_CROSS& src = static_cast<const GRAPHIC_CROSS&>( aGraphic );
@@ -3183,6 +3258,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
         }
         break;
     }
+
     default:
     {
         // Simple single shape
@@ -3202,6 +3278,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
 
             break;
         }
+
         case GR_SHAPE_ARC:
         {
             const GRAPHIC_ARC& src = static_cast<const GRAPHIC_ARC&>( aGraphic );
@@ -3211,6 +3288,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
                                        src.result.GetP1() );
             break;
         }
+
         case GR_SHAPE_CIRCLE:
         {
             const GRAPHIC_ARC& src = static_cast<const GRAPHIC_ARC&>( aGraphic );
@@ -3220,6 +3298,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
             new_shape->SetRadius( src.radius );
             break;
         }
+
         case GR_SHAPE_RECTANGLE:
         {
             const GRAPHIC_RECTANGLE& src = static_cast<const GRAPHIC_RECTANGLE&>( aGraphic );
@@ -3231,6 +3310,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
             new_shape->SetFilled( src.fill );
             break;
         }
+
         case GR_SHAPE_POLYGON:
         {
             const GRAPHIC_POLYGON& src = static_cast<const GRAPHIC_POLYGON&>( aGraphic );
@@ -3238,6 +3318,7 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
             new_shape->SetPolyPoints( src.m_pts );
             break;
         }
+
         case GR_SHAPE_OBLONG:
         {
             // Create as a polygon, but we could also make a group of two lines and two arcs
@@ -3267,11 +3348,10 @@ FABMASTER::createBoardItems( BOARD& aBoard, PCB_LAYER_ID aLayer, FABMASTER::GRAP
             new_shape->SetPolyShape( poly );
             break;
         }
+
         default:
-        {
             wxLogError( _( "Unhandled shape type %d in polygon on layer %s, seq %d %d" ),
                         aGraphic.shape, aGraphic.layer, aGraphic.seq, aGraphic.subseq );
-        }
         }
 
         new_items.emplace_back( std::move( new_shape ) );
@@ -3640,6 +3720,7 @@ bool FABMASTER::LoadBoard( BOARD* aBoard, PROGRESS_REPORTER* aProgressReporter )
     loadNets( aBoard );
     loadLayers( aBoard );
     loadVias( aBoard );
+    createComponentsFromOrphanPins();
     loadFootprints( aBoard );
     loadZones( aBoard );
     loadGraphics( aBoard );

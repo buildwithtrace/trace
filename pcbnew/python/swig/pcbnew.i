@@ -81,10 +81,11 @@ class BASE_SET {};
 #include <exporters/export_d356.h>
 #include <exporters/place_file_exporter.h>
 #include <exporters/export_vrml.h>
-#include <exporters/gendrill_file_writer_base.h>
-#include <exporters/gendrill_Excellon_writer.h>
+#include <exporters/gendrill_writer_base.h>
+#include <exporters/gendrill_excellon_writer.h>
 #include <exporters/gendrill_gerber_writer.h>
 #include <exporters/gerber_jobfile_writer.h>
+#include <footprint.h>
 #include <pcb_io/pcb_io_mgr.h>
 #include <pcb_io/pcb_io.h>
 
@@ -93,6 +94,11 @@ wxArrayString GetFootprintLibraries();
 wxArrayString GetFootprints(const wxString& aNickName);
 %}
 
+
+// Tell SWIG that the caller owns the PCB_IO* returned by FindPlugin and is
+// responsible for deleting it. This fixes memory leaks in Python wrapper
+// functions like FootprintLoad that call GetPluginForPath -> FindPlugin.
+%newobject PCB_IO_MGR::FindPlugin;
 
 %include <pcb_io/pcb_io_mgr.h>
 %include <pcb_io/pcb_io.h>
@@ -126,8 +132,8 @@ HANDLE_EXCEPTIONS(PLUGIN::FootprintDelete)
 %include <exporters/export_d356.h>
 %include <exporters/place_file_exporter.h>
 %include <exporters/export_vrml.h>
-%include <exporters/gendrill_file_writer_base.h>
-%include <exporters/gendrill_Excellon_writer.h>
+%include <exporters/gendrill_writer_base.h>
+%include <exporters/gendrill_excellon_writer.h>
 %include <exporters/gendrill_gerber_writer.h>
 %include <exporters/gerber_jobfile_writer.h>
 %include <gal/color4d.h>
@@ -144,5 +150,3 @@ HANDLE_EXCEPTIONS(WriteDRCReport)
 %include plugins.i
 %include units.i
 %include version.i
-
-

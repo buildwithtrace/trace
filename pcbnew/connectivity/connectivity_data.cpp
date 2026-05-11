@@ -33,17 +33,22 @@
 
 #include <connectivity/connectivity_data.h>
 #include <connectivity/connectivity_algo.h>
+#include <properties/property.h>
 #include <connectivity/from_to_cache.h>
 #include <board_item.h>
 #include <project/net_settings.h>
 #include <board_design_settings.h>
 #include <geometry/shape_segment.h>
 #include <geometry/shape_circle.h>
+#include <footprint.h>
+#include <pad.h>
+#include <pcb_track.h>
 #include <ratsnest/ratsnest_data.h>
 #include <progress_reporter.h>
 #include <thread_pool.h>
 #include <trigo.h>
 #include <drc/drc_rtree.h>
+#include <properties/property_mgr.h>
 
 CONNECTIVITY_DATA::CONNECTIVITY_DATA() :
         m_skipRatsnestUpdate( false )
@@ -471,10 +476,10 @@ bool CONNECTIVITY_DATA::IsConnectedOnLayer( const BOARD_CONNECTED_ITEM *aItem, i
                     const PAD* thisPad = static_cast<const PAD*>( aItem );
                     const PAD* otherPad = static_cast<const PAD*>( connectedItem );
 
-                    auto flashesConditionally = []( PADSTACK::UNCONNECTED_LAYER_MODE aMode )
+                    auto flashesConditionally = []( UNCONNECTED_LAYER_MODE aMode )
                             {
-                                return aMode == PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END
-                                        || aMode == PADSTACK::UNCONNECTED_LAYER_MODE::REMOVE_ALL;
+                                return aMode == UNCONNECTED_LAYER_MODE::REMOVE_EXCEPT_START_AND_END
+                                        || aMode == UNCONNECTED_LAYER_MODE::REMOVE_ALL;
                             };
 
                     if( flashesConditionally( thisPad->Padstack().UnconnectedLayerMode() )
