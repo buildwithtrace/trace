@@ -25,6 +25,7 @@
 
 #include <wx/filedlg.h>
 #include <wx/filefn.h>
+#include <kiplatform/ui.h>
 
 #include <board.h>
 #include <footprint.h>
@@ -100,6 +101,8 @@ void DIALOG_EXPORT_2581::onBrowseClicked( wxCommandEvent& event )
     wxFileDialog dlg( this, _( "Export IPC-2581 File" ), fn.GetPath(), fn.GetFullName(),
                       m_cbCompress->IsChecked() ? compressed_files : ipc_files,
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
@@ -269,6 +272,11 @@ void DIALOG_EXPORT_2581::onOKClick( wxCommandEvent& event )
     props[ "dist" ] = TO_UTF8( GetDist() );
     props[ "distpn" ] = TO_UTF8( GetDistPN() );
 
+    wxString bomRev = m_textBomRev->GetValue();
+
+    if( !bomRev.IsEmpty() )
+        props[ "bomrev" ] = TO_UTF8( bomRev );
+
     try
     {
         IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::IPC2581 ) );
@@ -310,7 +318,11 @@ void DIALOG_EXPORT_2581::init()
     for( FOOTPRINT* fp : m_parent->GetBoard()->Footprints() )
     {
         for( PCB_FIELD* field : fp->GetFields() )
+        {
+            wxCHECK2( field, continue );
+
             options.insert( field->GetName() );
+        }
     }
 
     std::vector<wxString> items( options.begin(), options.end() );
@@ -362,6 +374,12 @@ bool DIALOG_EXPORT_2581::TransferDataToWindow()
         distPnCol = prj.m_IP2581Bom.distPN;
         mfgCol = prj.m_IP2581Bom.mfg;
         distCol = prj.m_IP2581Bom.dist;
+        wxString bomRev = prj.m_IP2581Bom.bomRev;
+
+        if( bomRev.IsEmpty() )
+            bomRev = prj.m_IP2581Bom.schRevision;
+
+        m_textBomRev->SetValue( bomRev );
     }
     else
     {
@@ -370,6 +388,7 @@ bool DIALOG_EXPORT_2581::TransferDataToWindow()
         distPnCol = m_job->m_colDistPn;
         mfgCol = m_job->m_colMfg;
         distCol = m_job->m_colDist;
+        m_textBomRev->SetValue( m_job->m_bomRev );
     }
 
     if( !m_choiceMPN->SetStringSelection( internalIdCol ) )
@@ -426,6 +445,7 @@ bool DIALOG_EXPORT_2581::TransferDataFromWindow()
         prj.m_IP2581Bom.MPN = GetMPN();
         prj.m_IP2581Bom.distPN = GetDistPN();
         prj.m_IP2581Bom.dist = GetDist();
+        prj.m_IP2581Bom.bomRev = m_textBomRev->GetValue();
     }
     else
     {
@@ -436,6 +456,7 @@ bool DIALOG_EXPORT_2581::TransferDataFromWindow()
         m_job->m_colDistPn = GetDistPN();
         m_job->m_colMfg = GetMfg();
         m_job->m_colMfgPn = GetMPN();
+        m_job->m_bomRev = m_textBomRev->GetValue();
 
         m_job->m_version = GetVersion() == 'B' ? JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION::B
 											   : JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION::C;

@@ -621,7 +621,7 @@ void DIALOG_SIM_COMMAND::parseCommand( const wxString& aCommand )
 
         m_commandType->Clear();
 
-        for( SIM_TYPE type : { ST_OP, ST_DC, ST_AC, ST_TRAN, ST_PZ, ST_NOISE, ST_SP, ST_FFT } )
+        for( SIM_TYPE type : { ST_OP, ST_DC, ST_AC, ST_TRAN, ST_PZ, ST_NOISE, ST_SP, ST_FFT, ST_UNKNOWN } )
         {
             m_commandType->Append( SPICE_SIMULATOR::TypeToName( type, true )
                                         + wxT( "  \u2014  " )
@@ -1003,7 +1003,7 @@ void DIALOG_SIM_COMMAND::OnFilterText( wxCommandEvent& aEvent )
 
 void DIALOG_SIM_COMMAND::OnFilterMouseMoved( wxMouseEvent& aEvent )
 {
-#if defined( __WXOSX__ ) || wxCHECK_VERSION( 3, 3, 0 ) // Doesn't work properly on other ports
+#if defined( __WXOSX__ ) // Doesn't work properly on other ports
     wxPoint pos = aEvent.GetPosition();
     wxRect  ctrlRect = m_inputSignalsFilter->GetScreenRect();
     int     buttonWidth = ctrlRect.GetHeight();         // Presume buttons are square

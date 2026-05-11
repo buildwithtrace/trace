@@ -21,6 +21,10 @@
 
 #include <optional>
 
+#include <core/typeinfo.h>
+
+#include <board_connected_item.h>
+
 #include "pns_node.h"
 #include "pns_itemset.h"
 #include "pns_topology.h"
@@ -28,6 +32,7 @@
 #include "pns_diff_pair.h"
 #include "pns_router.h"
 #include "pns_solid.h"
+
 
 namespace PNS {
 
@@ -219,6 +224,18 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
 
     m_originPair.CP().Split( m_currentStart, aP, preP, tunedP, postP );
     m_originPair.CN().Split( m_currentStart, aP, preN, tunedN, postN );
+
+    // Bail out early if the tuned sections are empty (issue #22041). This can happen when the
+    // split points are too close together or outside the line chain.
+    if( tunedP.PointCount() == 0 || tunedN.PointCount() == 0 )
+    {
+        m_finalShapeP = m_originPair.CP();
+        m_finalShapeN = m_originPair.CN();
+        m_lastLength  = origPathLength();
+        m_lastStatus  = TOO_SHORT;
+
+        return false;
+    }
 
     auto updateStatus =
             [&]()

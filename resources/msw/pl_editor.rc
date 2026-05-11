@@ -3,7 +3,7 @@
 IDI_APP_PLEDITOR_ICON ICON "../resources/bitmaps_png/icons/icon_pagelayout_editor.ico"
 IDI_FILE_WORKSHEET_ICON ICON "../resources/bitmaps_png/icons/fileicon_worksheet.ico"
 
-#define RC_VER_FILE_DESCRIPTION "KiCad Drawing Sheet Editor " KICAD_WIN32_RC_PRODVER_STR
+#define RC_VER_FILE_DESCRIPTION "Trace Drawing Sheet Editor " TRACE_WIN32_RC_PRODVER_STR
 #define RC_VER_INTERNALNAME "pl_editor"
 #define RC_VER_ORIGINALFILENAME "pl_editor.exe"
 #include "kiwin32.rc"

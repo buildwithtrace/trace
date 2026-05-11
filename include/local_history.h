@@ -24,12 +24,43 @@
 #pragma once
 
 #include <kicommon.h>
+#include <io/kicad/kicad_io_utils.h>
+
+#include <atomic>
+#include <future>
 #include <vector>
 #include <set>
 #include <map>
 #include <functional>
+#include <string>
+#include <wx/arrstr.h>
+#include <wx/datetime.h>
 #include <wx/string.h>
 #include <wx/window.h>
+
+
+/**
+ * Data produced by a registered saver on the UI thread, consumed by the background commit thread.
+ * Each entry represents one file to write into the .history mirror.
+ */
+struct KICOMMON_API HISTORY_FILE_DATA
+{
+    wxString    path;           ///< Destination inside .history/
+    std::string content;        ///< Serialized content (mutually exclusive with sourcePath)
+    wxString    sourcePath;     ///< For file-copy savers (small files like .kicad_pro)
+    bool        prettify = false;
+    KICAD_FORMAT::FORMAT_MODE formatMode = KICAD_FORMAT::FORMAT_MODE::NORMAL;
+};
+
+struct KICOMMON_API LOCAL_HISTORY_SNAPSHOT_INFO
+{
+    wxString      hash;
+    wxDateTime    date;
+    wxString      summary;
+    wxString      message;
+    int           filesChanged = 0;
+    wxArrayString changedFiles;
+};
 
 /**
  * Simple local history manager built on libgit2.  Stores history for project files in
@@ -55,12 +86,13 @@ public:
     bool CommitFullProjectSnapshot( const wxString& aProjectPath, const wxString& aTitle );
 
     /** Register a saver callback invoked during autosave history commits.
-     *  The callback receives the project path and should append absolute file paths
-     *  (within that project) to aFiles for inclusion.
+     *  The callback receives the project path and should populate aFileData with
+     *  serialized content or source paths for inclusion.
      *  @param aSaverObject Unique object pointer identifier for this saver (to prevent duplicate registration)
      *  @param aSaver The saver callback function */
-    void RegisterSaver( const void* aSaverObject,
-                       const std::function<void( const wxString&, std::vector<wxString>& )>& aSaver );
+    void RegisterSaver(
+            const void* aSaverObject,
+            const std::function<void( const wxString&, std::vector<HISTORY_FILE_DATA>& )>& aSaver );
 
     /** Unregister a previously registered saver callback.
      *  @param aSaverObject The object pointer that was used to register the saver */
@@ -106,7 +138,20 @@ public:
     void ShowRestoreDialog( const wxString& aProjectPath, wxWindow* aParent );
 
 private:
+    std::vector<LOCAL_HISTORY_SNAPSHOT_INFO> LoadSnapshots( const wxString& aProjectPath );
+
+    /** Execute file writes and git commit on a background thread. */
+    bool commitInBackground( const wxString& aProjectPath, const wxString& aTitle,
+                             const std::vector<HISTORY_FILE_DATA>& aFileData );
+
+    /** Block until any pending background save completes. */
+    void WaitForPendingSave();
+
     std::set<wxString> m_pendingFiles;
-    std::map<const void*, std::function<void(const wxString&, std::vector<wxString>&)>> m_savers;
+    std::map<const void*,
+             std::function<void( const wxString&, std::vector<HISTORY_FILE_DATA>& )>> m_savers;
+
+    std::atomic<bool> m_saveInProgress{ false };
+    std::future<bool> m_pendingFuture;
 };
 

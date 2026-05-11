@@ -59,6 +59,7 @@ class PCB_SHAPE;
 class PCB_REFERENCE_IMAGE;
 class EDA_TEXT;
 class PCB_TEXT;
+class PCB_TEXTBOX;
 class PCB_TRACK;
 class PCB_TABLE;
 class PCB_TABLECELL;
@@ -68,6 +69,7 @@ class PCB_POINT;
 class PCB_TARGET;
 class PCB_VIA;
 class ZONE;
+struct ZONE_LAYER_PROPERTIES;
 class PCB_BARCODE;
 class FP_3DMODEL;
 class SHAPE_LINE_CHAIN;
@@ -133,6 +135,12 @@ public:
      * @return true if expected header matches
      */
     bool IsValidBoardHeader();
+
+    /**
+     * Return any non-fatal parse warnings that occurred during parsing.
+     * These are errors that were handled gracefully but should be reported to the user.
+     */
+    const std::vector<wxString>& GetParseWarnings() const { return m_parseWarnings; }
 
 private:
 
@@ -322,6 +330,9 @@ private:
 
     std::pair<wxString, wxString> parseBoardProperty();
 
+    void parseVariants();
+    void parseFootprintVariant( FOOTPRINT* aFootprint );
+
     /**
      * Parses possible outline points and stores them into \p aPoly.  This accepts points
      * for DRAWSEGMENT polygons, EDGEMODULE polygons and ZONE_CONTAINER polygons.  Points
@@ -447,6 +458,8 @@ private:
     std::vector<GENERATOR_INFO> m_generatorInfos;
 
     std::function<bool( wxString aTitle, int aIcon, wxString aMsg, wxString aAction )> m_queryUserCallback;
+
+    std::vector<wxString>       m_parseWarnings;    ///< Non-fatal warnings collected during parsing
 };
 
 

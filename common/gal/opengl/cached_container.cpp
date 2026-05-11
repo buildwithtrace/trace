@@ -41,7 +41,7 @@
 #include <cassert>
 
 #ifdef __WIN32__
-#include <excpt.h>
+#include <windows.h>
 #endif
 
 #ifdef KICAD_GAL_PROFILE
@@ -128,6 +128,14 @@ VERTEX* CACHED_CONTAINER::Allocate( unsigned int aSize )
             m_failed = true;
             return nullptr;
         }
+    }
+
+    // Guard against a null vertex buffer (can occur if the GPU mapping was silently
+    // invalidated, e.g. on macOS under memory pressure).
+    if( !m_vertices )
+    {
+        m_failed = true;
+        return nullptr;
     }
 
     VERTEX* reserved = &m_vertices[m_chunkOffset + itemSize];
@@ -254,6 +262,13 @@ bool CACHED_CONTAINER::reallocate( unsigned int aSize )
     // Check if the item was previously stored in the container
     if( itemSize > 0 )
     {
+        // Safety check: m_vertices must be valid at this point.  On some platforms (notably
+        // macOS with Metal-backed OpenGL), the GPU buffer mapping can silently fail or be
+        // invalidated under memory pressure, leaving m_vertices null even after a successful
+        // defragmentResize().  Bail out rather than crash on the memcpy.
+        if( !m_vertices )
+            return false;
+
         // The item was reallocated, so we have to copy all the old data to the new place
         memcpy( &m_vertices[newChunkOffset], &m_vertices[m_chunkOffset], itemSize * VERTEX_SIZE );
 
@@ -320,8 +335,8 @@ void CACHED_CONTAINER::defragment( VERTEX* aTarget )
         // currently, because SEH (Structured Exception Handling) is not documented on msys
         // (for instance __except1 exists without doc) or is not supported, do nothing
     #else
-        __except( GetExceptionCode() == STATUS_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
-                                                                : EXCEPTION_CONTINUE_SEARCH )
+        __except( GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
+                                                                  : EXCEPTION_CONTINUE_SEARCH )
         {
             throw std::runtime_error(
                     "Access violation in defragment. This is usually an indicator of "

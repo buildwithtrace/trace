@@ -36,6 +36,7 @@
  * referred to as plugins, but they are really just external binaries.
  */
 
+#include <properties/property.h>
 #include <pgm_base.h>
 #include <kiface_base.h>
 #include <string_utils.h>
@@ -48,6 +49,7 @@
 #include <netlist_exporters/netlist_exporter_spice.h>
 #include <paths.h>
 #include <jobs/job_export_sch_netlist.h>
+#include <kiplatform/ui.h>
 
 #include <eeschema_id.h>
 #include <wx/checkbox.h>
@@ -60,6 +62,7 @@
 
 #include <thread>
 #include <vector>
+#include <properties/property_mgr.h>
 
 
 namespace
@@ -562,6 +565,8 @@ bool DIALOG_EXPORT_NETLIST::TransferDataFromWindow()
 
         // full name does not and should not include the path, per wx docs.
         wxFileDialog dlg( this, title, path, fullname, fileWildcard, wxFD_SAVE );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return false;

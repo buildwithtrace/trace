@@ -198,7 +198,7 @@ void BACKGROUND_JOB_REPORTER::Report( const wxString& aMessage )
 void BACKGROUND_JOB_REPORTER::SetNumPhases( int aNumPhases )
 {
     PROGRESS_REPORTER_BASE::SetNumPhases( aNumPhases );
-    m_job->m_maxProgress = m_numPhases;
+    m_job->m_maxProgress.store( m_numPhases.load() );
     m_monitor->jobUpdated( m_job );
 }
 
@@ -206,7 +206,7 @@ void BACKGROUND_JOB_REPORTER::SetNumPhases( int aNumPhases )
 void BACKGROUND_JOB_REPORTER::AdvancePhase()
 {
     PROGRESS_REPORTER_BASE::AdvancePhase();
-    m_job->m_currentProgress = m_phase;
+    m_job->m_currentProgress.store( m_phase.load() );
     m_monitor->jobUpdated( m_job );
 }
 
@@ -214,8 +214,8 @@ void BACKGROUND_JOB_REPORTER::AdvancePhase()
 void BACKGROUND_JOB_REPORTER::SetCurrentProgress( double aProgress )
 {
     PROGRESS_REPORTER_BASE::SetCurrentProgress( aProgress );
-    m_job->m_maxProgress = 1000;
-    m_job->m_currentProgress = ( 1000 * aProgress );
+    m_job->m_maxProgress.store( 1000 );
+    m_job->m_currentProgress.store( static_cast<int>( 1000 * aProgress ) );
     m_monitor->jobUpdated( m_job );
 }
 
@@ -372,19 +372,30 @@ void BACKGROUND_JOBS_MONITOR::jobUpdated( std::shared_ptr<BACKGROUND_JOB> aJob )
 
 void BACKGROUND_JOBS_MONITOR::RegisterStatusBar( KISTATUSBAR* aStatusBar )
 {
-    m_statusBars.push_back( aStatusBar );
+    std::shared_ptr<BACKGROUND_JOB> frontJob;
+
+    {
+        std::lock_guard<std::shared_mutex> lock( m_mutex );
+        m_statusBars.push_back( aStatusBar );
+
+        // Capture front job while holding lock
+        if( !m_jobs.empty() )
+            frontJob = m_jobs.front();
+    }
 
     // Make sure the newly-registered bar gets the active job, if any
-    if( !m_jobs.empty() )
-        jobUpdated( m_jobs.front() );
+    if( frontJob )
+        jobUpdated( frontJob );
 }
 
 
 void BACKGROUND_JOBS_MONITOR::UnregisterStatusBar( KISTATUSBAR* aStatusBar )
 {
+    std::lock_guard<std::shared_mutex> lock( m_mutex );
     m_statusBars.erase( std::remove_if( m_statusBars.begin(), m_statusBars.end(),
                                         [&]( KISTATUSBAR* statusBar )
                                         {
                                             return statusBar == aStatusBar;
-                                        } ) );
+                                        } ),
+                        m_statusBars.end() );
 }

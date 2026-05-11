@@ -161,8 +161,8 @@ CADSTAR_SCH_ARCHIVE_LOADER::loadLibPart( const CADSTAR_PART_ENTRY& aPart )
         for( auto& [storedPinNum, termID] : m_symDefTerminalsMap[symbolID] )
         {
             wxCHECK( termID > 0 && sym.m_Pins.size() >= size_t( termID ), nullptr );
-            SCH_PIN* pin = kiSymDef->GetPin( storedPinNum );
-            size_t   termIdx = size_t( termID ) - 1;
+            std::vector<SCH_PIN*> pins = kiSymDef->GetPinsByNumber( storedPinNum );
+            size_t                termIdx = size_t( termID ) - 1;
 
             // For now leave numerical pin number. Otherwise, when loading the
             // .cpa file we won't be able to link up to the footprint pads, but if
@@ -172,14 +172,18 @@ CADSTAR_SCH_ARCHIVE_LOADER::loadLibPart( const CADSTAR_PART_ENTRY& aPart )
             //  partPinNum = wxString( aPart.m_PinNamesMap.at( termID ) );
             //
             wxString partPinNum = wxString::Format( "%ld", sym.m_Pins[termIdx].m_Identifier );
-            pin->SetNumber( partPinNum );
 
-            if( aPart.m_PinNamesMap.count( termID ) )
-                pin->SetName( HandleTextOverbar( aPart.m_PinNamesMap.at( termID ) ) );
-            else if( aPart.m_PinLabelsMap.count( termID ) )
-                pin->SetName( HandleTextOverbar( aPart.m_PinLabelsMap.at( termID ) ) );
+            for( SCH_PIN* pin : pins )
+            {
+                pin->SetNumber( partPinNum );
 
-            pin->SetType( getKiCadPinType( sym.m_Pins[termIdx].m_Type ) );
+                if( aPart.m_PinNamesMap.count( termID ) )
+                    pin->SetName( HandleTextOverbar( aPart.m_PinNamesMap.at( termID ) ) );
+                else if( aPart.m_PinLabelsMap.count( termID ) )
+                    pin->SetName( HandleTextOverbar( aPart.m_PinLabelsMap.at( termID ) ) );
+
+                pin->SetType( getKiCadPinType( sym.m_Pins[termIdx].m_Type ) );
+            }
 
             // @todo: Load pin/gate swapping information once kicad supports this
         }
@@ -585,7 +589,7 @@ void CADSTAR_SCH_ARCHIVE_LOADER::loadSheets()
         std::string filename = wxString::Format( "%s_%02d", loadedFilePath.GetName(),
                                                  getSheetNumber( rootSheetID ) )
                                        .ToStdString();
-        ReplaceIllegalFileNameChars( &filename );
+        ReplaceIllegalFileNameChars( filename );
         filename += wxT( "." ) + wxString( FILEEXT::KiCadSchematicFileExtension );
 
         wxFileName fn( m_schematic->Project().GetProjectPath() + filename );
@@ -893,7 +897,7 @@ void CADSTAR_SCH_ARCHIVE_LOADER::loadSchematicSymbolInstances()
                     kiPart->SetShowPinNames( false );
                     kiPart->SetShowPinNumbers( false );
 
-                    std::vector<SCH_PIN*> pins = kiPart->GetPins();
+                    std::vector<SCH_PIN*> pins = kiPart->GetGraphicalPins( 0, 0 );
                     wxCHECK( pins.size() == 1, /*void*/ );
 
                     pins.at( 0 )->SetType( ELECTRICAL_PINTYPE::PT_POWER_IN );
@@ -1197,7 +1201,7 @@ void CADSTAR_SCH_ARCHIVE_LOADER::loadNets()
             BUS               bus     = Schematic.Buses.at( busTerm.BusID );
 
             if( !alg::contains( m_busesMap.at( bus.ID )->Members(), netName ) )
-                m_busesMap.at( bus.ID )->Members().emplace_back( netName );
+                m_busesMap.at( bus.ID )->AddMember( netName );
 
             SCH_BUS_WIRE_ENTRY* busEntry =
                     new SCH_BUS_WIRE_ENTRY( getKiCadPoint( busTerm.FirstPoint ), false );
@@ -1835,8 +1839,8 @@ void CADSTAR_SCH_ARCHIVE_LOADER::loadSymbolGateAndPartFields( const SYMDEF_ID& a
 
     for( auto&& [storedPinNum, termID] : m_symDefTerminalsMap[aSymdefID] )
     {
-        PART::DEFINITION::PIN csPin = getPartDefinitionPin( aCadstarPart, aGateID, termID );
-        SCH_PIN*              pin = kiSymDef->GetPin( storedPinNum );
+        PART::DEFINITION::PIN     csPin = getPartDefinitionPin( aCadstarPart, aGateID, termID );
+        std::vector<SCH_PIN*>     pins = kiSymDef->GetPinsByNumber( storedPinNum );
 
         wxString pinName = HandleTextOverbar( csPin.Label );
         wxString pinNum = HandleTextOverbar( csPin.Name );
@@ -1851,9 +1855,12 @@ void CADSTAR_SCH_ARCHIVE_LOADER::loadSymbolGateAndPartFields( const SYMDEF_ID& a
                 pinNum = wxString::Format( "%ld", csPin.ID );
         }
 
-        pin->SetType( getKiCadPinType( csPin.Type ) );
-        pin->SetNumber( pinNum );
-        pin->SetName( pinName );
+        for( SCH_PIN* pin : pins )
+        {
+            pin->SetType( getKiCadPinType( csPin.Type ) );
+            pin->SetNumber( pinNum );
+            pin->SetName( pinName );
+        }
 
         pinNumMap.insert( { termID, pinNum } );
     }
@@ -2139,13 +2146,14 @@ SCH_SYMBOL* CADSTAR_SCH_ARCHIVE_LOADER::loadSchematicSymbol( const SYMBOL& aCads
     {
         TERMINAL_TO_PINNUM_MAP termNumMap = m_pinNumsMap.at( partGateIndex );
 
-        std::map<wxString, SCH_PIN*> pinNumToLibPinMap;
+        std::map<wxString, std::vector<SCH_PIN*>> pinNumToLibPinsMap;
 
         for( auto& term : termNumMap )
         {
             wxString pinNum = term.second;
-            pinNumToLibPinMap.insert( { pinNum,
-                                        symbol->GetLibSymbolRef()->GetPin( term.second ) } );
+            std::vector<SCH_PIN*> pins =
+                    symbol->GetLibSymbolRef()->GetPinsByNumber( term.second );
+            pinNumToLibPinsMap.insert( { pinNum, pins } );
         }
 
         auto replacePinNumber =
@@ -2154,8 +2162,8 @@ SCH_SYMBOL* CADSTAR_SCH_ARCHIVE_LOADER::loadSchematicSymbol( const SYMBOL& aCads
                     if( aOldPinNum == aNewPinNum )
                         return;
 
-                    SCH_PIN* libpin = pinNumToLibPinMap.at( aOldPinNum );
-                    libpin->SetNumber( HandleTextOverbar( aNewPinNum ) );
+                    for( SCH_PIN* libpin : pinNumToLibPinsMap.at( aOldPinNum ) )
+                        libpin->SetNumber( HandleTextOverbar( aNewPinNum ) );
                 };
 
         //Older versions of Cadstar used pin numbers
@@ -2481,7 +2489,7 @@ void CADSTAR_SCH_ARCHIVE_LOADER::loadSheetAndChildSheets( const LAYER_ID&       
     wxString    loadedFilename = wxFileName( Filename ).GetName();
     std::string filename = wxString::Format( "%s_%02d", loadedFilename, sheetNum ).ToStdString();
 
-    ReplaceIllegalFileNameChars( &filename );
+    ReplaceIllegalFileNameChars( filename );
     filename += wxT( "." ) + wxString( FILEEXT::KiCadSchematicFileExtension );
 
     sheet->GetField( FIELD_T::SHEET_FILENAME )->SetText( filename );

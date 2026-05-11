@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2013-2019 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * @author Tomasz Wlostowski <tomasz.wlostowski@cern.ch>
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -459,18 +460,39 @@ void ACTION_MENU::OnMenuEvent( wxMenuEvent& aEvent )
             {
                 wxKeyEvent keyEvent( wxEVT_CHAR_HOOK );
                 keyEvent.m_keyCode = acceleratorKey->GetKeyCode();
+                keyEvent.m_uniChar = keyEvent.m_keyCode; // Solve wxTE_MULTILINE issue
                 keyEvent.m_controlDown = ( acceleratorKey->GetFlags() & wxMOD_CONTROL ) > 0;
                 keyEvent.m_shiftDown = ( acceleratorKey->GetFlags() & wxMOD_SHIFT ) > 0;
                 keyEvent.m_altDown = ( acceleratorKey->GetFlags() & wxMOD_ALT ) > 0;
 
                 if( wxTextEntry* ctrl = dynamic_cast<wxTextEntry*>( focus ) )
-                    TEXTENTRY_TRICKS::OnCharHook( ctrl, keyEvent );
+                    TEXTENTRY_TRICKS::OnCharHook( ctrl, keyEvent, focus );
                 else
                     focus->HandleWindowEvent( keyEvent );
 
                 if( keyEvent.GetSkipped() )
                 {
                     keyEvent.SetEventType( wxEVT_CHAR );
+
+                    // CHAR_HOOK always uses uppercase key codes for letters, but
+                    // wxEVT_CHAR should use the translated (case-correct) character.
+                    // Since the original key event was lost to the menu system, check
+                    // the actual keyboard state to determine proper case.
+                    int keyCode = keyEvent.GetKeyCode();
+
+                    if( keyCode >= 'A' && keyCode <= 'Z' )
+                    {
+                        bool shiftActive = wxGetKeyState( WXK_SHIFT );
+                        bool capsActive  = wxGetKeyState( WXK_CAPITAL );
+
+                        if( !( shiftActive ^ capsActive ) )
+                            keyEvent.m_keyCode = keyCode + 32;  // Convert to lowercase
+                    }
+
+                #if wxUSE_UNICODE
+                    keyEvent.m_uniChar = keyEvent.m_keyCode;
+                #endif
+
                     focus->HandleWindowEvent( keyEvent );
                 }
 

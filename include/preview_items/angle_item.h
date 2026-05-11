@@ -24,6 +24,8 @@
 #ifndef PREVIEW_ANGLE_ITEM_H
 #define PREVIEW_ANGLE_ITEM_H
 
+#include <memory>
+
 #include <preview_items/simple_overlay_item.h>
 
 class EDIT_POINTS;
@@ -36,11 +38,11 @@ namespace PREVIEW
 class ANGLE_ITEM : public SIMPLE_OVERLAY_ITEM
 {
 public:
-    ANGLE_ITEM( EDIT_POINTS* aPoints );
+    ANGLE_ITEM( const std::shared_ptr<EDIT_POINTS>& aPoints );
 
     const BOX2I ViewBBox() const override;
 
-    void SetEditPoints( EDIT_POINTS* aPoints )
+    void SetEditPoints( const std::shared_ptr<EDIT_POINTS>& aPoints )
     {
         m_points = aPoints;
     }
@@ -48,7 +50,7 @@ public:
 private:
     void drawPreviewShape( KIGFX::VIEW* aView ) const override;
 
-    EDIT_POINTS* m_points;
+    std::weak_ptr<EDIT_POINTS> m_points;
 };
 
 } // PREVIEW

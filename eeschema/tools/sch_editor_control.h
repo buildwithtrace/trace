@@ -134,6 +134,7 @@ public:
     int ToggleProperties( const TOOL_EVENT& aEvent );
     int ToggleLibraryTree( const TOOL_EVENT& aEvent );
     int ToggleRemoteSymbolPanel( const TOOL_EVENT& aEvent );
+    int ToggleAIChat( const TOOL_EVENT& aEvent );
 
     int ToggleHiddenPins( const TOOL_EVENT& aEvent );
     int ToggleHiddenFields( const TOOL_EVENT& aEvent );
@@ -153,8 +154,6 @@ public:
     int ReloadPlugins( const TOOL_EVENT& aEvent );
 
     int GridFeedback( const TOOL_EVENT& aEvent );
-
-    int RepairSchematic( const TOOL_EVENT& aEvent );
 
     void AssignFootprints( const std::string& aChangedSetOfReferences );
 

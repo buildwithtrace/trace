@@ -273,8 +273,8 @@ public:
 
             for( int i = 1; i <= aSymbol.GetUnitCount(); i++ )
             {
-                if( aValue == aPin.GetBodyStyleDescription( i, true )
-                        || aValue == aPin.GetBodyStyleDescription( i, false ) )
+                if( aValue == aPin.GetUnitDisplayName( i, true )
+                        || aValue == aPin.GetUnitDisplayName( i, false ) )
                 {
                     aPin.SetUnit( i );
                     break;
@@ -956,6 +956,7 @@ public:
         if( aFromFile )
         {
             path = promptForFile();
+
             if( path.IsEmpty() )
                 return {};
         }
@@ -988,7 +989,7 @@ public:
             {
                 std::vector<wxString>& cols = csvData[i];
 
-                auto pin = std::make_unique<SCH_PIN>( &aSym );
+                std::unique_ptr<SCH_PIN> pin = std::make_unique<SCH_PIN>( &aSym );
 
                 // Ignore cells that stick out to the right of the headers
                 size_t maxCol = std::min( headerCols.size(), cols.size() );
@@ -1005,6 +1006,7 @@ public:
                 pins.emplace_back( std::move( pin ) );
             }
         }
+
         return pins;
     }
 
@@ -1013,6 +1015,8 @@ private:
     {
         wxFileDialog dlg( &m_frame, _( "Select pin data file" ), "", "", FILEEXT::CsvTsvFileWildcard(),
                           wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return wxEmptyString;
@@ -1104,7 +1108,7 @@ DIALOG_LIB_EDIT_PIN_TABLE::DIALOG_LIB_EDIT_PIN_TABLE( SYMBOL_EDIT_FRAME* parent,
     unitNames.push_back( wxGetTranslation( UNITS_ALL ) );
 
     for( int i = 1; i <= aSymbol->GetUnitCount(); i++ )
-        unitNames.push_back( LIB_SYMBOL::LetterSubReference( i, 'A' ) );
+        unitNames.push_back( m_symbol->GetUnitDisplayName( i, true ) );
 
     attr->SetEditor( new GRID_CELL_COMBOBOX( unitNames ) );
     m_grid->SetColAttr( COL_UNIT, attr );
@@ -1148,8 +1152,7 @@ DIALOG_LIB_EDIT_PIN_TABLE::DIALOG_LIB_EDIT_PIN_TABLE( SYMBOL_EDIT_FRAME* parent,
     m_addButton->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
     m_deleteButton->SetBitmap( KiBitmapBundle( BITMAPS::small_trash ) );
     m_refreshButton->SetBitmap( KiBitmapBundle( BITMAPS::small_refresh ) );
-
-    m_divider1->SetIsSeparator();
+    m_bMenu->SetBitmap( KiBitmapBundle( BITMAPS::config ) );
 
     GetSizer()->SetSizeHints(this);
     Centre();
@@ -1237,7 +1240,7 @@ DIALOG_LIB_EDIT_PIN_TABLE::~DIALOG_LIB_EDIT_PIN_TABLE()
 bool DIALOG_LIB_EDIT_PIN_TABLE::TransferDataToWindow()
 {
     // Make a copy of the pins for editing
-    std::vector<SCH_PIN*> pins = m_symbol->GetPins();
+    std::vector<SCH_PIN*> pins = m_symbol->GetGraphicalPins( 0, 0 );
 
     for( SCH_PIN* pin : pins )
         m_pins.push_back( new SCH_PIN( *pin ) );
@@ -1256,7 +1259,7 @@ bool DIALOG_LIB_EDIT_PIN_TABLE::TransferDataFromWindow()
         return false;
 
     // Delete the part's pins
-    std::vector<SCH_PIN*> pins = m_symbol->GetPins();
+    std::vector<SCH_PIN*> pins = m_symbol->GetGraphicalPins( 0, 0 );
 
     for( SCH_PIN* pin : pins )
         m_symbol->RemoveDrawItem( pin );
@@ -1379,7 +1382,7 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnCellSelected( wxGridEvent& event )
 
         if( pins.size() == 1 && m_editFrame->GetCurSymbol() )
         {
-            for( SCH_PIN* candidate : m_editFrame->GetCurSymbol()->GetPins() )
+            for( SCH_PIN* candidate : m_editFrame->GetCurSymbol()->GetGraphicalPins( 0, 0 ) )
             {
                 if( candidate->GetNumber() == pins.at( 0 )->GetNumber() )
                 {
@@ -1390,10 +1393,15 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnCellSelected( wxGridEvent& event )
         }
     }
 
-    WINDOW_THAWER thawer( m_editFrame );
+    SYMBOL_EDITOR_SETTINGS* cfg = static_cast<SYMBOL_EDITOR_SETTINGS*>( m_editFrame->config() );
 
-    m_editFrame->FocusOnItem( pin );
-    m_editFrame->GetCanvas()->Refresh();
+    if( cfg->m_PinTable.crossprobe_on_selection )
+    {
+        WINDOW_THAWER thawer( m_editFrame );
+
+        m_editFrame->FocusOnItem( pin );
+        m_editFrame->GetCanvas()->Refresh();
+    }
 }
 
 
@@ -1430,6 +1438,26 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnRebuildRows( wxCommandEvent&  )
     }
 
     adjustGridColumns();
+}
+
+
+void DIALOG_LIB_EDIT_PIN_TABLE::OnMenu( wxCommandEvent& event )
+{
+    SYMBOL_EDITOR_SETTINGS* cfg = static_cast<SYMBOL_EDITOR_SETTINGS*>( m_editFrame->config() );
+
+    // Build a pop menu:
+    wxMenu menu;
+
+    menu.Append( 4206, _( "Highlight on Cross-probe" ),
+                 _( "Highlight corresponding pin on canvas when it is selected in the table" ),
+                 wxITEM_CHECK );
+    menu.Check( 4206, cfg->m_PinTable.crossprobe_on_selection );
+
+    // menu_id is the selected submenu id from the popup menu or wxID_NONE
+    int menu_id = m_bMenu->GetPopupMenuSelectionFromUser( menu );
+
+    if( menu_id == 0 || menu_id == 4206 )
+        cfg->m_PinTable.crossprobe_on_selection = !cfg->m_PinTable.crossprobe_on_selection;
 }
 
 
@@ -1522,7 +1550,7 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnImportButtonClick( wxCommandEvent& event )
         m_pins.clear();
     }
 
-    for( auto& newPin : newPins )
+    for( std::unique_ptr<SCH_PIN>& newPin : newPins )
         m_pins.push_back( newPin.release() );
 
     m_cbGroup->SetValue( false );
@@ -1545,6 +1573,8 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnExportButtonClick( wxCommandEvent& event )
         fn.SetExt( FILEEXT::CsvFileExtension );
         wxFileDialog dlg( this, _( "Select pin data file" ), "", fn.GetFullName(), FILEEXT::CsvFileWildcard(),
                           wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+        KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
         if( dlg.ShowModal() == wxID_CANCEL )
             return;

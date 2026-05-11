@@ -20,6 +20,8 @@
 
 #include "footprint_editor_settings.h"
 
+#include <project/board_project_settings_params.h>
+#include <settings/color_settings.h>
 #include <common.h>
 #include <layer_ids.h>
 #include <lset.h>
@@ -191,6 +193,11 @@ FOOTPRINT_EDITOR_SETTINGS::FOOTPRINT_EDITOR_SETTINGS() :
 
     m_params.emplace_back( new PARAM_MAP<wxString>( "design_settings.default_footprint_layer_names",
                                                     &m_DesignSettings.m_UserLayerNames, {} ) );
+
+    m_params.emplace_back( new PARAM_LAMBDA<int>( "design_settings.user_layer_count",
+            [this]() { return m_DesignSettings.GetUserDefinedLayerCount(); },
+            [this]( int aCount ) { m_DesignSettings.SetUserDefinedLayerCount( aCount ); },
+            4 ) );
 
     int minTextSize = pcbIUScale.mmToIU( TEXT_MIN_SIZE_MM );
     int maxTextSize = pcbIUScale.mmToIU( TEXT_MAX_SIZE_MM );

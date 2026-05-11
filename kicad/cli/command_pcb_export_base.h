@@ -53,10 +53,6 @@ namespace CLI
 #define ARG_SUBTRACT_SOLDERMASK "--subtract-soldermask"
 #define ARG_MIRROR "--mirror"
 
-#define DEPRECATED_ARG_PLOT_INVISIBLE_TEXT "--plot-invisible-text"
-#define DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_DESC "Deprecated.  Has no effect."
-#define DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_WARNING "--plot-invisible-text has been deprecated as of KiCad 9.0.1.  It will have no effect."
-
 #define ARG_FLIP_BOTTOM_PADS "--flip-bottom-pads"
 #define ARG_UNIQUE_PINS "--unique-pins"
 #define ARG_UNIQUE_FOOTPRINTS "--unique-footprints"
@@ -76,8 +72,8 @@ namespace CLI
 
 struct PCB_EXPORT_BASE_COMMAND : public COMMAND
 {
-    PCB_EXPORT_BASE_COMMAND( const std::string& aName, bool aInputCanBeDir = false,
-                             bool aOutputIsDir = false );
+    PCB_EXPORT_BASE_COMMAND( const std::string& aName, IO_TYPE aInputType = IO_TYPE::FILE,
+                             IO_TYPE aOutputType = IO_TYPE::FILE );
 
 protected:
     void addLayerArg();

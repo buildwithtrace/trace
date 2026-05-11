@@ -129,16 +129,17 @@ std::optional<PIN_LAYOUT_CACHE::TEXT_INFO> PIN_LAYOUT_CACHE::GetPinNumberInfo( i
     const int halfLength = m_pin.GetLength() / 2;
     bool      verticalOrient = ( orient == PIN_ORIENTATION::PIN_UP || orient == PIN_ORIENTATION::PIN_DOWN );
 
-    // Calculate the current pin's text dimensions for positioning
+    // Calculate the current pin's text dimensions for positioning.
     VECTOR2I currentBox = estimateQABox( formatted, info->m_TextSize, verticalOrient );
     int currentHalfHeight = currentBox.y / 2;
     int currentHalfWidth = currentBox.x / 2;
 
+    // Detect if this is a stacked pin number (contains notation like [1-5] or comma-separated values)
+    bool hasStackingNotation = number.Contains( '[' ) || number.Contains( ',' );
+
     if( verticalOrient )
     {
         // Vertical pins: text is rotated vertical so that it reads bottom->top.
-        // When rotated, the perpendicular distance from pin is determined by the text width
-        // when in vertical orientation.
 
         // Check if both name and number are displayed
         bool showBothNameAndNumber = !m_pin.GetShownName().IsEmpty()
@@ -146,21 +147,34 @@ std::optional<PIN_LAYOUT_CACHE::TEXT_INFO> PIN_LAYOUT_CACHE::GetPinNumberInfo( i
                                      && parentSym->GetShowPinNames()
                                      && parentSym->GetPinNameOffset() == 0; // name is outside
 
+        // Calculate perpendicular offset based on text structure
+        int perpendicularOffset;
+
+        if( hasStackingNotation || formatted.Contains( '\n' ) )
+        {
+            // Stacked/multi-line text: use width-based offset for proper spacing
+            // of stacked pin numbers. Use currentHalfWidth to match original behavior.
+            perpendicularOffset = clearance + currentHalfWidth + m_numberThickness;
+        }
+        else
+        {
+            // True single-line text (no stacking): use text height for consistent
+            // spacing across rotations. This fixes issue 21980 where single-line pin
+            // names/numbers would have different perpendicular offsets at different rotations.
+            perpendicularOffset = clearance + info->m_TextSize / 2 + m_numberThickness;
+        }
+
         int centerX;
 
         if( showBothNameAndNumber )
         {
             // When both are shown: name goes to the left, number goes to the right
-            // Position the number to the right of the pin, left-aligned (so all numbers start at same x)
-            // Left edge at: pinPos.x + clearance
-            // Center at: pinPos.x + clearance + currentHalfWidth
-            centerX = pinPos.x + clearance + currentHalfWidth + m_numberThickness;
+            centerX = pinPos.x + perpendicularOffset;
         }
         else
         {
             // When only number is shown: place it to the left of the pin
-            // Use maxHalfWidth for consistent alignment when there's no name
-            centerX = pinPos.x - clearance - currentHalfWidth - m_numberThickness;
+            centerX = pinPos.x - perpendicularOffset;
         }
 
         info->m_TextPosition.x = centerX;
@@ -698,64 +712,59 @@ OPT_BOX2I PIN_LAYOUT_CACHE::getUntransformedDecorationBox() const
     const int              decoSize = externalPinDecoSize( m_schSettings, m_pin );
     const int              intDecoSize = internalPinDecoSize( m_schSettings, m_pin );
 
-    const auto makeInvertBox = [&]()
-    {
-        return BOX2I::ByCenter( { -decoSize, 0 }, { decoSize * 2, decoSize * 2 } );
-    };
+    const auto makeInvertBox =
+            [&]()
+            {
+                return BOX2I::ByCenter( { -decoSize, 0 }, { decoSize * 2, decoSize * 2 } );
+            };
 
-    const auto makeLowBox = [&]()
-    {
-        return BOX2I::ByCorners( { -decoSize * 2, -decoSize * 2 }, { 0, 0 } );
-    };
+    const auto makeLowBox =
+            [&]()
+            {
+                return BOX2I::ByCorners( { -decoSize * 2, -decoSize * 2 }, { 0, 0 } );
+            };
 
-    const auto makeClockBox = [&]()
-    {
-        return BOX2I::ByCorners( { 0, -intDecoSize }, { intDecoSize, intDecoSize } );
-    };
+    const auto makeClockBox =
+            [&]()
+            {
+                return BOX2I::ByCorners( { 0, -intDecoSize }, { intDecoSize, intDecoSize } );
+            };
 
     OPT_BOX2I box;
 
     switch( shape )
     {
     case GRAPHIC_PINSHAPE::INVERTED:
-    {
         box = makeInvertBox();
         break;
-    }
+
     case GRAPHIC_PINSHAPE::CLOCK:
-    {
         box = makeClockBox();
         break;
-    }
+
     case GRAPHIC_PINSHAPE::INVERTED_CLOCK:
-    {
         box = makeInvertBox();
         box->Merge( makeClockBox() );
         break;
-    }
+
     case GRAPHIC_PINSHAPE::INPUT_LOW:
-    {
         box = makeLowBox();
         break;
-    }
+
     case GRAPHIC_PINSHAPE::FALLING_EDGE_CLOCK:
     case GRAPHIC_PINSHAPE::CLOCK_LOW:
-    {
         box = makeLowBox();
         box->Merge( makeClockBox() );
         break;
-    }
+
     case GRAPHIC_PINSHAPE::NONLOGIC:
-    {
         box = BOX2I::ByCenter( { 0, 0 }, { decoSize * 2, decoSize * 2 } );
         break;
-    }
+
     case GRAPHIC_PINSHAPE::LINE:
     default:
-    {
         // No decoration
         break;
-    }
     }
 
     if( box )
@@ -874,8 +883,10 @@ std::optional<PIN_LAYOUT_CACHE::TEXT_INFO> PIN_LAYOUT_CACHE::GetPinNameInfo( int
             if( verticalOrient )
             {
                 // Vertical pins: name mirrors number placement (left + rotated) for visual consistency.
-                int boxWidth = info->m_TextSize * (int) info->m_Text.Length() * 0.6; // heuristic width
-                int centerX = pinPos.x - clearance - boxWidth / 2 - info->m_Thickness;
+                // Use text HEIGHT (not width) for perpendicular offset - same as horizontal pins.
+                // This ensures consistent spacing between horizontal and vertical pin orientations.
+                int perpendicularOffset = clearance + info->m_TextSize / 2 + info->m_Thickness;
+                int centerX = pinPos.x - perpendicularOffset;
                 info->m_TextPosition = { centerX, pinPos.y };
 
                 if( orient == PIN_ORIENTATION::PIN_DOWN )

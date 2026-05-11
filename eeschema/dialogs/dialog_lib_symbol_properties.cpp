@@ -41,6 +41,7 @@
 #include <project_sch.h>
 #include <refdes_utils.h>
 #include <dialog_sim_model.h>
+#include <vector>
 
 #include <panel_embedded_files.h>
 #include <settings/settings_manager.h>
@@ -69,11 +70,21 @@ DIALOG_LIB_SYMBOL_PROPERTIES::DIALOG_LIB_SYMBOL_PROPERTIES( SYMBOL_EDIT_FRAME* a
         m_delayedFocusPage( -1 ),
         m_fpFilterTricks( std::make_unique<LISTBOX_TRICKS>( *this, *m_FootprintFilterListBox ) )
 {
-    m_embeddedFiles = new PANEL_EMBEDDED_FILES( m_NoteBook, m_libEntry );
+    std::vector<const EMBEDDED_FILES*> inheritedEmbeddedFiles;
+
+    if( std::shared_ptr<LIB_SYMBOL> parent = m_libEntry->GetParent().lock() )
+    {
+        while( parent )
+        {
+            inheritedEmbeddedFiles.push_back( parent->GetEmbeddedFiles() );
+            parent = parent->GetParent().lock();
+        }
+    }
+
+    m_embeddedFiles = new PANEL_EMBEDDED_FILES( m_NoteBook, m_libEntry, 0, std::move( inheritedEmbeddedFiles ) );
     m_NoteBook->AddPage( m_embeddedFiles, _( "Embedded Files" ) );
 
-    m_fields = new FIELDS_GRID_TABLE( this, aParent, m_grid, m_libEntry,
-                                      { m_embeddedFiles->GetLocalFiles() } );
+    m_fields = new FIELDS_GRID_TABLE( this, aParent, m_grid, m_libEntry, { m_embeddedFiles->GetLocalFiles() } );
     m_grid->SetTable( m_fields );
     m_grid->PushEventHandler( new FIELDS_GRID_TRICKS( m_grid, this, { m_embeddedFiles->GetLocalFiles() },
                                                       [&]( wxCommandEvent& aEvent )
@@ -326,6 +337,7 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataToWindow()
     m_excludeFromSimCheckBox->SetValue( m_libEntry->GetExcludedFromSim() );
     m_excludeFromBomCheckBox->SetValue( m_libEntry->GetExcludedFromBOM() );
     m_excludeFromBoardCheckBox->SetValue( m_libEntry->GetExcludedFromBoard() );
+    m_excludeFromPosFilesCheckBox->SetValue( m_libEntry->GetExcludedFromPosFiles() );
 
     m_ShowPinNumButt->SetValue( m_libEntry->GetShowPinNumbers() );
     m_ShowPinNameButt->SetValue( m_libEntry->GetShowPinNames() );
@@ -339,7 +351,7 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataToWindow()
 
     std::set<wxString> availablePins;
 
-    for( const SCH_PIN* pin : m_libEntry->GetPins() )
+    for( const SCH_PIN* pin : m_libEntry->GetGraphicalPins( 0, 0 ) )
         availablePins.insert( pin->GetNumber() );
 
     for( const std::set<wxString>& group : m_libEntry->JumperPinGroups() )
@@ -376,9 +388,20 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataToWindow()
                     return StrNumCmp( a, b, true );
                 } );
 
-        // Do allow an inherited symbol to be derived from itself.
+        // Don't allow a symbol to be derived from itself
         if( symbolNames.Index( m_libEntry->GetName() ) != wxNOT_FOUND )
             symbolNames.Remove( m_libEntry->GetName() );
+
+        // Don't allow a symbol to be derived from any of its descendants (would create
+        // circular inheritance)
+        wxArrayString descendants;
+        m_Parent->GetLibManager().GetDerivedSymbolNames( m_libEntry->GetName(), libName, descendants );
+
+        for( const wxString& descendant : descendants )
+        {
+            if( symbolNames.Index( descendant ) != wxNOT_FOUND )
+                symbolNames.Remove( descendant );
+        }
 
         m_inheritanceSelectCombo->Append( symbolNames );
 
@@ -516,7 +539,8 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow()
     if( !m_grid->CommitPendingChanges()
             || !m_unitNamesGrid->CommitPendingChanges()
             || !m_bodyStyleNamesGrid->CommitPendingChanges()
-            || !m_jumperGroupsGrid->CommitPendingChanges() )
+            || !m_jumperGroupsGrid->CommitPendingChanges()
+            || !m_embeddedFiles->TransferDataFromWindow() )
     {
         return false;
     }
@@ -659,6 +683,7 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow()
     m_libEntry->SetExcludedFromSim( m_excludeFromSimCheckBox->GetValue() );
     m_libEntry->SetExcludedFromBOM( m_excludeFromBomCheckBox->GetValue() );
     m_libEntry->SetExcludedFromBoard( m_excludeFromBoardCheckBox->GetValue() );
+    m_libEntry->SetExcludedFromPosFiles( m_excludeFromPosFilesCheckBox->GetValue() );
 
     m_libEntry->SetShowPinNumbers( m_ShowPinNumButt->GetValue() );
     m_libEntry->SetShowPinNames( m_ShowPinNameButt->GetValue() );
@@ -679,6 +704,11 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow()
 
     m_libEntry->SetDuplicatePinNumbersAreJumpers( m_cbDuplicatePinsAreJumpers->GetValue() );
 
+    std::set<wxString> availablePins;
+
+    for( const SCH_PIN* pin : m_libEntry->GetGraphicalPins( 0, 0 ) )
+        availablePins.insert( pin->GetNumber() );
+
     std::vector<std::set<wxString>>& jumpers = m_libEntry->JumperPinGroups();
     jumpers.clear();
 
@@ -689,8 +719,21 @@ bool DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow()
 
         while( tokenizer.HasMoreTokens() )
         {
-            if( wxString token = tokenizer.GetNextToken(); !token.IsEmpty() )
-                group.insert( token );
+            wxString token = tokenizer.GetNextToken();
+
+            if( token.IsEmpty() )
+                continue;
+
+            if( !availablePins.count( token ) )
+            {
+                wxString msg;
+                msg.Printf( _( "Pin '%s' in jumper pin group %d does not exist in this symbol." ),
+                             token, ii + 1 );
+                DisplayErrorMessage( this, msg );
+                return false;
+            }
+
+            group.insert( token );
         }
     }
 
@@ -1159,9 +1202,11 @@ void DIALOG_LIB_SYMBOL_PROPERTIES::onPowerCheckBox( wxCommandEvent& aEvent )
         m_excludeFromSimCheckBox->SetValue( true );
         m_excludeFromBomCheckBox->SetValue( true );
         m_excludeFromBoardCheckBox->SetValue( true );
+        m_excludeFromPosFilesCheckBox->SetValue( true );
         m_excludeFromBomCheckBox->Enable( false );
         m_excludeFromBoardCheckBox->Enable( false );
         m_excludeFromSimCheckBox->Enable( false );
+        m_excludeFromPosFilesCheckBox->Enable( false );
         m_spiceFieldsButton->Show( false );
         m_OptionLocalPower->Enable( true );
     }
@@ -1170,6 +1215,7 @@ void DIALOG_LIB_SYMBOL_PROPERTIES::onPowerCheckBox( wxCommandEvent& aEvent )
         m_excludeFromBomCheckBox->Enable( true );
         m_excludeFromBoardCheckBox->Enable( true );
         m_excludeFromSimCheckBox->Enable( true );
+        m_excludeFromPosFilesCheckBox->Enable( true );
         m_spiceFieldsButton->Show( true );
         m_OptionLocalPower->Enable( false );
     }

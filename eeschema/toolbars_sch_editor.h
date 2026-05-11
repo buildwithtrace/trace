@@ -30,6 +30,7 @@ class SCH_ACTION_TOOLBAR_CONTROLS : public ACTION_TOOLBAR_CONTROLS
 {
 public:
     static ACTION_TOOLBAR_CONTROL currentVariant;
+    static ACTION_TOOLBAR_CONTROL currentManufacturer;
 };
 
 

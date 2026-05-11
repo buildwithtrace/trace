@@ -416,8 +416,12 @@ void SCH_CONNECTION::recacheName()
         }
     }
 
-    m_cached_name_with_path = prepend_path ? m_sheet.PathHumanReadable() << m_cached_name
-                                           : m_cached_name;
+    // Use aEscapeSheetNames=true so that sheets with '/' in their names have the slash
+    // escaped to "{slash}". This ensures pattern matching for net classes works correctly
+    // since '/' is used as the hierarchy separator.
+    m_cached_name_with_path = prepend_path
+            ? m_sheet.PathHumanReadable( true, false, true ) << m_cached_name
+            : m_cached_name;
 }
 
 
@@ -549,6 +553,14 @@ wxString SCH_CONNECTION::PrintBusForUI( const wxString& aGroup )
             continue;
         }
 
+        // Handle backslash-escaped spaces (display without the backslash)
+        if( aGroup[i] == '\\' && i + 1 < groupLen && aGroup[i + 1] == ' ' )
+        {
+            ret += ' ';
+            i++;
+            continue;
+        }
+
         ret += aGroup[i];
 
         if( aGroup[i] == '{' )
@@ -568,6 +580,14 @@ wxString SCH_CONNECTION::PrintBusForUI( const wxString& aGroup )
         }
         else if( aGroup[i] == '}' )
         {
+            continue;
+        }
+
+        // Handle backslash-escaped spaces (display without the backslash)
+        if( aGroup[i] == '\\' && i + 1 < groupLen && aGroup[i + 1] == ' ' )
+        {
+            ret += ' ';
+            i++;
             continue;
         }
 

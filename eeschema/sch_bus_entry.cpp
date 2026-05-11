@@ -41,6 +41,8 @@
 #include <connection_graph.h>
 #include "sch_painter.h"
 #include "plotters/plotter.h"
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 
 SCH_BUS_ENTRY_BASE::SCH_BUS_ENTRY_BASE( KICAD_T aType, const VECTOR2I& pos, bool aFlipY ) :
@@ -479,6 +481,9 @@ void SCH_BUS_ENTRY_BASE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PL
 
     COLOR4D color = ( GetBusEntryColor() == COLOR4D::UNSPECIFIED )
                             ? renderSettings->GetLayerColor( m_layer ) : GetBusEntryColor();
+
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
 
     int penWidth = ( GetPenWidth() == 0 ) ? renderSettings->GetDefaultPenWidth() : GetPenWidth();
 

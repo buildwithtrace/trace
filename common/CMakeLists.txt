@@ -11,6 +11,7 @@ include_directories(
     ./dialogs
     ./widgets
     ./dialog_about
+    ${CMAKE_SOURCE_DIR}/libs/sexpr/include
     ${CMAKE_SOURCE_DIR}/resources/bitmaps_png
     ${CMAKE_SOURCE_DIR}/3d-viewer
     ${CMAKE_SOURCE_DIR}/pcbnew
@@ -24,8 +25,78 @@ add_subdirectory( gal )
 # Get the netlist reader library
 add_subdirectory( netlist_reader )
 
-# Only for win32 cross compilation using MXE
-add_compile_definitions( $<$<AND:$<BOOL:${WIN32}>,$<BOOL:${MSYS}>>:GLEW_STATIC> )
+# Build the React chat UI and generate the embedded HTML header
+# On Windows, npm is a batch file (npm.cmd), not an executable
+if( WIN32 )
+    find_program( NPM_EXECUTABLE NAMES npm.cmd npm )
+else()
+    find_program( NPM_EXECUTABLE npm )
+endif()
+find_program( NODE_EXECUTABLE node )
+if( NPM_EXECUTABLE AND NODE_EXECUTABLE )
+    # Get the directory containing node executable to add to PATH
+    get_filename_component( NODE_DIR ${NODE_EXECUTABLE} DIRECTORY )
+    
+    if( WIN32 )
+        set( PATH_SEP ";" )
+    else()
+        set( PATH_SEP ":" )
+    endif()
+
+    set( CHAT_UI_SOURCE_DIR ${CMAKE_SOURCE_DIR}/resources/chat-ui )
+    set( CHAT_UI_BUILD_DIR ${CMAKE_BINARY_DIR}/chat-ui-build )
+    set( CHAT_UI_HEADER ${CMAKE_BINARY_DIR}/chat_ui_html.h )
+    set( CHAT_UI_DIST ${CHAT_UI_SOURCE_DIR}/dist/index.html )
+    set( CHAT_UI_INSTALLED ${CMAKE_BINARY_DIR}/resources/chat-ui.html )
+    
+    # Glob all source files to ensure rebuild when any change
+    file( GLOB_RECURSE CHAT_UI_SOURCES 
+        ${CHAT_UI_SOURCE_DIR}/src/*.tsx
+        ${CHAT_UI_SOURCE_DIR}/src/*.ts
+        ${CHAT_UI_SOURCE_DIR}/src/*.css
+        ${CHAT_UI_SOURCE_DIR}/*.json
+        ${CHAT_UI_SOURCE_DIR}/*.html
+        ${CHAT_UI_SOURCE_DIR}/vite.config.ts
+    )
+    
+    # Custom command to build the React app and copy to build directory
+    # Use CMAKE_COMMAND -E env to set PATH so node is available to npm scripts
+    add_custom_command(
+        OUTPUT ${CHAT_UI_HEADER} ${CHAT_UI_INSTALLED}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CHAT_UI_BUILD_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${NODE_DIR}${PATH_SEP}$ENV{PATH}"
+            ${NPM_EXECUTABLE} install --prefix ${CHAT_UI_SOURCE_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env "PATH=${NODE_DIR}${PATH_SEP}$ENV{PATH}"
+            ${NPM_EXECUTABLE} run build --prefix ${CHAT_UI_SOURCE_DIR}
+        COMMAND ${CMAKE_COMMAND} 
+            -DINPUT_FILE=${CHAT_UI_DIST}
+            -DOUTPUT_FILE=${CHAT_UI_HEADER}
+            -P ${CMAKE_SOURCE_DIR}/cmake/GenerateChatUIHeader.cmake
+        # Also copy the HTML file to the build resources directory for file:// loading
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/resources
+        COMMAND ${CMAKE_COMMAND} -E copy ${CHAT_UI_DIST} ${CHAT_UI_INSTALLED}
+        DEPENDS ${CHAT_UI_SOURCES}
+        WORKING_DIRECTORY ${CHAT_UI_SOURCE_DIR}
+        COMMENT "Building React chat UI and generating header"
+    )
+    
+    add_custom_target( chat_ui_header DEPENDS ${CHAT_UI_HEADER} ${CHAT_UI_INSTALLED} )
+    
+    # Add the build directory to include paths so chat_ui_html.h can be found
+    include_directories( ${CMAKE_BINARY_DIR} )
+    
+    # Install the chat UI HTML file
+    install( FILES ${CHAT_UI_INSTALLED}
+        DESTINATION ${KICAD_DATA}/resources
+        COMPONENT resources )
+else()
+    message( WARNING "npm or node not found - chat UI will use fallback HTML" )
+endif()
+
+# Get the shared PADS format support library
+add_subdirectory( io/pads )
+
+
 
 
 # The build version string defaults to the value in the KiCadVersion.cmake file.
@@ -56,6 +127,22 @@ add_custom_target(
         -DBANNED_DIRS="${PROJECT_SOURCE_DIR}/common/io;${PROJECT_SOURCE_DIR}/pcbnew/pcb_io;${PROJECT_SOURCE_DIR}/eeschema/sch_io"
         -P ${KICAD_CMAKE_MODULE_PATH}/CheckBannedFunctions.cmake
 )
+
+if( NOT (${CMAKE_CURRENT_SOURCE_DIR} STREQUAL ${CMAKE_CURRENT_BINARY_DIR} ) )
+    file( GLOB REMOTE_PROVIDER_SCHEMA_FILES
+        ${CMAKE_SOURCE_DIR}/resources/schemas/kicad-remote-*.json
+    )
+
+    add_custom_target( remote_provider_schema_build_copy
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/schemas
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${REMOTE_PROVIDER_SCHEMA_FILES}
+            ${CMAKE_BINARY_DIR}/schemas
+        DEPENDS ${REMOTE_PROVIDER_SCHEMA_FILES}
+        COMMENT "Copying remote provider schema files into build directory"
+    )
+endif()
+
 # A shared library used by multiple *.kiface files and one or two program
 # launchers.  Object files can migrate into here over time, but only if they are
 # surely needed and certainly used from more than one place without recompilation.
@@ -69,7 +156,10 @@ set( KICOMMON_SRCS
 
     # Gal
     gal/color4d.cpp
-    gal/opengl/gl_context_mgr.cpp
+
+    # KiCad GL
+    kicad_gl/gl_utils.cpp
+    kicad_gl/gl_context_mgr.cpp
 
     # Git
     git/git_add_to_index_handler.cpp
@@ -93,6 +183,16 @@ set( KICOMMON_SRCS
     git/kicad_git_errors.cpp
     git/git_backend.cpp
     git/libgit_backend.cpp
+
+    # Auth
+    auth/auth_manager.cpp
+
+    # Conversation database (local SQLite cache for AI conversations)
+    conversation_db.cpp
+    conversation_sync.cpp
+
+    # Process management
+    process/python_process_manager.cpp
 
     # Jobs
     jobs/job.cpp
@@ -125,6 +225,7 @@ set( KICOMMON_SRCS
     jobs/jobset.cpp
     jobs/job_fp_export_svg.cpp
     jobs/job_fp_upgrade.cpp
+    jobs/job_pcb_import.cpp
     jobs/job_pcb_render.cpp
     jobs/job_pcb_drc.cpp
     jobs/job_rc.cpp
@@ -167,12 +268,17 @@ set( KICOMMON_SRCS
 
     text_eval/text_eval_wrapper.cpp
     text_eval/text_eval_parser.cpp
+    text_eval/text_eval_vcs.cpp
 
     # This is basically a settings object, but for the toolbar
     tool/ui/toolbar_configuration.cpp
+    tool/ui/toolbar_context_menu_registry.cpp
 
+    dialogs/dialog_crash_report.cpp
     dialogs/dialog_rc_job.cpp
     dialogs/dialog_rc_job_base.cpp
+    dialogs/dialog_restore_local_history.cpp
+    dialogs/dialog_HTML_reporter_base.cpp
     dialogs/panel_startwizard_libraries_base.cpp
     dialogs/panel_startwizard_privacy_base.cpp
     dialogs/panel_startwizard_settings_base.cpp
@@ -180,6 +286,7 @@ set( KICOMMON_SRCS
     grid_tricks.cpp
     widgets/aui_json_serializer.cpp
     widgets/bitmap_button.cpp
+    widgets/grid_combobox.cpp
     widgets/grid_icon_text_helpers.cpp
     widgets/grid_text_button_helpers.cpp
     widgets/grid_text_helpers.cpp
@@ -191,9 +298,18 @@ set( KICOMMON_SRCS
     widgets/report_severity.cpp
     widgets/std_bitmap_button.cpp
     widgets/ui_common.cpp
+    widgets/up_down_tree.cpp
     widgets/wx_grid.cpp
     widgets/wx_html_report_panel.cpp
     widgets/wx_html_report_panel_base.cpp
+    ai_tool_executor.cpp
+    ai_backend_client.cpp
+    ai_diff_analyzer.cpp
+    ai_edit_translator.cpp
+    ai_commit.cpp
+    vector_search_engine.cpp
+    widgets/wx_html_report_box.cpp
+    amplitude_client.cpp
 
     database/database_lib_settings.cpp
 
@@ -233,7 +349,7 @@ set( KICOMMON_SRCS
     kidialog.cpp
     kiid.cpp
     kiway.cpp
-    kiway_express.cpp
+    kiway_mail.cpp
     kiway_holder.cpp
     launch_ext.cpp
     layer_id.cpp
@@ -245,8 +361,17 @@ set( KICOMMON_SRCS
     netclass.cpp
     notifications_manager.cpp
     page_info.cpp
+    oauth/oauth_loopback_server.cpp
+    oauth/oauth_pkce.cpp
+    oauth/oauth_session.cpp
+    oauth/secure_token_store.cpp
     paths.cpp
     project.cpp
+    remote_provider_client.cpp
+    remote_provider_metadata.cpp
+    remote_provider_models.cpp
+    remote_provider_settings.cpp
+    remote_provider_utils.cpp
     reporter.cpp
     richio.cpp
     scintilla_tricks.cpp
@@ -258,6 +383,7 @@ set( KICOMMON_SRCS
     ui_events.cpp
     title_block.cpp
     trace_helpers.cpp
+    diagnostic_console.cpp
     wildcards_and_files_ext.cpp
     wx_filename.cpp
     xnode.cpp
@@ -298,6 +424,12 @@ if( KICAD_IPC_API )
     )
 endif()
 
+if( WIN32 )
+    list( APPEND KICOMMON_SRCS
+        process_executor_win.cpp
+    )
+endif()
+
 add_library( kicommon SHARED
     ${KICOMMON_SRCS}
     )
@@ -313,6 +445,8 @@ if( KICAD_USE_PCH )
             <set>
             <string>
             <vector>
+            <kiid.h>
+            <pgm_base.h>
             <wx/wx.h>
              )
 endif()
@@ -331,6 +465,8 @@ target_link_libraries( kicommon
     CURL::libcurl
     picosha2
     rapidcsv
+    sexpr
+    glad
     ${ZSTD_LIBRARY}
     ${wxWidgets_LIBRARIES}
     ${LIBGIT2_LIBRARIES}
@@ -346,6 +482,14 @@ target_link_libraries( kicommon
 
     # needed because of python_scripting.cpp
     ${PYTHON_LIBRARIES}
+
+    # needed for conversation_db.cpp (local SQLite cache)
+    SQLite::SQLite3
+
+    # Vector search engine (ONNX Runtime + usearch + wordpiece tokenizer)
+    usearch
+    wordpiece
+    onnxruntime
     )
 
 
@@ -366,12 +510,22 @@ include( ${KICAD_CMAKE_MODULE_PATH}/KiCadVersion.cmake )
 include( ${KICAD_CMAKE_MODULE_PATH}/CreateGitVersionHeader.cmake )
 create_git_version_header(${CMAKE_SOURCE_DIR})
 
+message(STATUS "KICAD_VERSION before regex: '${KICAD_VERSION}'")
+
 # Extract the major and minor build version as a string
 string( REGEX MATCH
         "([0-9]+)\\.([0-9]+)\\.([0-9]+)"
         KICAD_MAJOR_MINOR_PATCH_VERSION
         "${KICAD_VERSION}"
     )
+
+message(STATUS "KICAD_MAJOR_MINOR_PATCH_VERSION after regex: '${KICAD_MAJOR_MINOR_PATCH_VERSION}'")
+
+# Fallback if regex didn't match
+if(NOT KICAD_MAJOR_MINOR_PATCH_VERSION OR KICAD_MAJOR_MINOR_PATCH_VERSION STREQUAL "")
+    set(KICAD_MAJOR_MINOR_PATCH_VERSION "1.0.0")
+    message(WARNING "Could not extract version from KICAD_VERSION, using fallback: ${KICAD_MAJOR_MINOR_PATCH_VERSION}")
+endif()
 
 set_target_properties( kicommon PROPERTIES
     OUTPUT_NAME     kicommon
@@ -413,6 +567,10 @@ target_include_directories( kicommon
 
 add_dependencies( kicommon pegtl version_header )
 
+if( TARGET remote_provider_schema_build_copy )
+    add_dependencies( kicommon remote_provider_schema_build_copy )
+endif()
+
 if( MSVC )
     target_sources( kicommon PRIVATE ${CMAKE_SOURCE_DIR}/resources/msw/kicommon-dll.rc )
 endif()
@@ -453,7 +611,6 @@ set( COMMON_DLG_SRCS
     dialogs/dialog_group_properties.cpp
     dialogs/dialog_group_properties_base.cpp
     dialogs/dialog_hotkey_list.cpp
-    dialogs/dialog_HTML_reporter_base.cpp
     dialogs/dialog_import_choose_project.cpp
     dialogs/dialog_import_choose_project_base.cpp
     dialogs/dialog_multi_unit_entry.cpp
@@ -515,6 +672,8 @@ set( COMMON_DLG_SRCS
     dialogs/panel_toolbar_customization.cpp
     dialogs/panel_toolbar_customization_base.cpp
 
+    dialogs/rule_editor_dialog_base.cpp
+
     libraries/lib_table_grid_data_model.cpp
     )
 
@@ -542,7 +701,6 @@ set( COMMON_WIDGET_SRCS
     widgets/grid_button.cpp
     widgets/grid_checkbox.cpp
     widgets/grid_color_swatch_helpers.cpp
-    widgets/grid_combobox.cpp
     widgets/wx_infobar.cpp
     widgets/layer_box_selector.cpp
     widgets/layer_presentation.cpp
@@ -559,6 +717,7 @@ set( COMMON_WIDGET_SRCS
     widgets/split_button.cpp
     widgets/stepped_slider.cpp
     widgets/text_ctrl_eval.cpp
+    widgets/margin_offset_binder.cpp
     widgets/unit_binder.cpp
     widgets/widget_save_restore.cpp
     widgets/widget_hotkey_list.cpp
@@ -569,7 +728,6 @@ set( COMMON_WIDGET_SRCS
     widgets/wx_combobox.cpp
     widgets/wx_dataviewctrl.cpp
     widgets/wx_ellipsized_static_text.cpp
-    widgets/wx_html_report_box.cpp
     widgets/wx_listbox.cpp
     widgets/wx_panel.cpp
     widgets/wx_progress_reporters.cpp
@@ -577,6 +735,8 @@ set( COMMON_WIDGET_SRCS
     widgets/wx_treebook.cpp
     widgets/webview_panel.cpp
     widgets/zoom_correction_ctrl.cpp
+    widgets/chat_webview_panel.cpp
+    widgets/ai_chat_panel_base.cpp
     )
 
 set( COMMON_DRAWING_SHEET_SRCS
@@ -629,6 +789,7 @@ set( COMMON_IO_SRCS
     io/altium/altium_binary_parser.cpp
     io/altium/altium_ascii_parser.cpp
     io/altium/altium_parser_utils.cpp
+    io/altium/altium_project_variants.cpp
     io/altium/altium_props_utils.cpp
 
     # Cadstar
@@ -704,6 +865,7 @@ set( COMMON_SRCS
     gr_basic.cpp
     hotkey_store.cpp
     hotkeys_basic.cpp
+    inspectable.cpp
     kiface_base.cpp
     kiway_player.cpp
     lib_table_grid_tricks.cpp
@@ -720,7 +882,6 @@ set( COMMON_SRCS
     refdes_utils.cpp
     reference_image.cpp
     render_settings.cpp
-    remote_login_server.cpp
     status_popup.cpp
     stroke_params.cpp
     template_fieldnames.cpp
@@ -809,7 +970,7 @@ add_library( common STATIC
     )
 
 if( KICAD_USE_PCH )
-    target_precompile_headers( kicommon
+    target_precompile_headers( common
         PRIVATE
             <kicommon.h>
             <algorithm>
@@ -819,12 +980,25 @@ if( KICAD_USE_PCH )
             <set>
             <string>
             <vector>
+            <clipper2/clipper.h>
+            <eda_draw_frame.h>
+            <kiid.h>
+            <pgm_base.h>
             <wx/wx.h>
              )
 endif()
 
 add_dependencies( common version_header )
+
+if( TARGET remote_provider_schema_build_copy )
+    add_dependencies( common remote_provider_schema_build_copy )
+endif()
 add_dependencies( common compoundfilereader )  # used by altium_parser.cpp
+
+# Add dependency on chat UI header if npm is available
+if( NPM_EXECUTABLE )
+    add_dependencies( common chat_ui_header )
+endif()
 
 target_link_libraries( common
     libcontext
@@ -878,6 +1052,7 @@ add_dependencies( common pegtl )
 target_include_directories( common PUBLIC
     $<TARGET_PROPERTY:pegtl,INTERFACE_INCLUDE_DIRECTORIES>
     $<TARGET_PROPERTY:magic_enum,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:kiplatform,INTERFACE_INCLUDE_DIRECTORIES>
     )
 
 target_include_directories( common SYSTEM PUBLIC
@@ -927,6 +1102,7 @@ set( PCB_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/pcbnew/pcb_track.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/pcb_generator.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/zone.cpp
+    ${CMAKE_SOURCE_DIR}/pcbnew/zone_utils.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/collectors.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/connectivity/connectivity_algo.cpp
     ${CMAKE_SOURCE_DIR}/pcbnew/connectivity/connectivity_items.cpp
@@ -982,6 +1158,8 @@ set( PCB_COMMON_SRCS
     ${CMAKE_SOURCE_DIR}/pcbnew/length_delay_calculation/tuning_profile_parameters_user_defined.cpp
 
     widgets/net_selector.cpp
+    widgets/netclass_selector.cpp
+    widgets/area_selector.cpp
 )
 
 set( PCB_COMMON_SRCS

@@ -27,6 +27,7 @@
 #pragma once
 
 #include <gal/gal.h>
+#include <map>
 #include <vector>
 #include <set>
 #include <unordered_map>
@@ -509,8 +510,10 @@ public:
      *
      * @param aLayer is the layer.
      * @param aRenderingOrder is an arbitrary number denoting the rendering order.
+     * @param aAutoSort set to false to avoid sorting. In that case,
+                        call SortOrderedLayers() after setting all layer orders.
      */
-    void SetLayerOrder( int aLayer, int aRenderingOrder );
+    void SetLayerOrder( int aLayer, int aRenderingOrder, bool aAutoSort = true );
 
     /**
      * Return rendering order of a particular layer. Lower values are rendered first.
@@ -519,6 +522,12 @@ public:
      * @return Rendering order of a particular layer.
      */
     int GetLayerOrder( int aLayer ) const;
+
+    /**
+     * Sorts m_orderedLayers after layer rendering order has changed.
+     * Must be called after calling SetLayerOrder with aAutoSort = false
+     */ 
+    void SortOrderedLayers();
 
     /**
      * Change the order of given layer ids, so after sorting the order corresponds to layers
@@ -677,6 +686,14 @@ public:
     void UpdateItems();
 
     /**
+     * @return true when at least one item has queued update flags that still need processing.
+     */
+    bool HasPendingItemUpdates() const
+    {
+        return m_hasPendingItemUpdates;
+    }
+
+    /**
      * Update all items in the view according to the given flags.
      *
      * @param aUpdateFlags is is according to KIGFX::VIEW_UPDATE_FLAGS
@@ -812,9 +829,6 @@ protected:
      */
     void draw( VIEW_GROUP* aGroup, bool aImmediate = false );
 
-    /// Sort m_orderedLayers when layer rendering order has changed.
-    void sortOrderedLayers();
-
     /// Clear cached GAL group numbers (*ONLY* numbers stored in VIEW_ITEMs, not group objects
     /// used by GAL).
     void clearGroupCache();
@@ -901,6 +915,8 @@ protected:
 
     /// Flag to reverse the draw order when using draw priority.
     bool m_reverseDrawOrder;
+
+    /// True when at least one item has deferred update flags that still need processing.
+    mutable bool m_hasPendingItemUpdates;
 };
 } // namespace KIGFX
-

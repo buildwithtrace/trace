@@ -27,7 +27,7 @@
 
 #include <advanced_config.h>
 #include <base_units.h>
-#include <common.h>     // for ExpandTextVars
+#include <common.h> // for ExpandTextVars
 #include <sch_edit_frame.h>
 #include <plotters/plotter.h>
 #include <bitmaps.h>
@@ -40,6 +40,8 @@
 #include <tools/sch_navigate_tool.h>
 #include <font/outline_font.h>
 #include "sim/sim_lib_mgr.h"
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 static const std::vector<KICAD_T> labelTypes = { SCH_LABEL_LOCATE_ANY_T };
 
@@ -70,7 +72,7 @@ SCH_FIELD::SCH_FIELD( SCH_ITEM* aParent, FIELD_T aFieldId, const wxString& aName
     else
         SetName( GetDefaultFieldName( aFieldId, DO_TRANSLATE ) );
 
-    setId( aFieldId );  // will also set the layer
+    setId( aFieldId ); // will also set the layer
     SetVisible( true );
 
     if( aParent && aParent->Schematic() )
@@ -105,15 +107,15 @@ SCH_FIELD::SCH_FIELD( const SCH_FIELD& aField ) :
         SCH_ITEM( aField ),
         EDA_TEXT( aField )
 {
-    m_private          = aField.m_private;
-    setId( aField.m_id );  // will also set the layer
-    m_ordinal          = aField.m_ordinal;
-    m_name             = aField.m_name;
-    m_showName         = aField.m_showName;
-    m_allowAutoPlace   = aField.m_allowAutoPlace;
+    m_private = aField.m_private;
+    setId( aField.m_id ); // will also set the layer
+    m_ordinal = aField.m_ordinal;
+    m_name = aField.m_name;
+    m_showName = aField.m_showName;
+    m_allowAutoPlace = aField.m_allowAutoPlace;
     m_isGeneratedField = aField.m_isGeneratedField;
-    m_autoAdded        = aField.m_autoAdded;
-    m_showInChooser    = aField.m_showInChooser;
+    m_autoAdded = aField.m_autoAdded;
+    m_showInChooser = aField.m_showInChooser;
 
     m_renderCache.clear();
 
@@ -136,12 +138,12 @@ SCH_FIELD& SCH_FIELD::operator=( const SCH_FIELD& aField )
 {
     EDA_TEXT::operator=( aField );
 
-    m_private          = aField.m_private;
-    setId( aField.m_id );  // will also set the layer
-    m_ordinal          = aField.m_ordinal;
-    m_name             = aField.m_name;
-    m_showName         = aField.m_showName;
-    m_allowAutoPlace   = aField.m_allowAutoPlace;
+    m_private = aField.m_private;
+    setId( aField.m_id ); // will also set the layer
+    m_ordinal = aField.m_ordinal;
+    m_name = aField.m_name;
+    m_showName = aField.m_showName;
+    m_allowAutoPlace = aField.m_allowAutoPlace;
     m_isGeneratedField = aField.m_isGeneratedField;
 
     m_renderCache.clear();
@@ -188,99 +190,23 @@ wxString SCH_FIELD::GetShownName() const
 }
 
 
-wxString SCH_FIELD::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraText, int aDepth ) const
+wxString SCH_FIELD::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraText, int aDepth,
+                                  const wxString& aVariantName ) const
 {
-    std::function<bool( wxString* )> libSymbolResolver =
-            [&]( wxString* token ) -> bool
-            {
-                LIB_SYMBOL* symbol = static_cast<LIB_SYMBOL*>( m_parent );
-                return symbol->ResolveTextVar( token, aDepth + 1 );
-            };
-
-    std::function<bool( wxString* )> symbolResolver =
-            [&]( wxString* token ) -> bool
-            {
-                SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
-                return symbol->ResolveTextVar( aPath, token, aDepth + 1 );
-            };
-
-    std::function<bool( wxString* )> schematicResolver =
-            [&]( wxString* token ) -> bool
-            {
-                if( !aPath )
-                    return false;
-
-                if( SCHEMATIC* schematic = Schematic() )
-                    return schematic->ResolveTextVar( aPath, token, aDepth + 1 );
-
-                return false;
-            };
-
-    std::function<bool( wxString* )> sheetResolver =
-            [&]( wxString* token ) -> bool
-            {
-                if( !aPath )
-                    return false;
-
-                SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
-
-                SCHEMATIC* schematic = Schematic();
-                SCH_SHEET_PATH path = *aPath;
-                path.push_back( sheet );
-
-                bool retval = sheet->ResolveTextVar( &path, token, aDepth + 1 );
-
-                if( schematic )
-                    retval |= schematic->ResolveTextVar( &path, token, aDepth + 1 );
-
-                return retval;
-            };
-
-    std::function<bool( wxString* )> labelResolver =
-            [&]( wxString* token ) -> bool
-            {
-                if( !aPath )
-                    return false;
-
-                SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( m_parent );
-                return label->ResolveTextVar( aPath, token, aDepth + 1 );
-            };
-
-    wxString variantName;
-
-    if( SCHEMATIC* schematic = Schematic() )
-        variantName = schematic->GetCurrentVariant();
-
-    wxString text = getUnescapedText( aPath, variantName );
+    wxString text = getUnescapedText( aPath, aVariantName );
 
     if( IsNameShown() && aAllowExtraText )
         text = GetShownName() << wxS( ": " ) << text;
 
     if( HasTextVars() )
-    {
-        while( text.Contains( wxT( "${" ) ) && aDepth++ <= ADVANCED_CFG::GetCfg().m_ResolveTextRecursionDepth )
-        {
-            if( m_parent && m_parent->Type() == LIB_SYMBOL_T )
-                text = ExpandTextVars( text, &libSymbolResolver );
-            else if( m_parent && m_parent->Type() == SCH_SYMBOL_T )
-                text = ExpandTextVars( text, &symbolResolver );
-            else if( m_parent && m_parent->Type() == SCH_SHEET_T )
-                text = ExpandTextVars( text, &sheetResolver );
-            else if( m_parent && m_parent->IsType( labelTypes ) )
-                text = ExpandTextVars( text, &labelResolver );
-            else if( Schematic() )
-            {
-                text = ExpandTextVars( text, &Schematic()->Project() );
-                text = ExpandTextVars( text, &schematicResolver );
-            }
-        }
-    }
+        text = ResolveText( text, aPath, aDepth );
 
     if( m_id == FIELD_T::SHEET_FILENAME && aAllowExtraText && !IsNameShown() )
         text = _( "File:" ) + wxS( " " ) + text;
 
-    if( text.Contains( wxT( "@{" ) ) )
-        text = EvaluateText( text );
+    // Convert escape markers back to literals for final display
+    text.Replace( wxT( "<<<ESC_DOLLAR:" ), wxT( "${" ) );
+    text.Replace( wxT( "<<<ESC_AT:" ), wxT( "@{" ) );
 
     return text;
 }
@@ -291,16 +217,18 @@ wxString SCH_FIELD::GetShownText( bool aAllowExtraText, int aDepth ) const
     if( SCHEMATIC* schematic = Schematic() )
     {
         const SCH_SHEET_PATH& currentSheet = schematic->CurrentSheet();
+        wxString variantName = schematic->GetCurrentVariant();
+
         wxLogTrace( traceSchFieldRendering,
-                   "GetShownText (no path arg): field=%s, current sheet path='%s', size=%zu, empty=%d",
-                   GetName(),
-                   currentSheet.Path().AsString(),
-                   currentSheet.size(),
-                   currentSheet.empty() ? 1 : 0 );
-        return GetShownText( &currentSheet, aAllowExtraText, aDepth );
+                    "GetShownText (no path arg): field=%s, current sheet path='%s', variant='%s', size=%zu, empty=%d",
+                    GetName(), currentSheet.Path().AsString(), variantName, currentSheet.size(),
+                    currentSheet.empty() ? 1 : 0 );
+        return GetShownText( &currentSheet, aAllowExtraText, aDepth, variantName );
     }
     else
+    {
         return GetShownText( nullptr, aAllowExtraText, aDepth );
+    }
 }
 
 
@@ -351,8 +279,7 @@ void SCH_FIELD::ClearRenderCache()
 
 
 std::vector<std::unique_ptr<KIFONT::GLYPH>>*
-SCH_FIELD::GetRenderCache( const wxString& forResolvedText, const VECTOR2I& forPosition,
-                           TEXT_ATTRIBUTES& aAttrs ) const
+SCH_FIELD::GetRenderCache( const wxString& forResolvedText, const VECTOR2I& forPosition, TEXT_ATTRIBUTES& aAttrs ) const
 {
     KIFONT::FONT* font = GetDrawFont( nullptr );
 
@@ -364,8 +291,7 @@ SCH_FIELD::GetRenderCache( const wxString& forResolvedText, const VECTOR2I& forP
         {
             m_renderCache.clear();
 
-            outlineFont->GetLinesAsGlyphs( &m_renderCache, forResolvedText, forPosition, aAttrs,
-                                           GetFontMetrics() );
+            outlineFont->GetLinesAsGlyphs( &m_renderCache, forResolvedText, forPosition, aAttrs, GetFontMetrics() );
 
             m_renderCachePos = forPosition;
             m_renderCacheValid = true;
@@ -448,8 +374,7 @@ SCH_LAYER_ID SCH_FIELD::GetDefaultLayer() const
 {
     if( m_parent && m_parent->Type() == SCH_LABEL_T )
     {
-        if( GetCanonicalName() == wxT( "Netclass" )
-            || GetCanonicalName() == wxT( "Component Class" ) )
+        if( GetCanonicalName() == wxT( "Netclass" ) || GetCanonicalName() == wxT( "Component Class" ) )
         {
             return LAYER_NETCLASS_REFS;
         }
@@ -477,7 +402,7 @@ EDA_ANGLE SCH_FIELD::GetDrawRotation() const
     {
         SCH_SYMBOL* parentSymbol = static_cast<SCH_SYMBOL*>( m_parent );
 
-        if( parentSymbol && parentSymbol->GetTransform().y1 )  // Rotate symbol 90 degrees.
+        if( parentSymbol && parentSymbol->GetTransform().y1 ) // Rotate symbol 90 degrees.
         {
             if( orient.IsHorizontal() )
                 orient = ANGLE_VERTICAL;
@@ -530,11 +455,13 @@ bool SCH_FIELD::IsHorizJustifyFlipped() const
             return render_center.y > pos.y;
         else
             return render_center.x < pos.x;
+
     case GR_TEXT_H_ALIGN_RIGHT:
         if( GetDrawRotation().IsVertical() )
             return render_center.y < pos.y;
         else
             return render_center.x > pos.x;
+
     default:
         return false;
     }
@@ -550,9 +477,11 @@ void SCH_FIELD::SetEffectiveHorizJustify( GR_TEXT_H_ALIGN_T aJustify )
     case GR_TEXT_H_ALIGN_LEFT:
         actualJustify = IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_RIGHT : GR_TEXT_H_ALIGN_LEFT;
         break;
+
     case GR_TEXT_H_ALIGN_RIGHT:
         actualJustify = IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_LEFT : GR_TEXT_H_ALIGN_RIGHT;
         break;
+
     default:
         actualJustify = aJustify;
     }
@@ -565,12 +494,9 @@ GR_TEXT_H_ALIGN_T SCH_FIELD::GetEffectiveHorizJustify() const
 {
     switch( GetHorizJustify() )
     {
-    case GR_TEXT_H_ALIGN_LEFT:
-        return IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_RIGHT : GR_TEXT_H_ALIGN_LEFT;
-    case GR_TEXT_H_ALIGN_RIGHT:
-        return IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_LEFT : GR_TEXT_H_ALIGN_RIGHT;
-    default:
-        return GR_TEXT_H_ALIGN_CENTER;
+    case GR_TEXT_H_ALIGN_LEFT:  return IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_RIGHT : GR_TEXT_H_ALIGN_LEFT;
+    case GR_TEXT_H_ALIGN_RIGHT: return IsHorizJustifyFlipped() ? GR_TEXT_H_ALIGN_LEFT : GR_TEXT_H_ALIGN_RIGHT;
+    default:                    return GR_TEXT_H_ALIGN_CENTER;
     }
 }
 
@@ -587,11 +513,13 @@ bool SCH_FIELD::IsVertJustifyFlipped() const
             return render_center.x < pos.x;
         else
             return render_center.y < pos.y;
+
     case GR_TEXT_V_ALIGN_BOTTOM:
         if( GetDrawRotation().IsVertical() )
             return render_center.x > pos.x;
         else
             return render_center.y > pos.y;
+
     default:
         return false;
     }
@@ -607,9 +535,11 @@ void SCH_FIELD::SetEffectiveVertJustify( GR_TEXT_V_ALIGN_T aJustify )
     case GR_TEXT_V_ALIGN_TOP:
         actualJustify = IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_BOTTOM : GR_TEXT_V_ALIGN_TOP;
         break;
+
     case GR_TEXT_V_ALIGN_BOTTOM:
         actualJustify = IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_TOP : GR_TEXT_V_ALIGN_BOTTOM;
         break;
+
     default:
         actualJustify = aJustify;
     }
@@ -622,12 +552,9 @@ GR_TEXT_V_ALIGN_T SCH_FIELD::GetEffectiveVertJustify() const
 {
     switch( GetVertJustify() )
     {
-    case GR_TEXT_V_ALIGN_TOP:
-        return IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_BOTTOM : GR_TEXT_V_ALIGN_TOP;
-    case GR_TEXT_V_ALIGN_BOTTOM:
-        return IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_TOP : GR_TEXT_V_ALIGN_BOTTOM;
-    default:
-        return GR_TEXT_V_ALIGN_CENTER;
+    case GR_TEXT_V_ALIGN_TOP:    return IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_BOTTOM : GR_TEXT_V_ALIGN_TOP;
+    case GR_TEXT_V_ALIGN_BOTTOM: return IsVertJustifyFlipped() ? GR_TEXT_V_ALIGN_TOP : GR_TEXT_V_ALIGN_BOTTOM;
+    default:                     return GR_TEXT_V_ALIGN_CENTER;
     }
 }
 
@@ -689,8 +616,7 @@ bool SCH_FIELD::Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) co
 }
 
 
-void SCH_FIELD::OnScintillaCharAdded( SCINTILLA_TRICKS* aScintillaTricks,
-                                      wxStyledTextEvent &aEvent ) const
+void SCH_FIELD::OnScintillaCharAdded( SCINTILLA_TRICKS* aScintillaTricks, wxStyledTextEvent& aEvent ) const
 {
     SCH_ITEM*  parent = dynamic_cast<SCH_ITEM*>( GetParent() );
     SCHEMATIC* schematic = parent ? parent->Schematic() : nullptr;
@@ -710,19 +636,17 @@ void SCH_FIELD::OnScintillaCharAdded( SCINTILLA_TRICKS* aScintillaTricks,
     if( key == '\n' )
     {
         wxString text = scintilla->GetText();
-        int currpos = scintilla->GetCurrentPos();
+        int      currpos = scintilla->GetCurrentPos();
         text.Replace( wxS( "\n" ), wxS( "" ) );
         scintilla->SetText( text );
-        scintilla->GotoPos( currpos-1 );
+        scintilla->GotoPos( currpos - 1 );
         return;
     }
 
     auto textVarRef =
             [&]( int pt )
             {
-                return pt >= 2
-                        && scintilla->GetCharAt( pt - 2 ) == '$'
-                        && scintilla->GetCharAt( pt - 1 ) == '{';
+                return pt >= 2 && scintilla->GetCharAt( pt - 2 ) == '$' && scintilla->GetCharAt( pt - 1 ) == '{';
             };
 
     // Check for cross-reference
@@ -743,17 +667,21 @@ void SCH_FIELD::OnScintillaCharAdded( SCINTILLA_TRICKS* aScintillaTricks,
                 {
                     NULL_REPORTER   devnull;
                     SCH_SHEET_PATH& sheet = schematic->CurrentSheet();
+                    wxString        variant = schematic->GetCurrentVariant();
                     SIM_LIB_MGR     mgr( &schematic->Project() );
 
                     std::vector<EMBEDDED_FILES*> embeddedFilesStack;
                     embeddedFilesStack.push_back( schematic->GetEmbeddedFiles() );
 
                     if( EMBEDDED_FILES* symbolEmbeddedFiles = symbol->GetEmbeddedFiles() )
+                    {
                         embeddedFilesStack.push_back( symbolEmbeddedFiles );
+                        symbol->GetLibSymbolRef()->AppendParentEmbeddedFiles( embeddedFilesStack );
+                    }
 
                     mgr.SetFilesStack( std::move( embeddedFilesStack ) );
 
-                    SIM_MODEL& model = mgr.CreateModel( &sheet, *symbol, true, 0, devnull ).model;
+                    SIM_MODEL& model = mgr.CreateModel( &sheet, *symbol, true, 0, variant, devnull ).model;
 
                     for( wxString pin : model.GetPinNames() )
                     {
@@ -776,9 +704,9 @@ void SCH_FIELD::OnScintillaCharAdded( SCINTILLA_TRICKS* aScintillaTricks,
 
                 for( size_t jj = 0; jj < refs.GetCount(); jj++ )
                 {
-                    if( refs[ jj ].GetSymbol()->GetRef( &refs[ jj ].GetSheetPath(), true ) == ref )
+                    if( refs[jj].GetSymbol()->GetRef( &refs[jj].GetSheetPath(), true ) == ref )
                     {
-                        refSymbol = refs[ jj ].GetSymbol();
+                        refSymbol = refs[jj].GetSymbol();
                         break;
                     }
                 }
@@ -980,14 +908,11 @@ wxString SCH_FIELD::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFu
 
     if( content.IsEmpty() )
     {
-        return wxString::Format( _( "Field %s (empty)" ),
-                                 UnescapeString( GetName() ) );
+        return wxString::Format( _( "Field %s (empty)" ), UnescapeString( GetName() ) );
     }
     else
     {
-        return wxString::Format( _( "Field %s '%s'" ),
-                                 UnescapeString( GetName() ),
-                                 content );
+        return wxString::Format( _( "Field %s '%s'" ), UnescapeString( GetName() ), content );
     }
 }
 
@@ -1009,7 +934,7 @@ void SCH_FIELD::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_I
 
     aList.emplace_back( _( "Text Size" ), aFrame->MessageTextFromValue( GetTextWidth() ) );
 
-    switch ( GetHorizJustify() )
+    switch( GetHorizJustify() )
     {
     case GR_TEXT_H_ALIGN_LEFT:          msg = _( "Left" );         break;
     case GR_TEXT_H_ALIGN_CENTER:        msg = _( "Center" );       break;
@@ -1019,7 +944,7 @@ void SCH_FIELD::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_I
 
     aList.emplace_back( _( "H Justification" ), msg );
 
-    switch ( GetVertJustify() )
+    switch( GetVertJustify() )
     {
     case GR_TEXT_V_ALIGN_TOP:           msg = _( "Top" );          break;
     case GR_TEXT_V_ALIGN_CENTER:        msg = _( "Center" );       break;
@@ -1031,7 +956,7 @@ void SCH_FIELD::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_I
 }
 
 
-bool SCH_FIELD::IsHypertext() const
+bool SCH_FIELD::HasHypertext() const
 {
     if( m_id == FIELD_T::INTERSHEET_REFS )
         return true;
@@ -1043,51 +968,47 @@ bool SCH_FIELD::IsHypertext() const
 }
 
 
-void SCH_FIELD::DoHypertextAction( EDA_DRAW_FRAME* aFrame ) const
+void SCH_FIELD::DoHypertextAction( EDA_DRAW_FRAME* aFrame, const VECTOR2I& aMousePos ) const
 {
     constexpr int START_ID = 1;
 
-    if( IsHypertext() )
+    wxString href;
+
+    if( m_id == FIELD_T::INTERSHEET_REFS )
     {
-        wxString href;
+        SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( m_parent );
+        SCH_SHEET_PATH* sheet = &label->Schematic()->CurrentSheet();
+        wxMenu          menu;
 
-        if( m_id == FIELD_T::INTERSHEET_REFS )
+        std::vector<std::pair<wxString, wxString>> pages;
+
+        label->GetIntersheetRefs( sheet, &pages );
+
+        for( int i = 0; i < (int) pages.size(); ++i )
         {
-            SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( m_parent );
-            SCH_SHEET_PATH* sheet = &label->Schematic()->CurrentSheet();
-            wxMenu          menu;
-
-            std::vector<std::pair<wxString, wxString>> pages;
-
-            label->GetIntersheetRefs( sheet, &pages );
-
-            for( int i = 0; i < (int) pages.size(); ++i )
-            {
-                menu.Append( i + START_ID, wxString::Format( _( "Go to Page %s (%s)" ),
-                                                             pages[i].first,
-                                                             pages[i].second ) );
-            }
-
-            menu.AppendSeparator();
-            menu.Append( 999 + START_ID, _( "Back to Previous Selected Sheet" ) );
-
-            int sel = aFrame->GetPopupMenuSelectionFromUser( menu ) - START_ID;
-
-            if( sel >= 0 && sel < (int) pages.size() )
-                href = wxT( "#" ) + pages[ sel ].first;
-            else if( sel == 999 )
-                href = SCH_NAVIGATE_TOOL::g_BackLink;
-        }
-        else if( IsURL( GetShownText( false ) ) || m_name == SIM_LIBRARY::LIBRARY_FIELD )
-        {
-            href = GetShownText( false );
+            menu.Append( i + START_ID,
+                         wxString::Format( _( "Go to Page %s (%s)" ), pages[i].first, pages[i].second ) );
         }
 
-        if( !href.IsEmpty() )
-        {
-            SCH_NAVIGATE_TOOL* navTool = aFrame->GetToolManager()->GetTool<SCH_NAVIGATE_TOOL>();
-            navTool->HypertextCommand( href );
-        }
+        menu.AppendSeparator();
+        menu.Append( 999 + START_ID, _( "Back to Previous Selected Sheet" ) );
+
+        int sel = aFrame->GetPopupMenuSelectionFromUser( menu ) - START_ID;
+
+        if( sel >= 0 && sel < (int) pages.size() )
+            href = wxT( "#" ) + pages[sel].first;
+        else if( sel == 999 )
+            href = SCH_NAVIGATE_TOOL::g_BackLink;
+    }
+    else if( IsURL( GetShownText( false ) ) || m_name == SIM_LIBRARY::LIBRARY_FIELD )
+    {
+        href = GetShownText( false );
+    }
+
+    if( !href.IsEmpty() )
+    {
+        SCH_NAVIGATE_TOOL* navTool = aFrame->GetToolManager()->GetTool<SCH_NAVIGATE_TOOL>();
+        navTool->HypertextCommand( href );
     }
 }
 
@@ -1113,6 +1034,76 @@ void SCH_FIELD::SetText( const wxString& aText )
         EDA_TEXT::SetText( aText.Strip( wxString::both ) );
     else
         EDA_TEXT::SetText( aText );
+}
+
+
+void SCH_FIELD::SetText( const wxString& aText, const SCH_SHEET_PATH* aPath, const wxString& aVariantName )
+{
+    wxCHECK( m_parent, /* void */ );
+
+    if( m_isGeneratedField )
+        return;
+
+    wxString tmp = aText;
+
+    if( IsMandatory() )
+        tmp = aText.Strip( wxString::both ) ;
+
+    switch( m_parent->Type() )
+    {
+    case SCH_SYMBOL_T:
+    {
+        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
+        wxCHECK( symbol, /* void */ );
+        symbol->SetFieldText( GetName(), aText, aPath, aVariantName );
+        break;
+    }
+
+    case SCH_SHEET_T:
+    {
+        SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
+        wxCHECK( sheet, /* void */ );
+        sheet->SetFieldText( GetName(), aText, aPath, aVariantName );
+        break;
+    }
+
+    default:
+        SCH_FIELD::SetText( aText );
+        break;
+    }
+}
+
+
+wxString SCH_FIELD::GetText( const SCH_SHEET_PATH* aPath, const wxString& aVariantName ) const
+{
+    wxString retv;
+
+    wxCHECK( aPath && m_parent, retv );
+
+    switch( m_parent->Type() )
+    {
+    case SCH_SYMBOL_T:
+    {
+        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( m_parent );
+        wxCHECK( symbol, retv );
+        retv = symbol->GetFieldText( GetName(), aPath, aVariantName );
+        break;
+    }
+
+    case SCH_SHEET_T:
+    {
+        SCH_SHEET* sheet = static_cast<SCH_SHEET*>( m_parent );
+        wxCHECK( sheet, retv );
+        retv = sheet->GetFieldText( GetName(), aPath, aVariantName );
+        break;
+    }
+
+    default:
+        retv = GetText();
+        break;
+    }
+
+    return retv;
 }
 
 
@@ -1195,7 +1186,7 @@ bool SCH_FIELD::HitTest( const BOX2I& aRect, bool aContained, int aAccuracy ) co
     if( GetShownText( true ).IsEmpty() )
         return false;
 
-    if( m_flags & (STRUCT_DELETED | SKIP_STRUCT ) )
+    if( m_flags & ( STRUCT_DELETED | SKIP_STRUCT ) )
         return false;
 
     BOX2I rect = aRect;
@@ -1220,7 +1211,7 @@ bool SCH_FIELD::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
     if( GetShownText( true ).IsEmpty() )
         return false;
 
-    if( m_flags & (STRUCT_DELETED | SKIP_STRUCT ) )
+    if( m_flags & ( STRUCT_DELETED | SKIP_STRUCT ) )
         return false;
 
     BOX2I bbox = GetBoundingBox();
@@ -1235,13 +1226,13 @@ bool SCH_FIELD::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
 }
 
 
-void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts,
-                      int aUnit, int aBodyStyle, const VECTOR2I& aOffset, bool aDimmed )
+void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts, int aUnit, int aBodyStyle,
+                      const VECTOR2I& aOffset, bool aDimmed )
 {
     wxString text;
 
     if( Schematic() )
-        text = GetShownText( &Schematic()->CurrentSheet(), true );
+        text = GetShownText( &Schematic()->CurrentSheet(), true, 0, Schematic()->GetCurrentVariant() );
     else
         text = GetShownText( true );
 
@@ -1249,10 +1240,10 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
         return;
 
     SCH_RENDER_SETTINGS* renderSettings = getRenderSettings( aPlotter );
-    COLOR4D color = renderSettings->GetLayerColor( GetLayer() );
-    int penWidth = GetEffectiveTextPenWidth( renderSettings->GetDefaultPenWidth() );
+    COLOR4D              color = renderSettings->GetLayerColor( GetLayer() );
+    int                  penWidth = GetEffectiveTextPenWidth( renderSettings->GetDefaultPenWidth() );
 
-    COLOR4D bg = renderSettings->GetBackgroundColor();;
+    COLOR4D bg = renderSettings->GetBackgroundColor();
 
     if( bg == COLOR4D::UNSPECIFIED || !aPlotter->GetColorMode() )
         bg = COLOR4D::WHITE;
@@ -1260,9 +1251,12 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     if( aPlotter->GetColorMode() && GetTextColor() != COLOR4D::UNSPECIFIED )
         color = GetTextColor();
 
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
+
     if( aDimmed )
     {
-        color.Desaturate( );
+        color.Desaturate();
         color = color.Mix( bg, 0.5f );
     }
 
@@ -1280,7 +1274,7 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     GR_TEXT_H_ALIGN_T hjustify = GetHorizJustify();
     GR_TEXT_V_ALIGN_T vjustify = GetVertJustify();
 
-    if( renderSettings->m_Transform.y1 )  // Rotate symbol 90 deg.
+    if( renderSettings->m_Transform.y1 ) // Rotate symbol 90 deg.
     {
         if( orient.IsHorizontal() )
             orient = ANGLE_VERTICAL;
@@ -1305,6 +1299,12 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
         vjustify = GR_TEXT_V_ALIGN_CENTER;
         textpos = GetBoundingBox().Centre();
     }
+    else if( m_parent && m_parent->Type() == LIB_SYMBOL_T )
+    {
+        // Library-symbol exports (CLI/symbol editor) provide an item offset in the same coordinate
+        // frame as body graphics/pins.  Apply the same transform+offset pipeline to field text.
+        textpos = renderSettings->TransformCoordinate( textpos ) + aOffset;
+    }
     else if( m_parent && m_parent->Type() == SCH_GLOBAL_LABEL_T )
     {
         SCH_GLOBALLABEL* label = static_cast<SCH_GLOBALLABEL*>( m_parent );
@@ -1312,7 +1312,7 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
     }
     else if( m_parent && m_parent->Type() == SCH_DIRECTIVE_LABEL_T )
     {
-        SCH_DIRECTIVE_LABEL* label = static_cast<SCH_DIRECTIVE_LABEL*>( m_parent );
+        SCH_DIRECTIVE_LABEL*      label = static_cast<SCH_DIRECTIVE_LABEL*>( m_parent );
         std::shared_ptr<NETCLASS> nc = label->GetEffectiveNetClass();
 
         if( nc && ( nc->GetSchematicColor() != COLOR4D::UNSPECIFIED ) && aPlotter->GetColorMode() )
@@ -1338,7 +1338,7 @@ void SCH_FIELD::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& 
 
             label->GetIntersheetRefs( &Schematic()->CurrentSheet(), &pages );
 
-            for( const auto& [ pageNumber, sheetName ] : pages )
+            for( const auto& [pageNumber, sheetName] : pages )
                 pageHrefs.push_back( wxT( "#" ) + pageNumber );
 
             BOX2I bbox = GetBoundingBox();
@@ -1394,14 +1394,9 @@ VECTOR2I SCH_FIELD::GetParentPosition() const
 
 bool SCH_FIELD::IsMandatory() const
 {
-    return m_id == FIELD_T::REFERENCE
-        || m_id == FIELD_T::VALUE
-        || m_id == FIELD_T::FOOTPRINT
-        || m_id == FIELD_T::DATASHEET
-        || m_id == FIELD_T::DESCRIPTION
-        || m_id == FIELD_T::SHEET_NAME
-        || m_id == FIELD_T::SHEET_FILENAME
-        || m_id == FIELD_T::INTERSHEET_REFS;
+    return m_id == FIELD_T::REFERENCE || m_id == FIELD_T::VALUE || m_id == FIELD_T::FOOTPRINT
+           || m_id == FIELD_T::DATASHEET || m_id == FIELD_T::DESCRIPTION || m_id == FIELD_T::SHEET_NAME
+           || m_id == FIELD_T::SHEET_FILENAME || m_id == FIELD_T::INTERSHEET_REFS;
 }
 
 
@@ -1428,7 +1423,7 @@ bool SCH_FIELD::operator<( const SCH_ITEM& aItem ) const
 }
 
 
-bool SCH_FIELD::operator==(const SCH_ITEM& aOther) const
+bool SCH_FIELD::operator==( const SCH_ITEM& aOther ) const
 {
     if( Type() != aOther.Type() )
         return false;
@@ -1555,7 +1550,7 @@ int SCH_FIELD::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
                 return retv;
         }
     }
-    else    // assume we're sorting
+    else // assume we're sorting
     {
         if( m_id != tmp->m_id )
             return (int) m_id - (int) tmp->m_id;
@@ -1605,38 +1600,25 @@ wxString SCH_FIELD::getUnescapedText( const SCH_SHEET_PATH* aPath, const wxStrin
     // This is the default variant field text for all fields except the reference field.
     wxString retv = EDA_TEXT::GetShownText( false );
 
-    wxLogTrace( traceSchFieldRendering,
-                "getUnescapedText: field=%s, parent=%p, aPath=%p, path_empty=%d, initial_text='%s'",
-                GetName(),
-                m_parent,
-                aPath,
-                aPath ? (aPath->empty() ? 1 : 0) : -1,
-                retv );
-
     // Special handling for parent object field instance and variant information.
     // Only use the path if it's non-empty; an empty path can't match any instances
     if( m_parent && aPath && !aPath->empty() )
     {
-        wxLogTrace( traceSchFieldRendering,
-                    "  Path is valid and non-empty, parent type=%d", m_parent->Type() );
+        wxLogTrace( traceSchFieldRendering, "  Path is valid and non-empty, parent type=%d", m_parent->Type() );
 
         switch( m_parent->Type() )
         {
         case SCH_SYMBOL_T:
-        {
             if( const SCH_SYMBOL* symbol = static_cast<const SCH_SYMBOL*>( m_parent ) )
             {
                 if( m_id == FIELD_T::REFERENCE )
                 {
-                    wxLogTrace( traceSchFieldRendering,
-                                "  Calling GetRef for symbol %s on path %s",
-                                symbol->m_Uuid.AsString(),
-                                aPath->Path().AsString() );
+                    wxLogTrace( traceSchFieldRendering, "  Calling GetRef for symbol %s on path %s",
+                                symbol->m_Uuid.AsString(), aPath->Path().AsString() );
 
                     retv = symbol->GetRef( aPath, true );
 
-                    wxLogTrace( traceSchFieldRendering,
-                                "  GetRef returned: '%s'", retv );
+                    wxLogTrace( traceSchFieldRendering, "  GetRef returned: '%s'", retv );
                 }
                 else if( !aVariantName.IsEmpty() )
                 {
@@ -1651,7 +1633,6 @@ wxString SCH_FIELD::getUnescapedText( const SCH_SHEET_PATH* aPath, const wxStrin
             }
 
             break;
-        }
 
         case SCH_SHEET_T:
             break;
@@ -1674,18 +1655,18 @@ static struct SCH_FIELD_DESC
         // places leads to duplicate symbols.
         auto& h_inst = ENUM_MAP<GR_TEXT_H_ALIGN_T>::Instance();
 
-        if( h_inst.Choices().GetCount() == 0)
+        if( h_inst.Choices().GetCount() == 0 )
         {
-            h_inst.Map( GR_TEXT_H_ALIGN_LEFT,   _HKI( "Left" ) );
+            h_inst.Map( GR_TEXT_H_ALIGN_LEFT, _HKI( "Left" ) );
             h_inst.Map( GR_TEXT_H_ALIGN_CENTER, _HKI( "Center" ) );
-            h_inst.Map( GR_TEXT_H_ALIGN_RIGHT,  _HKI( "Right" ) );
+            h_inst.Map( GR_TEXT_H_ALIGN_RIGHT, _HKI( "Right" ) );
         }
 
         auto& v_inst = ENUM_MAP<GR_TEXT_V_ALIGN_T>::Instance();
 
-        if( v_inst.Choices().GetCount() == 0)
+        if( v_inst.Choices().GetCount() == 0 )
         {
-            v_inst.Map( GR_TEXT_V_ALIGN_TOP,    _HKI( "Top" ) );
+            v_inst.Map( GR_TEXT_V_ALIGN_TOP, _HKI( "Top" ) );
             v_inst.Map( GR_TEXT_V_ALIGN_CENTER, _HKI( "Center" ) );
             v_inst.Map( GR_TEXT_V_ALIGN_BOTTOM, _HKI( "Bottom" ) );
         }
@@ -1699,25 +1680,23 @@ static struct SCH_FIELD_DESC
 
         const wxString textProps = _HKI( "Text Properties" );
 
-        auto horiz = new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_H_ALIGN_T>(
-                _HKI( "Horizontal Justification" ), &SCH_FIELD::SetEffectiveHorizJustify,
-                &SCH_FIELD::GetEffectiveHorizJustify );
+        auto horiz = new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_H_ALIGN_T>( _HKI( "Horizontal Justification" ),
+                                                                      &SCH_FIELD::SetEffectiveHorizJustify,
+                                                                      &SCH_FIELD::GetEffectiveHorizJustify );
 
-        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Horizontal Justification" ), horiz,
-                                 textProps );
+        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Horizontal Justification" ), horiz, textProps );
 
-        auto vert = new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_V_ALIGN_T>(
-                _HKI( "Vertical Justification" ), &SCH_FIELD::SetEffectiveVertJustify,
-                &SCH_FIELD::GetEffectiveVertJustify );
+        auto vert = new PROPERTY_ENUM<SCH_FIELD, GR_TEXT_V_ALIGN_T>( _HKI( "Vertical Justification" ),
+                                                                     &SCH_FIELD::SetEffectiveVertJustify,
+                                                                     &SCH_FIELD::GetEffectiveVertJustify );
 
-        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Vertical Justification" ), vert,
-                                 textProps );
+        propMgr.ReplaceProperty( TYPE_HASH( EDA_TEXT ), _HKI( "Vertical Justification" ), vert, textProps );
 
-        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Show Field Name" ),
-                &SCH_FIELD::SetNameShown, &SCH_FIELD::IsNameShown ) );
+        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Show Field Name" ), &SCH_FIELD::SetNameShown,
+                                                            &SCH_FIELD::IsNameShown ) );
 
-        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Allow Autoplacement" ),
-                &SCH_FIELD::SetCanAutoplace, &SCH_FIELD::CanAutoplace ) );
+        propMgr.AddProperty( new PROPERTY<SCH_FIELD, bool>( _HKI( "Allow Autoplacement" ), &SCH_FIELD::SetCanAutoplace,
+                                                            &SCH_FIELD::CanAutoplace ) );
 
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Hyperlink" ) );
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Thickness" ) );
@@ -1726,36 +1705,34 @@ static struct SCH_FIELD_DESC
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Height" ) );
 
 
-        propMgr.AddProperty( new PROPERTY<SCH_FIELD, int>( _HKI( "Text Size" ),
-                &SCH_FIELD::SetSchTextSize, &SCH_FIELD::GetSchTextSize, PROPERTY_DISPLAY::PT_SIZE ),
-                _HKI( "Text Properties" ) );
+        propMgr.AddProperty( new PROPERTY<SCH_FIELD, int>( _HKI( "Text Size" ), &SCH_FIELD::SetSchTextSize,
+                                                           &SCH_FIELD::GetSchTextSize, PROPERTY_DISPLAY::PT_SIZE ),
+                             _HKI( "Text Properties" ) );
 
         propMgr.Mask( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Orientation" ) );
 
-        auto isNotGeneratedField =
-                []( INSPECTABLE* aItem ) -> bool
-                {
-                    if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
-                        return !field->IsGeneratedField();
+        auto isNotGeneratedField = []( INSPECTABLE* aItem ) -> bool
+        {
+            if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
+                return !field->IsGeneratedField();
 
-                    return true;
-                };
+            return true;
+        };
 
         propMgr.OverrideWriteability( TYPE_HASH( SCH_FIELD ), TYPE_HASH( EDA_TEXT ), _HKI( "Text" ),
                                       isNotGeneratedField );
 
 
-        auto isNonMandatoryField =
-                []( INSPECTABLE* aItem ) -> bool
-                {
-                    if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
-                        return !field->IsMandatory();
+        auto isNonMandatoryField = []( INSPECTABLE* aItem ) -> bool
+        {
+            if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( aItem ) )
+                return !field->IsMandatory();
 
-                    return false;
-                };
+            return false;
+        };
 
-        propMgr.OverrideAvailability( TYPE_HASH( SCH_FIELD ), TYPE_HASH( SCH_ITEM ),
-                                      _HKI( "Private" ), isNonMandatoryField );
+        propMgr.OverrideAvailability( TYPE_HASH( SCH_FIELD ), TYPE_HASH( SCH_ITEM ), _HKI( "Private" ),
+                                      isNonMandatoryField );
     }
 } _SCH_FIELD_DESC;
 

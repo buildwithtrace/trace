@@ -176,12 +176,7 @@ bool FOOTPRINT_PREVIEW_PANEL::DisplayFootprint( const LIB_ID& aFPID )
 
     try
     {
-        const FOOTPRINT* fp = adapter->LoadFootprint( aFPID.GetLibNickname(), aFPID.GetLibItemName(), false );
-
-        if( fp )
-            m_currentFootprint.reset( static_cast<FOOTPRINT*>( fp->Duplicate( IGNORE_PARENT_GROUP ) ) );
-        else
-            m_currentFootprint.reset();
+        m_currentFootprint.reset( adapter->LoadFootprint( aFPID.GetLibNickname(), aFPID.GetLibItemName(), false ) );
     }
     catch( ... )
     {
@@ -218,7 +213,7 @@ void FOOTPRINT_PREVIEW_PANEL::DisplayFootprints( std::shared_ptr<FOOTPRINT> aFoo
 
     if( m_currentFootprint )
     {
-        wxASSERT( m_otherFootprint );
+        wxCHECK( m_otherFootprint, /* void */ );
 
         renderFootprint( m_currentFootprint );
         renderFootprint( m_otherFootprint );

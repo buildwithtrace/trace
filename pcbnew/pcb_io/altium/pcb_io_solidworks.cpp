@@ -25,6 +25,7 @@
 #include <altium_pcb.h>
 #include <altium_pcb_compound_file.h>
 #include <io/altium/altium_binary_parser.h>
+#include <io/altium/altium_project_variants.h>
 #include <pcb_io/pcb_io.h>
 #include <reporter.h>
 
@@ -62,7 +63,8 @@ BOARD* PCB_IO_SOLIDWORKS::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
 
     m_board = aAppendToMe ? aAppendToMe : new BOARD();
 
-    fontconfig::FONTCONFIG::SetReporter( &WXLOG_REPORTER::GetInstance() );
+    // Collect the font substitution warnings (RAII - automatically reset on scope exit)
+    FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
 
     // Give the filename to the board if it's new
     if( !aAppendToMe )
@@ -133,6 +135,14 @@ BOARD* PCB_IO_SOLIDWORKS::LoadBoard( const wxString& aFileName, BOARD* aAppendTo
     catch( CFB::CFBException& exception )
     {
         THROW_IO_ERROR( exception.what() );
+    }
+
+    if( m_props && m_props->count( "project_file" ) )
+    {
+        auto variants = ParseAltiumProjectVariants( m_props->at( "project_file" ) );
+
+        if( !variants.empty() )
+            ApplyAltiumProjectVariantsToBoard( m_board, variants );
     }
 
     return m_board;

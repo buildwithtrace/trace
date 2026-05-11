@@ -41,7 +41,6 @@ class DIALOG_ABOUT_BASE : public wxDialog
 		wxStaticText* m_staticTextLibVersion;
 		wxButton* m_btCopyVersionInfo;
 		wxButton* m_btReportBug;
-		wxButton* m_btDonate;
 		wxNotebook* m_notebook;
 		wxButton* m_btOk;
 

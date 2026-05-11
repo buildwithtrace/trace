@@ -205,6 +205,10 @@ DRC_ITEM DRC_ITEM::footprintFilters( DRCE_FOOTPRINT_FILTERS,
         _HKI( "Footprint doesn't match symbol's footprint filters" ),
         wxT( "footprint_filters_mismatch" ) );
 
+DRC_ITEM DRC_ITEM::schematicFieldsParity( DRCE_SCHEMATIC_FIELDS_PARITY,
+        _HKI( "Footprint field does not match symbol field" ),
+        wxT( "footprint_symbol_field_mismatch" ) );
+
 DRC_ITEM DRC_ITEM::libFootprintIssues( DRCE_LIB_FOOTPRINT_ISSUES,
         _HKI( "Footprint not found in libraries" ),
         wxT( "lib_footprint_issues" ) );
@@ -310,6 +314,10 @@ DRC_ITEM DRC_ITEM::trackOnPostMachinedLayer( DRCE_TRACK_ON_POST_MACHINED_LAYER,
         _HKI( "Track connected to post-machined or backdrilled layer" ),
         wxT( "track_on_post_machined_layer" ) );
 
+DRC_ITEM DRC_ITEM::trackNotCenteredOnVia( DRCE_TRACK_NOT_CENTERED_ON_VIA,
+        _HKI( "Track endpoint not centered on via" ),
+        wxT( "track_not_centered_on_via" ) );
+
 std::vector<std::reference_wrapper<RC_ITEM>> DRC_ITEM::allItemTypes( {
         DRC_ITEM::heading_electrical,
         DRC_ITEM::shortingItems,
@@ -339,6 +347,7 @@ std::vector<std::reference_wrapper<RC_ITEM>> DRC_ITEM::allItemTypes( {
         DRC_ITEM::solderMaskBridge,
         DRC_ITEM::connectionWidth,
         DRC_ITEM::trackOnPostMachinedLayer,
+        DRC_ITEM::trackNotCenteredOnVia,
         DRC_ITEM::tuningProfileImplicitRules,
 
         DRC_ITEM::heading_schematic_parity,
@@ -346,6 +355,7 @@ std::vector<std::reference_wrapper<RC_ITEM>> DRC_ITEM::allItemTypes( {
         DRC_ITEM::missingFootprint,
         DRC_ITEM::extraFootprint,
         DRC_ITEM::schematicParity,
+        DRC_ITEM::schematicFieldsParity,
         DRC_ITEM::footprintFilters,
         DRC_ITEM::netConflict,
         DRC_ITEM::unconnectedItems,
@@ -434,6 +444,7 @@ std::shared_ptr<DRC_ITEM> DRC_ITEM::Create( int aErrorCode )
     case DRCE_NET_CONFLICT:             return std::make_shared<DRC_ITEM>( netConflict );
     case DRCE_EXTRA_FOOTPRINT:          return std::make_shared<DRC_ITEM>( extraFootprint );
     case DRCE_SCHEMATIC_PARITY:         return std::make_shared<DRC_ITEM>( schematicParity );
+    case DRCE_SCHEMATIC_FIELDS_PARITY:         return std::make_shared<DRC_ITEM>( schematicFieldsParity );
     case DRCE_FOOTPRINT_FILTERS:        return std::make_shared<DRC_ITEM>( footprintFilters );
     case DRCE_LIB_FOOTPRINT_ISSUES:     return std::make_shared<DRC_ITEM>( libFootprintIssues );
     case DRCE_LIB_FOOTPRINT_MISMATCH:   return std::make_shared<DRC_ITEM>( libFootprintMismatch );
@@ -460,6 +471,7 @@ std::shared_ptr<DRC_ITEM> DRC_ITEM::Create( int aErrorCode )
     case DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER:      return std::make_shared<DRC_ITEM>( nonMirroredTextOnBackLayer );
     case DRCE_MISSING_TUNING_PROFILE:   return std::make_shared<DRC_ITEM>( missingTuningProfile );
     case DRCE_TRACK_ON_POST_MACHINED_LAYER: return std::make_shared<DRC_ITEM>( trackOnPostMachinedLayer );
+    case DRCE_TRACK_NOT_CENTERED_ON_VIA:    return std::make_shared<DRC_ITEM>( trackNotCenteredOnVia );
     default:
         wxFAIL_MSG( wxT( "Unknown DRC error code" ) );
         return nullptr;

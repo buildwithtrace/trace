@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -157,6 +158,8 @@ public:
         bool  show_search;
         bool  show_net_inspector;
         bool  design_blocks_show;
+        bool  ai_chat_show;
+        int   ai_chat_width;
         int   design_blocks_panel_docked_width;
         int   design_blocks_panel_float_width;
         int   design_blocks_panel_float_height;
@@ -271,5 +274,23 @@ public:
     wxString  m_LastFootprint3dDir;
 
     ACTION_PLUGIN_SETTINGS_LIST m_VisibleActionPlugins;
+
+    // Manufacturer shipping info (persisted for better UX)
+    struct MANUFACTURER_SHIPPING
+    {
+        wxString name;
+        wxString email;
+        wxString phone;
+        wxString company;
+        wxString street;
+        wxString city;
+        wxString state;
+        wxString zip;
+        wxString country;
+    };
+
+    MANUFACTURER_SHIPPING m_ManufacturerShipping;
 };
+
+const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow );
 

@@ -30,6 +30,9 @@
 #include <trace_helpers.h>
 
 #include <wx/tokenzr.h>
+#include <diagnostic_console.h>
+#include <paths.h>
+#include <wx/filename.h>
 
 const wxChar* const traceFindReplace = wxT( "KICAD_FIND_REPLACE" );
 const wxChar* const kicadTraceCoords = wxT( "KICAD_COORDS" );
@@ -72,6 +75,29 @@ const wxChar* const tracePdfPlotter = wxT( "KICAD_PDF_PLOTTER" );
 const wxChar* const traceSnap = wxT( "KICAD_SNAP" );
 const wxChar* const traceLibraries = wxT( "KICAD_LIBRARIES" );
 const wxChar* const traceSchMove = wxT( "KICAD_SCH_MOVE" );
+const wxChar* const traceSymbolInheritance = wxT( "KICAD_SYMBOL_INHERITANCE" );
+
+const wxChar* const traceAi = wxT( "TRACE_AI" );
+const wxChar* const traceAiToolCall = wxT( "TRACE_AI_TOOL_CALL" );
+const wxChar* const traceAiFileOp = wxT( "TRACE_AI_FILE_OP" );
+const wxChar* const traceFileSave = wxT( "TRACE_FILE_SAVE" );
+const wxChar* const traceAiBackend = wxT( "TRACE_AI_BACKEND" );
+
+
+FILE* GetDiagnosticLogFile()
+{
+    static wxString s_logPath;
+
+    if( s_logPath.IsEmpty() )
+    {
+        s_logPath = PATHS::GetLogsPath() + wxFileName::GetPathSeparator()
+                    + wxT( "diagnostic.log" );
+        PATHS::EnsurePathExists( PATHS::GetLogsPath() );
+    }
+
+    return fopen( s_logPath.ToStdString().c_str(), "a" );
+}
+
 
 wxString dump( const wxArrayString& aArray )
 {
@@ -334,8 +360,19 @@ void TRACE_MANAGER::traceV( const wxString& aWhat, const wxString& aFmt, va_list
     wxString str;
     str.PrintfV( aFmt, vargs );
 
+    wxString fullMsg = wxString::Format( wxT( " %-30s | %s\n" ), aWhat, str );
+
 #if defined( __UNIX__ ) || defined( _WIN32 )
-    fprintf( stderr, " %-30s | %s", aWhat.c_str().AsChar(), str.c_str().AsChar() );
+    fprintf( stderr, "%s", fullMsg.ToStdString().c_str() );
+    fflush( stderr );
+#endif
+
+    wxDateTime now = wxDateTime::Now();
+    wxString fileMsg = now.Format( wxT( "[%Y-%m-%d %H:%M:%S] " ) ) + fullMsg;
+    TRACE_LOG_FILE::LogToFile( fileMsg );
+
+#ifdef KICAD_DIAGNOSTIC_LOGGING
+    DIAGNOSTIC_CONSOLE::Log( fullMsg );
 #endif
 }
 
@@ -346,7 +383,15 @@ void TRACE_MANAGER::init()
     m_globalTraceEnabled = wxGetEnv( wxT( "KICAD_TRACE" ), &traceVars );
     m_printAllTraces = false;
 
-    if( !m_globalTraceEnabled )
+    // Always enable AI trace categories for session log files
+    m_globalTraceEnabled = true;
+    m_enabledTraces[wxT( "TRACE_AI" )] = true;
+    m_enabledTraces[wxT( "TRACE_AI_TOOL_CALL" )] = true;
+    m_enabledTraces[wxT( "TRACE_AI_FILE_OP" )] = true;
+    m_enabledTraces[wxT( "TRACE_FILE_SAVE" )] = true;
+    m_enabledTraces[wxT( "TRACE_AI_BACKEND" )] = true;
+
+    if( !wxGetEnv( wxT( "KICAD_TRACE" ), &traceVars ) )
         return;
 
     wxStringTokenizer tokenizer( traceVars, "," );
@@ -360,3 +405,26 @@ void TRACE_MANAGER::init()
             m_printAllTraces = true;
     }
 }
+
+
+void TRACE_MANAGER::InitLogging()
+{
+    TRACE_LOG_FILE::OpenLogFile();
+    TRACE_LOG_FILE::InstallSignalHandlers();
+    wxLog::SetActiveTarget( new DIAGNOSTIC_LOG_TARGET() );
+    wxLog::EnableLogging( true );
+    wxLog::SetLogLevel( wxLOG_Trace );
+    wxLog::AddTraceMask( wxT( "TRACE_AI" ) );
+    wxLog::AddTraceMask( wxT( "TRACE_AI_TOOL_CALL" ) );
+    wxLog::AddTraceMask( wxT( "TRACE_AI_FILE_OP" ) );
+    wxLog::AddTraceMask( wxT( "TRACE_FILE_SAVE" ) );
+    wxLog::AddTraceMask( wxT( "TRACE_AI_BACKEND" ) );
+}
+
+
+#ifdef KICAD_DIAGNOSTIC_LOGGING
+void TRACE_MANAGER::InitDiagnosticConsoleWindow( wxWindow* aParent )
+{
+    DIAGNOSTIC_CONSOLE::Create( aParent );
+}
+#endif

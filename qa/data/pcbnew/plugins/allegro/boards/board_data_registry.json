@@ -1,0 +1,164 @@
+{
+    "boards": {
+        "BeagleBone_Black_RevC": {
+            "formatVersion": "17.2",
+            "boardFile": "BeagleBone_Black_RevC.brd"
+        },
+        "BeagleBone-AI": {
+            "formatVersion": "17.2",
+            "url": "https://github.com/beagleboard/beaglebone-ai",
+            "license": "CC-BY-4.0",
+            "boardFile": "BeagleBone-AI.brd",
+            "testLabels": ["slow-board"]
+        },
+        "BeagleBone-AI-64": {
+            "formatVersion": "17.2",
+            "url": "https://github.com/beagleboard/beaglebone-ai-64",
+            "license": "CC-BY-4.0",
+            "testLabels": ["slow-board"],
+            "blocks": [
+                {
+                    "type": "0x22",
+                    "offset": "0x020858c"
+                }
+            ]
+        },
+        "copper_text": {
+            "formatVersion": "17.4",
+            "boardFile": "copper_text.brd"
+        },
+        "CutiePi_V2_3_v166": {
+            "url": "https://github.com/cutiepi-io/cutiepi-board",
+            "license": "BSD-3-Clause",
+            "description": "CutiePi 2.3 v166 board file, saved in Allegro",
+            "formatVersion": "16.6",
+            "boardFile": "CutiePi_V2_3.brd",
+            "header": {
+                "skip": false
+            },
+            "blocks": [
+                {
+                    "type": "0x08",
+                    "offset": "0x00136a5c",
+                    "skip": false
+                }
+            ],
+            "boardExpectations": [
+                {
+                    "type": "footprint",
+                    "count": {
+                        "min": 300,
+                        "max": 400
+                    }
+                },
+                {
+                    "type": "net",
+                    "count": {
+                        "min": 300
+                    }
+                },
+                {
+                    "type": "net",
+                    "name": ["3V3", "5V_IN", "GND"]
+                }
+            ]
+        },
+        "CutiePi_V2_3_dbd18": {
+            "url": "https://github.com/cutiepi-io/cutiepi-board",
+            "license": "BSD-3-Clause",
+            "description": "CutiePi 2.3, up-revved with DB Doctor 18",
+            "formatVersion": "18.0",
+            "header": {
+                // This one appears to be reading only 1264 bytes
+                "skip": true
+            }
+        },
+        "EVK_BaseBoard": {
+            "formatVersion": "17.2",
+            "boardFile": "EVK_BaseBoard.brd"
+        },
+        "EVK_SOM": {
+            "formatVersion": "17.2",
+            "boardFile": "EVK_SOM.brd"
+        },
+        "led_youtube": {
+            "formatVersion": "17.4",
+            "boardFile": "led_youtube.brd"
+        },
+        "mainBoard": {
+            "formatVersion": "16.6",
+            "boardFile": "mainBoard.brd"
+        },
+        "mainBoard2": {
+            "formatVersion": "16.6",
+            "boardFile": "mainBoard2.brd"
+        },
+        "Olympus_15061-1b_v165": {
+            "url": "https://www.opencompute.org/wiki/Server/ProjectOlympus",
+            "license": "OWFa-1.0",
+            "description": "Olympus 15061 1b board file, saved in Allegro",
+            "formatVersion": "16.5",
+            "header": {
+                "skip": false
+            },
+            "blocks": [
+                {
+                    "comment": "This is the only known 0x20 in the boards seen so far",
+                    "type": "0x20",
+                    "offset": "0x0131553c",
+                    "skip": false
+                }
+            ]
+        },
+        "ProiectBoard": {
+            "formatVersion": "16.6",
+            "boardFile": "ProiectBoard.brd",
+            "boardExpectations": [
+                {
+                    "type": "graphic",
+                    "shape": "circle",
+                    "position": ["-215 mil", "-2272 mil"],
+                    "radius": "25 mil",
+                    "layer": "DISPLAY_TOP"
+                }
+            ]
+        },
+        "rects": {
+            "formatVersion": "17.4",
+            "boardFile": "rects.brd"
+        },
+        "TRS80_POWER": {
+            "formatVersion": "16.6",
+            "boardFile": "TRS80_POWER.brd",
+            "boardExpectations": [
+                {
+                    "type": "footprint",
+                    "count": {
+                        "min": 1
+                    }
+                },
+                {
+                    "type": "net",
+                    "count": {
+                        "min": 1
+                    }
+                },
+                {
+                    "type": "layers",
+                    "cuNames": ["TOP", "BOTTOM"]
+                }
+            ]
+        },
+        "v13_header": {
+            "formatVersion": "13.0",
+            "boardFile": "v13_header.brd",
+            // This version cannot (yet) be read successfully, so expect it to fail
+            "expectLoadFailure": true
+        },
+        "VCU118_REV2-0": {
+            "formatVersion": "16.6",
+            "boardFile": "8851_HW-U1-VCU118_REV2-0_071417.brd",
+            "testLabels": ["slow-board"]
+        }
+    }
+}

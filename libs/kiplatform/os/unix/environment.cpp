@@ -22,7 +22,9 @@
 #include <gio/gio.h>
 #include <kiplatform/environment.h>
 #include <wx/filename.h>
+#include <wx/uri.h>
 #include <wx/utils.h>
+#include <wx/sysopt.h>
 
 
 void KIPLATFORM::ENV::Init()
@@ -35,11 +37,26 @@ void KIPLATFORM::ENV::Init()
     if( wxGetEnv( wxT( "XDG_CURRENT_DESKTOP" ), &wm ) && wm.CmpNoCase( wxT( "Unity" ) ) == 0 )
         wxSetEnv( wxT( "UBUNTU_MENUPROXY" ), wxT( "0" ) );
 
-#if !wxUSE_GLCANVAS_EGL
-    // Force the use of X11 backend (or wayland-x11 compatibility layer).  This is
-    // required until wxWidgets supports the Wayland compositors
-    wxSetEnv( wxT( "GDK_BACKEND" ), wxT( "x11" ) );
+    bool forceX11 = false;
+
+#if wxCHECK_VERSION( 3, 3, 2 )
+    #if wxHAS_EGL
+        // Prefer GLX backend on X11 and EGL backend on Wayland.
+        if( !wxGetEnv( wxT( "WAYLAND_DISPLAY" ), nullptr ) )
+            wxSystemOptions::SetOption( "opengl.egl", 0 );
+    #else
+        // Forces GLX on X11 and XWayland
+        forceX11 = true;
+    #endif
+#else
+    #if !wxUSE_GLCANVAS_EGL
+        // Forces GLX on X11 and XWayland
+        forceX11 = true;
+    #endif
 #endif
+
+    if( forceX11 )
+        wxSetEnv( wxT( "GDK_BACKEND" ), wxT( "x11" ) );
 
     // Set GTK2-style input instead of xinput2.  This disables touchscreen and smooth
     // scrolling.  It's needed to ensure that we are not getting multiple mouse scroll
@@ -119,7 +136,87 @@ wxString KIPLATFORM::ENV::GetUserCachePath()
 
 bool KIPLATFORM::ENV::GetSystemProxyConfig( const wxString& aURL, PROXY_CONFIG& aCfg )
 {
-    return false;
+    bool success = false;
+
+    GProxyResolver* resolver = g_proxy_resolver_get_default();
+
+    if( !resolver )
+        return false;
+
+    GError* error = nullptr;
+    char**  proxyList = g_proxy_resolver_lookup( resolver, aURL.utf8_str(), nullptr, &error );
+
+    if( error )
+    {
+        g_error_free( error );
+        return false;
+    }
+
+    if( !proxyList )
+        return false;
+
+    // GProxyResolver returns a NULL-terminated list of proxy URIs.
+    // We use the first non-direct proxy.
+    for( int i = 0; proxyList[i] != nullptr; i++ )
+    {
+        wxString proxyUriStr( proxyList[i], wxConvUTF8 );
+
+        // "direct://" means no proxy needed
+        if( proxyUriStr == wxT( "direct://" ) )
+            continue;
+
+        wxURI proxyUri( proxyUriStr );
+
+        // Clear any stale data from previous lookups
+        aCfg.host.clear();
+        aCfg.username.clear();
+        aCfg.password.clear();
+
+        // Build scheme://host:port string for curl.
+        // The scheme is required for non-HTTP proxies (socks5, https, etc.)
+        wxString scheme = proxyUri.GetScheme();
+
+        if( !scheme.IsEmpty() )
+            aCfg.host = scheme + wxT( "://" );
+
+        wxString server = proxyUri.GetServer();
+
+        // Bracket IPv6 addresses when port will be appended
+        bool isIPv6 = server.Contains( wxT( ":" ) );
+
+        if( isIPv6 && proxyUri.HasPort() )
+            aCfg.host += wxT( "[" ) + server + wxT( "]" );
+        else
+            aCfg.host += server;
+
+        if( proxyUri.HasPort() )
+            aCfg.host += wxT( ":" ) + proxyUri.GetPort();
+
+        // Extract credentials from userinfo (format: user[:password])
+        wxString userInfo = proxyUri.GetUserInfo();
+
+        if( !userInfo.IsEmpty() )
+        {
+            int colonPos = userInfo.Find( wxT( ":" ) );
+
+            if( colonPos != wxNOT_FOUND )
+            {
+                aCfg.username = userInfo.Left( colonPos );
+                aCfg.password = userInfo.Mid( colonPos + 1 );
+            }
+            else
+            {
+                aCfg.username = userInfo;
+            }
+        }
+
+        success = true;
+        break;
+    }
+
+    g_strfreev( proxyList );
+
+    return success;
 }
 
 

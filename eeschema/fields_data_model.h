@@ -153,7 +153,7 @@ public:
     static const wxString ITEM_NUMBER_VARIABLE;
 
     void AddColumn( const wxString& aFieldName, const wxString& aLabel, bool aAddedByUser,
-                    const std::set<wxString>& aVariantNames );
+                    const wxString& aVariantName );
     void RemoveColumn( int aCol );
     void RenameColumn( int aCol, const wxString& newName );
 
@@ -267,7 +267,7 @@ public:
     void CollapseForSort();
     void ExpandAfterSort();
 
-    void ApplyData( SCH_COMMIT& aCommit, TEMPLATES& aTemplateFieldnames, std::set<wxString>& aVariantNames );
+    void ApplyData( SCH_COMMIT& aCommit, TEMPLATES& aTemplateFieldnames, const wxString& aVariantName );
 
     bool IsEdited() { return m_edited; }
 
@@ -319,14 +319,32 @@ public:
         return m_cols[aCol].m_show;
     }
 
-    void     ApplyBomPreset( const BOM_PRESET& preset, const std::set<wxString>& aVariantNames );
+    void     ApplyBomPreset( const BOM_PRESET& preset, const wxString& aVariantName );
     BOM_PRESET GetBomSettings();
     wxString Export( const BOM_FMT_PRESET& settings );
 
     void AddReferences( const SCH_REFERENCE_LIST& aRefs );
     void RemoveReferences( const SCH_REFERENCE_LIST& aRefs );
     void RemoveSymbol( const SCH_SYMBOL& aSymbol );
-    void UpdateReferences( const SCH_REFERENCE_LIST& aRefs, const std::set<wxString>& aVariantNames );
+    void UpdateReferences( const SCH_REFERENCE_LIST& aRefs, const wxString& aVariantName );
+
+    bool DeleteRows( size_t aPosition = 0, size_t aNumRows = 1 ) override;
+
+    const SCH_REFERENCE_LIST& GetReferenceList() const { return m_symbolsList; }
+
+    /**
+     * Set the current variant name for highlighting purposes.
+     *
+     * When a variant is set, cells that differ from the default (non-variant) value
+     * will be highlighted.
+     *
+     * @param aVariantName The name of the current variant, or empty string for default.
+     */
+    void SetCurrentVariant( const wxString& aVariantName ) { m_currentVariant = aVariantName; }
+    const wxString& GetCurrentVariant() const { return m_currentVariant; }
+
+    void SetVariantNames( const std::vector<wxString>& aVariantNames ) { m_variantNames = aVariantNames; }
+    const std::vector<wxString>& GetVariantNames() const { return m_variantNames; }
 
 private:
     static bool cmp( const DATA_MODEL_ROW& lhGroup, const DATA_MODEL_ROW& rhGroup,
@@ -338,20 +356,31 @@ private:
     // Helper functions to deal with translating wxGrid values to and from
     // named field values like ${DNP}
     bool     isAttribute( const wxString& aFieldName );
-    wxString getAttributeValue( const SCH_SYMBOL&, const wxString& aAttributeName,
-                                const std::set<wxString>& aVariantNames );
+    wxString getAttributeValue( const SCH_REFERENCE& aRef, const wxString& aAttributeName,
+                                const wxString& aVariantNames );
+
+    /**
+     * Get the default (non-variant) value for a field.
+     *
+     * This retrieves the field value as it would appear without any variant override.
+     *
+     * @param aRef The symbol reference.
+     * @param aFieldName The name of the field.
+     * @return The default field value.
+     */
+    wxString getDefaultFieldValue( const SCH_REFERENCE& aRef, const wxString& aFieldName );
 
     /**
      * Set the attribute value.
      *
-     * @param aSymbol is the symbol to set the attribute.
+     * @param aReference is a reference to the symbol to set the attribute.
      * @param aAttributeName is the name of the symbol attribute.
      * @param aValue is the value to set the attribute.
      * @param aVariantName is an optional variant name to set the variant attribute.
      * @retval true if the symbol attribute value has changed.
      * @retval false if the symbol attribute has **not** changed.
      */
-    bool setAttributeValue( SCH_SYMBOL& aSymbol, const wxString& aAttributeName, const wxString& aValue,
+    bool setAttributeValue( SCH_REFERENCE& aRef, const wxString& aAttributeName, const wxString& aValue,
                             const wxString& aVariantName = wxEmptyString );
 
     /* Helper function to get the resolved field value.
@@ -363,7 +392,7 @@ private:
     void Sort();
 
     void updateDataStoreSymbolField( const SCH_REFERENCE& aSymbolRef, const wxString& aFieldName,
-                                     const std::set<wxString>& aVariantNames );
+                                     const wxString& aVariantName );
 
 protected:
     /**
@@ -384,6 +413,8 @@ protected:
     bool               m_includeExcluded;
     bool               m_rebuildsEnabled;
     wxGridCellAttr*    m_urlEditor;
+    wxString                m_currentVariant;  ///< Current variant name for highlighting
+    std::vector<wxString>   m_variantNames;    ///< Variant names for multi-variant DNP filtering
 
     std::vector<DATA_MODEL_COL> m_cols;
     std::vector<DATA_MODEL_ROW> m_rows;

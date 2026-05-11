@@ -30,7 +30,7 @@
 #define ARG_MODE_SINGLE "--mode-single"
 
 CLI::PCB_EXPORT_PDF_COMMAND::PCB_EXPORT_PDF_COMMAND() :
-        PCB_EXPORT_BASE_COMMAND( "pdf", false, true )
+        PCB_EXPORT_BASE_COMMAND( "pdf", IO_TYPE::FILE, IO_TYPE::DIRECTORY )
 {
     m_argParser.add_description( UTF8STDSTR( _( "Generate PDF from a list of layers" ) ) );
 
@@ -93,10 +93,6 @@ CLI::PCB_EXPORT_PDF_COMMAND::PCB_EXPORT_PDF_COMMAND() :
             .scan<'i', int>()
             .default_value( 2 );
 
-    m_argParser.add_argument( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT )
-            .help( UTF8STDSTR( _( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_DESC ) ) )
-            .flag();
-
     m_argParser.add_argument( ARG_MODE_SINGLE )
             .help( UTF8STDSTR(
                     _( "Generates a single file with the output arg path acting as the complete "
@@ -126,6 +122,8 @@ CLI::PCB_EXPORT_PDF_COMMAND::PCB_EXPORT_PDF_COMMAND() :
     m_argParser.add_argument( ARG_CHECK_ZONES )
             .help( UTF8STDSTR( _( ARG_CHECK_ZONES_DESC ) ) )
             .flag();
+
+    addVariantsArg();
 }
 
 
@@ -137,6 +135,9 @@ int CLI::PCB_EXPORT_PDF_COMMAND::doPerform( KIWAY& aKiway )
     pdfJob->SetConfiguredOutputPath( m_argOutput );
     pdfJob->m_drawingSheet = m_argDrawingSheet;
     pdfJob->SetVarOverrides( m_argDefineVars );
+
+    if( !m_argVariantNames.empty() )
+        pdfJob->m_variant = m_argVariantNames.front();
 
     if( !wxFile::Exists( pdfJob->m_filename ) )
     {
@@ -150,9 +151,6 @@ int CLI::PCB_EXPORT_PDF_COMMAND::doPerform( KIWAY& aKiway )
     pdfJob->m_plotDrawingSheet = m_argParser.get<bool>( ARG_INCLUDE_BORDER_TITLE );
     pdfJob->m_subtractSolderMaskFromSilk = m_argParser.get<bool>( ARG_SUBTRACT_SOLDERMASK );
 
-    if( m_argParser.get<bool>( DEPRECATED_ARG_PLOT_INVISIBLE_TEXT ) )
-        wxFprintf( stdout, DEPRECATED_ARG_PLOT_INVISIBLE_TEXT_WARNING );
-
     pdfJob->m_mirror = m_argParser.get<bool>( ARG_MIRROR );
     pdfJob->m_blackAndWhite = m_argParser.get<bool>( ARG_BLACKANDWHITE );
     pdfJob->m_colorTheme = From_UTF8( m_argParser.get<std::string>( ARG_THEME ).c_str() );
@@ -161,6 +159,8 @@ int CLI::PCB_EXPORT_PDF_COMMAND::doPerform( KIWAY& aKiway )
     pdfJob->m_checkZonesBeforePlot = m_argParser.get<bool>( ARG_CHECK_ZONES );
 
     pdfJob->m_sketchPadsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_PADS_ON_FAB_LAYERS );
+    if( pdfJob->m_sketchPadsOnFabLayers )
+        pdfJob->m_plotPadNumbers = true;
     pdfJob->m_hideDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_HIDE_DNP_FPS_ON_FAB_LAYERS );
     pdfJob->m_sketchDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_DNP_FPS_ON_FAB_LAYERS );
     pdfJob->m_crossoutDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_CROSSOUT_DNP_FPS_ON_FAB_LAYERS );

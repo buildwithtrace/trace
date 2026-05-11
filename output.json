@@ -1,0 +1,1625 @@
+[
+  {
+    "type": "file_uid",
+    "value": "5b9623a5-6d01-41fc-9865-e1bc779418c8"
+  },
+  {
+    "type": "paper",
+    "value": "A4"
+  },
+  {
+    "type": "title_block",
+    "title": "Complex hierarchy: demo",
+    "date": "2017-01-15"
+  },
+  {
+    "type": "component",
+    "ref": "P102",
+    "symbol": "complex_hierarchy:CONN_2",
+    "pins": {
+      "1": "NET13",
+      "2": "NET5"
+    },
+    "uid": "00000000-0000-0000-0000-00004ad71b06",
+    "unit": 1,
+    "body_style": 1,
+    "value": "CONN_2",
+    "at": [
+      41.91,
+      66.04
+    ],
+    "rot": 0,
+    "mirror": "y",
+    "props": {
+      "footprint": "TerminalBlock_Altech:Altech_AK300_1x02_P5.00mm_45-Degree"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0110",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET5"
+    },
+    "uid": "00000000-0000-0000-0000-00004ad71b8e",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      53.34,
+      71.12
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "D101",
+    "symbol": "complex_hierarchy:D_Small",
+    "pins": {
+      "1": "NET4",
+      "2": "NET13"
+    },
+    "uid": "00000000-0000-0000-0000-00004ae172f4",
+    "unit": 1,
+    "body_style": 1,
+    "value": "1N4007",
+    "at": [
+      68.58,
+      63.5
+    ],
+    "rot": 0,
+    "mirror": "y",
+    "props": {
+      "footprint": "Diode_THT:D_DO-41_SOD81_P12.70mm_Horizontal"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "C104",
+    "symbol": "complex_hierarchy:CP",
+    "pins": {
+      "1": "NET4",
+      "2": "NET8"
+    },
+    "uid": "00000000-0000-0000-0000-00004ae173cf",
+    "unit": 1,
+    "body_style": 1,
+    "value": "47uF/20V",
+    "at": [
+      81.28,
+      69.85
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Capacitor_THT:CP_Axial_L10.0mm_D4.5mm_P15.00mm_Horizontal"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0111",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET8"
+    },
+    "uid": "00000000-0000-0000-0000-00004ae173d0",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      81.28,
+      76.2
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#U0105",
+    "symbol": "complex_hierarchy:+12V",
+    "pins": {
+      "1": "NET4"
+    },
+    "uid": "00000000-0000-0000-0000-00004ae173ef",
+    "unit": 1,
+    "body_style": 1,
+    "value": "+12V",
+    "at": [
+      90.17,
+      62.23
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#U0103",
+    "symbol": "complex_hierarchy:PWR_FLAG",
+    "pins": {
+      "1": "NET7"
+    },
+    "uid": "00000000-0000-0000-0000-00004ae17c31",
+    "unit": 1,
+    "body_style": 1,
+    "value": "PWR_FLAG",
+    "at": [
+      55.88,
+      41.91
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#U0104",
+    "symbol": "complex_hierarchy:PWR_FLAG",
+    "pins": {
+      "1": "NET4"
+    },
+    "uid": "00000000-0000-0000-0000-00004b03c9f9",
+    "unit": 1,
+    "body_style": 1,
+    "value": "PWR_FLAG",
+    "at": [
+      76.2,
+      62.23
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#U0101",
+    "symbol": "complex_hierarchy:PWR_FLAG",
+    "pins": {
+      "1": "NET10"
+    },
+    "uid": "00000000-0000-0000-0000-00004b03caa3",
+    "unit": 1,
+    "body_style": 1,
+    "value": "PWR_FLAG",
+    "at": [
+      55.88,
+      31.75
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0103",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET16"
+    },
+    "uid": "00000000-0000-0000-0000-00004b03ce88",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      200.66,
+      41.91
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0106",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET11"
+    },
+    "uid": "00000000-0000-0000-0000-00004b03cec1",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      233.68,
+      45.72
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "C102",
+    "symbol": "complex_hierarchy:CP",
+    "pins": {
+      "1": "NET17",
+      "2": "NET11"
+    },
+    "uid": "00000000-0000-0000-0000-00004b03cec2",
+    "unit": 1,
+    "body_style": 1,
+    "value": "47uF",
+    "at": [
+      233.68,
+      40.64
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Capacitor_THT:CP_Axial_L10.0mm_D4.5mm_P15.00mm_Horizontal"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0101",
+    "symbol": "complex_hierarchy:HT",
+    "pins": {
+      "1": "NET10"
+    },
+    "uid": "00000000-0000-0000-0000-00004b0fa68b",
+    "unit": 1,
+    "body_style": 1,
+    "value": "HT",
+    "at": [
+      63.5,
+      31.75
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "P101",
+    "symbol": "complex_hierarchy:CONN_2",
+    "pins": {
+      "1": "NET10",
+      "2": "NET7"
+    },
+    "uid": "00000000-0000-0000-0000-00004b3a12f4",
+    "unit": 1,
+    "body_style": 1,
+    "value": "CONN_2",
+    "at": [
+      41.91,
+      35.56
+    ],
+    "rot": 0,
+    "mirror": "y",
+    "props": {
+      "footprint": "TerminalBlock_Altech:Altech_AK300_1x02_P5.00mm_45-Degree"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0105",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET7"
+    },
+    "uid": "00000000-0000-0000-0000-00004b3a1302",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      55.88,
+      44.45
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0104",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET14"
+    },
+    "uid": "00000000-0000-0000-0000-00004b3a1557",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      63.5,
+      43.18
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "C101",
+    "symbol": "complex_hierarchy:CP",
+    "pins": {
+      "1": "NET10",
+      "2": "NET14"
+    },
+    "uid": "00000000-0000-0000-0000-00004b3a1558",
+    "unit": 1,
+    "body_style": 1,
+    "value": "47uF/63V",
+    "at": [
+      63.5,
+      38.1
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Capacitor_THT:CP_Axial_L11.0mm_D6.0mm_P18.00mm_Horizontal"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "U102",
+    "symbol": "complex_hierarchy:ICL7660",
+    "pins": {
+      "2": "NET3",
+      "3": "NET15",
+      "4": "NET6",
+      "5": "NET2",
+      "6": "DNC",
+      "7": "DNC",
+      "8": "NET12"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b1230",
+    "unit": 1,
+    "body_style": 1,
+    "value": "ICL7660",
+    "at": [
+      201.93,
+      73.66
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Package_DIP:DIP-8_W7.62mm_LongPads"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0112",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET15"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b1237",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      200.66,
+      91.44
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0102",
+    "symbol": "complex_hierarchy:VCC",
+    "pins": {
+      "1": "NET17"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b124e",
+    "unit": 1,
+    "body_style": 1,
+    "value": "VCC",
+    "at": [
+      233.68,
+      31.75
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0107",
+    "symbol": "complex_hierarchy:VCC",
+    "pins": {
+      "1": "NET12"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b1253",
+    "unit": 1,
+    "body_style": 1,
+    "value": "VCC",
+    "at": [
+      200.66,
+      55.88
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "U101",
+    "symbol": "complex_hierarchy:7805",
+    "pins": {
+      "1": "NET17",
+      "2": "NET16",
+      "3": "NET9"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b1532",
+    "unit": 1,
+    "body_style": 1,
+    "value": "78L05",
+    "at": [
+      200.66,
+      34.29
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Package_TO_SOT_THT:TO-92_HandSolder"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0109",
+    "symbol": "complex_hierarchy:-VAA",
+    "pins": {
+      "1": "NET2"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b1578",
+    "unit": 1,
+    "body_style": 1,
+    "value": "-VAA",
+    "at": [
+      237.49,
+      69.85
+    ],
+    "rot": 270
+  },
+  {
+    "type": "component",
+    "ref": "C103",
+    "symbol": "complex_hierarchy:CP",
+    "pins": {
+      "1": "NET1",
+      "2": "NET2"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b15d9",
+    "unit": 1,
+    "body_style": 1,
+    "value": "10uF",
+    "at": [
+      233.68,
+      63.5
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Capacitor_THT:CP_Axial_L10.0mm_D4.5mm_P15.00mm_Horizontal"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#PWR0108",
+    "symbol": "complex_hierarchy:GND",
+    "pins": {
+      "1": "NET1"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b15da",
+    "unit": 1,
+    "body_style": 1,
+    "value": "GND",
+    "at": [
+      229.87,
+      58.42
+    ],
+    "rot": 0
+  },
+  {
+    "type": "component",
+    "ref": "C105",
+    "symbol": "complex_hierarchy:CP",
+    "pins": {
+      "1": "NET3",
+      "2": "NET6"
+    },
+    "uid": "00000000-0000-0000-0000-00004b4b15e7",
+    "unit": 1,
+    "body_style": 1,
+    "value": "10uF",
+    "at": [
+      168.91,
+      69.85
+    ],
+    "rot": 0,
+    "props": {
+      "footprint": "Capacitor_THT:CP_Axial_L10.0mm_D4.5mm_P15.00mm_Horizontal"
+    }
+  },
+  {
+    "type": "component",
+    "ref": "#U0102",
+    "symbol": "complex_hierarchy:+12V",
+    "pins": {
+      "1": "NET9"
+    },
+    "uid": "d418c5eb-438d-44c1-a35d-5bffdd0f0c32",
+    "unit": 1,
+    "body_style": 1,
+    "value": "+12V",
+    "at": [
+      187.96,
+      31.75
+    ],
+    "rot": 0
+  },
+  {
+    "type": "net",
+    "name": "12Vext"
+  },
+  {
+    "type": "net",
+    "name": "NET1"
+  },
+  {
+    "type": "net",
+    "name": "NET10"
+  },
+  {
+    "type": "net",
+    "name": "NET11"
+  },
+  {
+    "type": "net",
+    "name": "NET12"
+  },
+  {
+    "type": "net",
+    "name": "NET13"
+  },
+  {
+    "type": "net",
+    "name": "NET14"
+  },
+  {
+    "type": "net",
+    "name": "NET15"
+  },
+  {
+    "type": "net",
+    "name": "NET16"
+  },
+  {
+    "type": "net",
+    "name": "NET17"
+  },
+  {
+    "type": "net",
+    "name": "NET2"
+  },
+  {
+    "type": "net",
+    "name": "NET3"
+  },
+  {
+    "type": "net",
+    "name": "NET4"
+  },
+  {
+    "type": "net",
+    "name": "NET5"
+  },
+  {
+    "type": "net",
+    "name": "NET6"
+  },
+  {
+    "type": "net",
+    "name": "NET7"
+  },
+  {
+    "type": "net",
+    "name": "NET8"
+  },
+  {
+    "type": "net",
+    "name": "NET9"
+  },
+  {
+    "type": "label",
+    "name": "12Vext",
+    "at": [
+      54.61,
+      63.5
+    ],
+    "id": "LBL1"
+  },
+  {
+    "type": "junction",
+    "at": [
+      55.88,
+      33.02
+    ],
+    "uid": "0a3cc030-c9dd-4d74-9d50-715ed2b361a2",
+    "id": "JUNC1"
+  },
+  {
+    "type": "junction",
+    "at": [
+      81.28,
+      63.5
+    ],
+    "uid": "1860e030-7a36-4298-b7fc-a16d48ab15ba",
+    "id": "JUNC2"
+  },
+  {
+    "type": "junction",
+    "at": [
+      233.68,
+      33.02
+    ],
+    "uid": "3dcc657b-55a1-48e0-9667-e01e7b6b08b5",
+    "id": "JUNC3"
+  },
+  {
+    "type": "junction",
+    "at": [
+      233.68,
+      69.85
+    ],
+    "uid": "67f6e996-3c99-493c-8f6f-e739e2ed5d7a",
+    "id": "JUNC4"
+  },
+  {
+    "type": "junction",
+    "at": [
+      55.88,
+      43.18
+    ],
+    "uid": "8322f275-268c-4e87-a69f-4cfbf05e747f",
+    "id": "JUNC5"
+  },
+  {
+    "type": "junction",
+    "at": [
+      63.5,
+      33.02
+    ],
+    "uid": "b6270a28-e0d9-4655-a18a-03dbf007b940",
+    "id": "JUNC6"
+  },
+  {
+    "type": "junction",
+    "at": [
+      76.2,
+      63.5
+    ],
+    "uid": "f3490fa5-5a27-423b-af60-53609669542c",
+    "id": "JUNC7"
+  },
+  {
+    "type": "sheet",
+    "name": "ampli_ht_vertical",
+    "file": "ampli_ht.kicad_sch",
+    "uid": "00000000-0000-0000-0000-00004b3a1333",
+    "at": [
+      71.12,
+      111.76
+    ],
+    "size": [
+      50.8,
+      36.83
+    ],
+    "page": "2"
+  },
+  {
+    "type": "sheet",
+    "name": "ampli_ht_horizontal",
+    "file": "ampli_ht.kicad_sch",
+    "uid": "00000000-0000-0000-0000-00004b3a13a4",
+    "at": [
+      154.94,
+      111.76
+    ],
+    "size": [
+      50.8,
+      36.83
+    ],
+    "page": "3"
+  },
+  {
+    "type": "cwire",
+    "ref": "CW1",
+    "from": {
+      "type": "pin",
+      "ref": "P102",
+      "pin": 1
+    },
+    "to": {
+      "type": "pin",
+      "ref": "D101",
+      "pin": 2
+    },
+    "net": "NET13"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW1",
+    "points": [
+      [
+        50.8,
+        63.5
+      ],
+      [
+        66.04,
+        63.5
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW2",
+    "from": {
+      "type": "pin",
+      "ref": "P102",
+      "pin": 2
+    },
+    "to": {
+      "type": "pin",
+      "ref": "#PWR0110",
+      "pin": 1
+    },
+    "net": "NET5"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW2",
+    "points": [
+      [
+        50.8,
+        68.58
+      ],
+      [
+        53.34,
+        68.58
+      ],
+      [
+        53.34,
+        71.12
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW3",
+    "from": {
+      "type": "pin",
+      "ref": "D101",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC7"
+    },
+    "net": "NET4"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW3",
+    "points": [
+      [
+        71.12,
+        63.5
+      ],
+      [
+        76.2,
+        63.5
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW4",
+    "from": {
+      "type": "pin",
+      "ref": "C104",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC2"
+    },
+    "net": "NET4"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW4",
+    "points": [
+      [
+        81.28,
+        66.04
+      ],
+      [
+        81.28,
+        63.5
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW5",
+    "from": {
+      "type": "pin",
+      "ref": "C104",
+      "pin": 2
+    },
+    "to": {
+      "type": "pin",
+      "ref": "#PWR0111",
+      "pin": 1
+    },
+    "net": "NET8"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW5",
+    "points": [
+      [
+        81.28,
+        73.66
+      ],
+      [
+        81.28,
+        76.2
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW6",
+    "from": {
+      "type": "pin",
+      "ref": "#U0105",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC2"
+    },
+    "net": "NET4"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW6",
+    "points": [
+      [
+        90.17,
+        62.23
+      ],
+      [
+        90.17,
+        63.5
+      ],
+      [
+        81.28,
+        63.5
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW7",
+    "from": {
+      "type": "pin",
+      "ref": "#U0103",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC5"
+    },
+    "net": "NET7"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW7",
+    "points": [
+      [
+        55.88,
+        41.91
+      ],
+      [
+        55.88,
+        43.18
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW8",
+    "from": {
+      "type": "pin",
+      "ref": "#U0104",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC7"
+    },
+    "net": "NET4"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW8",
+    "points": [
+      [
+        76.2,
+        62.23
+      ],
+      [
+        76.2,
+        63.5
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW9",
+    "from": {
+      "type": "pin",
+      "ref": "#U0101",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC1"
+    },
+    "net": "NET10"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW9",
+    "points": [
+      [
+        55.88,
+        31.75
+      ],
+      [
+        55.88,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW10",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0103",
+      "pin": 1
+    },
+    "to": {
+      "type": "pin",
+      "ref": "U101",
+      "pin": 2
+    },
+    "net": "NET16"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW10",
+    "points": [
+      [
+        200.66,
+        41.91
+      ],
+      [
+        200.66,
+        40.64
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW11",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0106",
+      "pin": 1
+    },
+    "to": {
+      "type": "pin",
+      "ref": "C102",
+      "pin": 2
+    },
+    "net": "NET11"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW11",
+    "points": [
+      [
+        233.68,
+        45.72
+      ],
+      [
+        233.68,
+        44.45
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW12",
+    "from": {
+      "type": "pin",
+      "ref": "C102",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC3"
+    },
+    "net": "NET17"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW12",
+    "points": [
+      [
+        233.68,
+        36.83
+      ],
+      [
+        233.68,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW13",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0101",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC6"
+    },
+    "net": "NET10"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW13",
+    "points": [
+      [
+        63.5,
+        31.75
+      ],
+      [
+        63.5,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW14",
+    "from": {
+      "type": "pin",
+      "ref": "P101",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC1"
+    },
+    "net": "NET10"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW14",
+    "points": [
+      [
+        50.8,
+        33.02
+      ],
+      [
+        55.88,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW15",
+    "from": {
+      "type": "pin",
+      "ref": "P101",
+      "pin": 2
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC5"
+    },
+    "net": "NET7"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW15",
+    "points": [
+      [
+        50.8,
+        38.1
+      ],
+      [
+        53.34,
+        38.1
+      ],
+      [
+        53.34,
+        43.18
+      ],
+      [
+        55.88,
+        43.18
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW16",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0105",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC5"
+    },
+    "net": "NET7"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW16",
+    "points": [
+      [
+        55.88,
+        44.45
+      ],
+      [
+        55.88,
+        43.18
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW17",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0104",
+      "pin": 1
+    },
+    "to": {
+      "type": "pin",
+      "ref": "C101",
+      "pin": 2
+    },
+    "net": "NET14"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW17",
+    "points": [
+      [
+        63.5,
+        43.18
+      ],
+      [
+        63.5,
+        41.91
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW18",
+    "from": {
+      "type": "pin",
+      "ref": "C101",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC6"
+    },
+    "net": "NET10"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW18",
+    "points": [
+      [
+        63.5,
+        34.29
+      ],
+      [
+        63.5,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW19",
+    "from": {
+      "type": "pin",
+      "ref": "U102",
+      "pin": 2
+    },
+    "to": {
+      "type": "pin",
+      "ref": "C105",
+      "pin": 1
+    },
+    "net": "NET3"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW19",
+    "points": [
+      [
+        180.34,
+        67.31
+      ],
+      [
+        179.07,
+        67.31
+      ],
+      [
+        179.07,
+        63.5
+      ],
+      [
+        168.91,
+        63.5
+      ],
+      [
+        168.91,
+        66.04
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW20",
+    "from": {
+      "type": "pin",
+      "ref": "U102",
+      "pin": 3
+    },
+    "to": {
+      "type": "pin",
+      "ref": "#PWR0112",
+      "pin": 1
+    },
+    "net": "NET15"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW20",
+    "points": [
+      [
+        200.66,
+        90.17
+      ],
+      [
+        200.66,
+        91.44
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW21",
+    "from": {
+      "type": "pin",
+      "ref": "U102",
+      "pin": 4
+    },
+    "to": {
+      "type": "pin",
+      "ref": "C105",
+      "pin": 2
+    },
+    "net": "NET6"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW21",
+    "points": [
+      [
+        180.34,
+        72.39
+      ],
+      [
+        179.07,
+        72.39
+      ],
+      [
+        179.07,
+        76.2
+      ],
+      [
+        168.91,
+        76.2
+      ],
+      [
+        168.91,
+        73.66
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW22",
+    "from": {
+      "type": "pin",
+      "ref": "U102",
+      "pin": 5
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC4"
+    },
+    "net": "NET2"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW22",
+    "points": [
+      [
+        223.52,
+        69.85
+      ],
+      [
+        233.68,
+        69.85
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW23",
+    "from": {
+      "type": "pin",
+      "ref": "U102",
+      "pin": 8
+    },
+    "to": {
+      "type": "pin",
+      "ref": "#PWR0107",
+      "pin": 1
+    },
+    "net": "NET12"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW23",
+    "points": [
+      [
+        200.66,
+        57.15
+      ],
+      [
+        200.66,
+        55.88
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW24",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0102",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC3"
+    },
+    "net": "NET17"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW24",
+    "points": [
+      [
+        233.68,
+        31.75
+      ],
+      [
+        233.68,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW25",
+    "from": {
+      "type": "pin",
+      "ref": "U101",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC3"
+    },
+    "net": "NET17"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW25",
+    "points": [
+      [
+        210.82,
+        33.02
+      ],
+      [
+        233.68,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW26",
+    "from": {
+      "type": "pin",
+      "ref": "U101",
+      "pin": 3
+    },
+    "to": {
+      "type": "pin",
+      "ref": "#U0102",
+      "pin": 1
+    },
+    "net": "NET9"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW26",
+    "points": [
+      [
+        190.5,
+        33.02
+      ],
+      [
+        187.96,
+        33.02
+      ],
+      [
+        187.96,
+        31.75
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW27",
+    "from": {
+      "type": "pin",
+      "ref": "#PWR0109",
+      "pin": 1
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC4"
+    },
+    "net": "NET2"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW27",
+    "points": [
+      [
+        237.49,
+        69.85
+      ],
+      [
+        233.68,
+        69.85
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW28",
+    "from": {
+      "type": "pin",
+      "ref": "C103",
+      "pin": 1
+    },
+    "to": {
+      "type": "pin",
+      "ref": "#PWR0108",
+      "pin": 1
+    },
+    "net": "NET1"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW28",
+    "points": [
+      [
+        233.68,
+        59.69
+      ],
+      [
+        233.68,
+        57.15
+      ],
+      [
+        229.87,
+        57.15
+      ],
+      [
+        229.87,
+        58.42
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW29",
+    "from": {
+      "type": "pin",
+      "ref": "C103",
+      "pin": 2
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC4"
+    },
+    "net": "NET2"
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW29",
+    "points": [
+      [
+        233.68,
+        67.31
+      ],
+      [
+        233.68,
+        69.85
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW30",
+    "from": {
+      "type": "junction",
+      "id": "JUNC1"
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC6"
+    }
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW30",
+    "points": [
+      [
+        55.88,
+        33.02
+      ],
+      [
+        63.5,
+        33.02
+      ]
+    ]
+  },
+  {
+    "type": "cwire",
+    "ref": "CW31",
+    "from": {
+      "type": "junction",
+      "id": "JUNC2"
+    },
+    "to": {
+      "type": "junction",
+      "id": "JUNC7"
+    }
+  },
+  {
+    "type": "cwiredef",
+    "ref": "CW31",
+    "points": [
+      [
+        81.28,
+        63.5
+      ],
+      [
+        76.2,
+        63.5
+      ]
+    ]
+  }
+]

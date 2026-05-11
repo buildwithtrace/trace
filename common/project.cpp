@@ -55,6 +55,7 @@
 
 PROJECT::PROJECT() :
         m_readOnly( false ),
+        m_lockOverrideGranted( false ),
         m_textVarsTicker( 0 ),
         m_netclassesTicker( 0 ),
         m_projectFile( nullptr ),
@@ -83,6 +84,9 @@ PROJECT::~PROJECT()
 
 bool PROJECT::TextVarResolver( wxString* aToken ) const
 {
+    if( !m_projectFile )
+        return false;
+
     if( aToken->IsSameAs( wxT( "PROJECTNAME" ) )  )
     {
         *aToken = GetProjectName();
@@ -152,8 +156,14 @@ void PROJECT::setProjectFullName( const wxString& aFullPathAndName )
         m_project_name = aFullPathAndName;
 
         wxASSERT( m_project_name.IsAbsolute() );
+        wxString ext = m_project_name.GetExt();
 
-        wxASSERT( m_project_name.GetExt() == FILEEXT::ProjectFileExtension );
+        if( !ext.IsEmpty() && ext != FILEEXT::ProjectFileExtension )
+        {
+            wxLogDebug( wxT( "Project file has unexpected extension '%s', expected '%s'" ), ext,
+                        FILEEXT::ProjectFileExtension );
+            m_project_name.SetExt( FILEEXT::ProjectFileExtension );
+        }
     }
 }
 
@@ -409,20 +419,8 @@ const wxString PROJECT::AbsolutePath( const wxString& aFileName ) const
 
 FOOTPRINT_LIBRARY_ADAPTER* PROJECT::FootprintLibAdapter( KIWAY& aKiway )
 {
-    FOOTPRINT_LIBRARY_ADAPTER* adapter = static_cast<FOOTPRINT_LIBRARY_ADAPTER*>( GetElem( ELEM::FPTBL ) );
-
-    if( adapter )
-    {
-        wxASSERT( adapter->ProjectElementType() == PROJECT::ELEM::FPTBL );
-    }
-    else
-    {
-        KIFACE* kiface = aKiway.KiFACE( KIWAY::FACE_PCB );
-        adapter = static_cast<FOOTPRINT_LIBRARY_ADAPTER*>( kiface->IfaceOrAddress( KIFACE_FOOTPRINT_LIBRARY_ADAPTER ) );
-        SetElem( ELEM::FPTBL, adapter );
-    }
-
-    return adapter;
+    KIFACE* kiface = aKiway.KiFACE( KIWAY::FACE_PCB );
+    return static_cast<FOOTPRINT_LIBRARY_ADAPTER*>( kiface->IfaceOrAddress( KIFACE_FOOTPRINT_LIBRARY_ADAPTER ) );
 }
 
 
@@ -460,7 +458,7 @@ void PROJECT::SetProjectLock( LOCKFILE* aLockFile )
 }
 
 
-void PROJECT::SaveToHistory( const wxString& aProjectPath, std::vector<wxString>& aFiles )
+void PROJECT::SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData )
 {
     wxString projectFile = GetProjectFullName();
 
@@ -488,11 +486,14 @@ void PROJECT::SaveToHistory( const wxString& aProjectPath, std::vector<wxString>
             return;
     }
 
-    // Save project file (.kicad_pro)
+    // Save project file (.kicad_pro) via file-copy
     wxFileName historyProFile( historyDir.GetFullPath(), projectFn.GetName(),
                                projectFn.GetExt() );
-    wxCopyFile( projectFile, historyProFile.GetFullPath(), true );
-    aFiles.push_back( historyProFile.GetFullPath() );
+
+    HISTORY_FILE_DATA proEntry;
+    proEntry.path = historyProFile.GetFullPath();
+    proEntry.sourcePath = projectFile;
+    aFileData.push_back( std::move( proEntry ) );
 
     // Save project local settings (.kicad_prl) if it exists
     wxFileName prlFile( projectFn.GetPath(), projectFn.GetName(), FILEEXT::ProjectLocalSettingsFileExtension );
@@ -501,7 +502,10 @@ void PROJECT::SaveToHistory( const wxString& aProjectPath, std::vector<wxString>
     {
         wxFileName historyPrlFile( historyDir.GetFullPath(), prlFile.GetName(),
                                    prlFile.GetExt() );
-        wxCopyFile( prlFile.GetFullPath(), historyPrlFile.GetFullPath(), true );
-        aFiles.push_back( historyPrlFile.GetFullPath() );
+
+        HISTORY_FILE_DATA prlEntry;
+        prlEntry.path = historyPrlFile.GetFullPath();
+        prlEntry.sourcePath = prlFile.GetFullPath();
+        aFileData.push_back( std::move( prlEntry ) );
     }
 }

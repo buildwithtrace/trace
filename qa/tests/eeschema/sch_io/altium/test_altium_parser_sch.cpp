@@ -29,10 +29,19 @@
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <eeschema/sch_io/altium/altium_parser_sch.h>
+#include <eeschema/sch_text.h>
+#include <layer_ids.h>
+#include <validators.h>
+#include <wx/filename.h>
 
 // Function declarations of private methods to test
 int ReadKiCadUnitFrac( const std::map<wxString, wxString>& aProps,
                        const wxString&                     aKey );
+
+void SetTextPositioning( EDA_TEXT* text, ASCH_LABEL_JUSTIFICATION justification,
+                         ASCH_RECORD_ORIENTATION orientation );
+
+void AdjustTextForSymbolOrientation( SCH_TEXT* aText, const ASCH_SYMBOL& aSymbol );
 
 
 struct ALTIUM_PARSER_SCH_FIXTURE
@@ -103,5 +112,272 @@ BOOST_AUTO_TEST_CASE( PropertiesReadKiCadUnitFracConversation )
     }
 }
 
+
+struct SHEET_NAME_SANITIZE_CASE
+{
+    wxString input;
+    wxString expected;
+};
+
+static const std::vector<SHEET_NAME_SANITIZE_CASE> sheet_name_sanitize_cases = {
+    { wxT( "SimpleSheet" ), wxT( "SimpleSheet" ) },
+    { wxT( "POWER PROTECTION/MONITORING" ), wxT( "POWER PROTECTION_MONITORING" ) },
+    { wxT( "A/B/C" ), wxT( "A_B_C" ) },
+    { wxT( "/" ), wxT( "_" ) },
+    { wxT( "no_slash_here" ), wxT( "no_slash_here" ) },
+    { wxT( "trailing/" ), wxT( "trailing_" ) },
+    { wxT( "/leading" ), wxT( "_leading" ) },
+};
+
+/**
+ * Verify that the slash-to-underscore sanitization used by the Altium importer produces valid
+ * KiCad sheet names.
+ */
+BOOST_AUTO_TEST_CASE( SheetNameSlashSanitization )
+{
+    for( const auto& c : sheet_name_sanitize_cases )
+    {
+        BOOST_TEST_CONTEXT( wxString::Format( wxT( "'%s' -> '%s'" ), c.input, c.expected ) )
+        {
+            wxString sanitized = c.input;
+            sanitized.Replace( wxT( "/" ), wxT( "_" ) );
+
+            BOOST_CHECK_EQUAL( sanitized, c.expected );
+
+            wxString validationError = GetFieldValidationErrorMessage( FIELD_T::SHEET_NAME,
+                                                                       sanitized );
+            BOOST_CHECK_MESSAGE( validationError.empty(),
+                                 wxString::Format( wxT( "Sanitized name '%s' failed validation: %s" ),
+                                                   sanitized, validationError ) );
+        }
+    }
+}
+
+/**
+ * Verify that unsanitized sheet names with slashes are rejected by KiCad validation.
+ */
+BOOST_AUTO_TEST_CASE( SheetNameSlashRejection )
+{
+    wxString invalidName = wxT( "POWER PROTECTION/MONITORING" );
+    wxString validationError = GetFieldValidationErrorMessage( FIELD_T::SHEET_NAME, invalidName );
+
+    BOOST_CHECK_MESSAGE( (!validationError.empty()) ,
+                         wxString::Format( "Sheet name with '/' should fail validation" ) );
+}
+
+/**
+ * Verify that wxFileName::HasExt() correctly distinguishes extensionless Altium filenames
+ * from those with extensions. The Altium importer uses this to decide when to try appending
+ * .SchDoc during the hierarchy descent.
+ */
+BOOST_AUTO_TEST_CASE( ExtensionlessFilenameDetection )
+{
+    // Filenames WITH extensions should be detected
+    BOOST_CHECK( wxFileName( wxT( "6_power.SchDoc" ) ).HasExt() );
+    BOOST_CHECK( wxFileName( wxT( "my_sheet.SCHDOC" ) ).HasExt() );
+
+    // Filenames WITHOUT extensions should not be detected
+    BOOST_CHECK( !wxFileName( wxT( "6_power" ) ).HasExt() );
+    BOOST_CHECK( !wxFileName( wxT( "POWER MANAGEMENT" ) ).HasExt() );
+    BOOST_CHECK( !wxFileName( wxT( "" ) ).HasExt() );
+}
+
+
+/**
+ * Verify that case-insensitive base-name matching works for resolving extensionless Altium
+ * sheet symbol filenames to .SchDoc files on disk.
+ */
+BOOST_AUTO_TEST_CASE( ExtensionlessBaseNameMatching )
+{
+    wxFileName sheetFn( wxT( "6_power" ) );
+    bool       extensionless = !sheetFn.HasExt();
+
+    BOOST_CHECK( extensionless );
+
+    wxFileName candidateA( wxT( "6_power.SchDoc" ) );
+    wxFileName candidateB( wxT( "6_POWER.SCHDOC" ) );
+    wxFileName candidateC( wxT( "7_other.SchDoc" ) );
+    wxFileName candidateD( wxT( "6_power.txt" ) );
+
+    // Should match same base name with .SchDoc extension (case-insensitive on both parts)
+    auto matches = [&]( const wxFileName& candidate )
+    {
+        return candidate.GetFullName().IsSameAs( sheetFn.GetFullName(), false )
+               || ( extensionless
+                    && !sheetFn.GetName().empty()
+                    && candidate.GetName().IsSameAs( sheetFn.GetName(), false )
+                    && candidate.GetExt().IsSameAs( wxT( "SchDoc" ), false ) );
+    };
+
+    BOOST_CHECK( matches( candidateA ) );
+    BOOST_CHECK( matches( candidateB ) );   // Case-insensitive match on both name and ext
+    BOOST_CHECK( !matches( candidateC ) );  // Different base name
+    BOOST_CHECK( !matches( candidateD ) );  // Wrong extension
+}
+
+
+/**
+ * Verify that name derivation from filenames for top-level sheets produces correct
+ * deduplicated names, matching the logic in LoadSchematicProject.
+ */
+BOOST_AUTO_TEST_CASE( SheetNameDerivationFromFilename )
+{
+    auto deriveName = []( const wxString& aFilePath, const std::set<wxString>& aExistingNames )
+    {
+        wxString baseName = wxFileName( aFilePath ).GetName();
+        baseName.Replace( wxT( "/" ), wxT( "_" ) );
+
+        wxString sheetName = baseName;
+
+        for( int ii = 1; aExistingNames.count( sheetName ); ++ii )
+            sheetName = baseName + wxString::Format( wxT( "_%d" ), ii );
+
+        return sheetName;
+    };
+
+    BOOST_CHECK_EQUAL( deriveName( wxT( "6_power.SchDoc" ), {} ), wxT( "6_power" ) );
+    BOOST_CHECK_EQUAL( deriveName( wxT( "POWER.SchDoc" ), {} ), wxT( "POWER" ) );
+
+    // Deduplication when a name already exists
+    std::set<wxString> existing = { wxT( "6_power" ) };
+    BOOST_CHECK_EQUAL( deriveName( wxT( "6_power.SchDoc" ), existing ), wxT( "6_power_1" ) );
+
+    // Multiple duplicates
+    existing.insert( wxT( "6_power_1" ) );
+    BOOST_CHECK_EQUAL( deriveName( wxT( "6_power.SchDoc" ), existing ), wxT( "6_power_2" ) );
+}
+
+
+static ASCH_SYMBOL MakeTestSymbol( int aOrientation, bool aMirrored )
+{
+    std::map<wxString, wxString> props;
+    props[wxT( "RECORD" )] = wxT( "1" );
+    props[wxT( "ORIENTATION" )] = wxString::Format( wxT( "%d" ), aOrientation );
+    props[wxT( "ISMIRRORED" )] = aMirrored ? wxT( "T" ) : wxT( "F" );
+    props[wxT( "CURRENTPARTID" )] = wxT( "1" );
+    props[wxT( "PARTCOUNT" )] = wxT( "2" );
+    props[wxT( "DISPLAYMODECOUNT" )] = wxT( "1" );
+    props[wxT( "LOCATION.X" )] = wxT( "0" );
+    props[wxT( "LOCATION.Y" )] = wxT( "0" );
+    return ASCH_SYMBOL( props );
+}
+
+
+// Simulates the angle/justification portion of what OrientAndMirrorSymbolItems
+// does at render time. Position is not relevant for this test.
+static void SimulateRenderTransform( SCH_TEXT* aText, int aAltiumOrientation, bool aMirrored )
+{
+    int nRotations = ( aAltiumOrientation + 1 ) % 4;
+
+    for( int i = 0; i < nRotations; i++ )
+        aText->Rotate90( false );
+
+    if( aMirrored )
+    {
+        if( aText->GetTextAngle().IsHorizontal() )
+            aText->FlipHJustify();
+        else
+            aText->SetVertJustify( static_cast<GR_TEXT_V_ALIGN_T>( -aText->GetVertJustify() ) );
+    }
+}
+
+
+struct TEXT_ORIENT_CASE
+{
+    ASCH_RECORD_ORIENTATION    textOrientation;
+    ASCH_LABEL_JUSTIFICATION   justification;
+    int                        altiumSymOrientation;
+    bool                       mirrored;
+    EDA_ANGLE                  expectedAngle;
+    GR_TEXT_H_ALIGN_T          expectedHJustify;
+};
+
+
+static const std::vector<TEXT_ORIENT_CASE> text_orient_cases = {
+    // Horizontal text, left-justified, each symbol orientation
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      0, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      1, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      2, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      3, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_LEFT },
+
+    // Vertical text, left-justified, each symbol orientation
+    { ASCH_RECORD_ORIENTATION::UPWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      0, false, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::UPWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      1, false, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::UPWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      2, false, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::UPWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      3, false, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_LEFT },
+
+    // Horizontal text, right-justified, each symbol orientation
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_RIGHT,
+      0, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_RIGHT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_RIGHT,
+      1, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_RIGHT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_RIGHT,
+      2, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_RIGHT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_RIGHT,
+      3, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_RIGHT },
+
+    // Mirrored cases
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      0, true, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::RIGHTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      1, true, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_LEFT },
+    { ASCH_RECORD_ORIENTATION::UPWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_RIGHT,
+      0, true, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_RIGHT },
+    { ASCH_RECORD_ORIENTATION::UPWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_RIGHT,
+      2, true, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_RIGHT },
+
+    // LEFTWARDS text flips H-justify via SetTextPositioning
+    { ASCH_RECORD_ORIENTATION::LEFTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      0, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_RIGHT },
+    { ASCH_RECORD_ORIENTATION::LEFTWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      3, false, ANGLE_HORIZONTAL, GR_TEXT_H_ALIGN_RIGHT },
+
+    // DOWNWARDS text flips H-justify via SetTextPositioning
+    { ASCH_RECORD_ORIENTATION::DOWNWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      0, false, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_RIGHT },
+    { ASCH_RECORD_ORIENTATION::DOWNWARDS, ASCH_LABEL_JUSTIFICATION::BOTTOM_LEFT,
+      3, false, ANGLE_VERTICAL, GR_TEXT_H_ALIGN_RIGHT },
+};
+
+
+/**
+ * Verify that AdjustTextForSymbolOrientation correctly pre-compensates text properties
+ * so that after the render-time symbol transform, the final text orientation matches
+ * the absolute Altium orientation.
+ */
+BOOST_AUTO_TEST_CASE( TextOrientationCompensation )
+{
+    for( size_t idx = 0; idx < text_orient_cases.size(); idx++ )
+    {
+        const TEXT_ORIENT_CASE& c = text_orient_cases[idx];
+
+        BOOST_TEST_CONTEXT( wxString::Format(
+                wxT( "case %zu: textOri=%d justification=%d symOri=%d mirror=%d" ),
+                idx, (int) c.textOrientation, (int) c.justification,
+                c.altiumSymOrientation, c.mirrored ? 1 : 0 ) )
+        {
+            SCH_TEXT textItem( { 0, 0 }, wxT( "TEST" ), LAYER_DEVICE );
+
+            SetTextPositioning( &textItem, c.justification, c.textOrientation );
+
+            ASCH_SYMBOL sym = MakeTestSymbol( c.altiumSymOrientation, c.mirrored );
+
+            AdjustTextForSymbolOrientation( &textItem, sym );
+
+            SimulateRenderTransform( &textItem, c.altiumSymOrientation, c.mirrored );
+
+            BOOST_CHECK_EQUAL( textItem.GetTextAngle(), c.expectedAngle );
+            BOOST_CHECK_EQUAL( textItem.GetHorizJustify(), c.expectedHJustify );
+        }
+    }
+}
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -94,13 +94,12 @@ SCH_IO_KICAD_SEXPR_PARSER::SCH_IO_KICAD_SEXPR_PARSER( LINE_READER* aLineReader,
 
 void SCH_IO_KICAD_SEXPR_PARSER::checkpoint()
 {
-    const unsigned PROGRESS_DELTA = 500;
-
     if( m_progressReporter )
     {
+        unsigned progressDelta = std::max( 50u, m_lineCount / 10 );
         unsigned curLine = m_lineReader->LineNumber();
 
-        if( curLine > m_lastProgressLine + PROGRESS_DELTA )
+        if( m_lastProgressLine == 0 || curLine > m_lastProgressLine + progressDelta )
         {
             m_progressReporter->SetCurrentProgress( ( (double) curLine )
                                                             / std::max( 1U, m_lineCount ) );
@@ -248,8 +247,25 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseLib( LIB_SYMBOL_MAP& aSymbolLibMap )
 
             m_unit = 1;
             m_bodyStyle = 1;
-            LIB_SYMBOL* symbol = parseLibSymbol( aSymbolLibMap );
-            aSymbolLibMap[symbol->GetName()] = symbol;
+
+            try
+            {
+                LIB_SYMBOL* symbol = parseLibSymbol( aSymbolLibMap );
+                aSymbolLibMap[symbol->GetName()] = symbol;
+            }
+            catch( const IO_ERROR& e )
+            {
+                // Record the error and skip to the end of this symbol block
+                wxString warning = wxString::Format(
+                        _( "Error parsing symbol at line %d: %s\nSkipping symbol and continuing." ),
+                        CurLineNumber(), e.What() );
+                m_parseWarnings.push_back( warning );
+
+                // Skip to the end of this symbol's S-expression block
+                // We're already past T_symbol, so we're inside the symbol definition
+                skipToBlockEnd( 1 );
+            }
+
             break;
         }
 
@@ -397,6 +413,11 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
 
         case T_on_board:
             symbol->SetExcludedFromBoard( !parseBool() );
+            NeedRIGHT();
+            break;
+
+        case T_in_pos_files:
+            symbol->SetExcludedFromPosFiles( !parseBool() );
             NeedRIGHT();
             break;
 
@@ -593,7 +614,7 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
             }
             catch( const IO_ERROR& e )
             {
-                wxLogError( e.What() );
+                m_parseWarnings.push_back( e.What() );
             }
 
             SyncLineReaderWith( embeddedFilesParser );
@@ -623,6 +644,8 @@ LIB_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseLibSymbol( LIB_SYMBOL_MAP& aSymbolLi
     // drawings each time we wanted to know.
     if( m_requiredVersion < 20250827 )
         symbol->SetHasDeMorganBodyStyles( symbol->HasLegacyAlternateBodyStyle() );
+
+    symbol->RefreshLibraryTreeCaches();
 
     return symbol.release();
 }
@@ -879,8 +902,12 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT( EDA_TEXT* aText, bool aConvertOve
 
 void SCH_IO_KICAD_SEXPR_PARSER::parseHeader( TSCHEMATIC_T::T aHeaderType, int aFileVersion )
 {
-    wxCHECK_RET( CurTok() == aHeaderType,
-                 wxT( "Cannot parse " ) + GetTokenString( CurTok() ) + wxT( " as a header." ) );
+    if( CurTok() != aHeaderType )
+    {
+        THROW_PARSE_ERROR( wxString::Format( _( "Cannot parse '%s' as a header." ),
+                                             GetTokenString( CurTok() ) ),
+                           CurSource(), CurLine(), CurLineNumber(), CurOffset() );
+    }
 
     NeedLEFT();
 
@@ -1075,7 +1102,7 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseProperty( std::unique_ptr<LIB_SYMBOL>
 
     // Empty property values are valid.
 
-    if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+    if( m_requiredVersion < 20250318 && CurStr() == "~" )
         value = wxEmptyString;
     else
         value = FromUTF8();
@@ -1672,7 +1699,7 @@ SCH_PIN* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolPin()
                                    CurOffset() );
             }
 
-            if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+            if( m_requiredVersion < 20250318 && CurStr() == "~" )
                 pin->SetName( wxEmptyString );
             else if( m_requiredVersion < 20210606 )
                 pin->SetName( ConvertToNewOverbarNotation( FromUTF8() ) );
@@ -1712,7 +1739,7 @@ SCH_PIN* SCH_IO_KICAD_SEXPR_PARSER::parseSymbolPin()
                                    CurLineNumber(), CurOffset() );
             }
 
-            if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+            if( m_requiredVersion < 20250318 && CurStr() == "~" )
                 pin->SetNumber( wxEmptyString );
             else if( m_requiredVersion < 20210606 )
                 pin->SetNumber( ConvertToNewOverbarNotation( FromUTF8() ) );
@@ -2290,7 +2317,7 @@ SCH_FIELD* SCH_IO_KICAD_SEXPR_PARSER::parseSchField( SCH_ITEM* aParent )
     // Empty property values are valid.
     wxString value;
 
-    if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+    if( m_requiredVersion < 20250318 && CurStr() == "~" )
         value = wxEmptyString;
     else
         value = FromUTF8();
@@ -2638,7 +2665,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances( SCH_SCREEN* aScreen )
                 case T_value:
                     NeedSYMBOL();
 
-                    if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+                    if( m_requiredVersion < 20250318 && CurStr() == "~" )
                         instance.m_Value = wxEmptyString;
                     else
                         instance.m_Value = FromUTF8();
@@ -2649,7 +2676,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseSchSymbolInstances( SCH_SCREEN* aScreen )
                 case T_footprint:
                     NeedSYMBOL();
 
-                    if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+                    if( m_requiredVersion < 20250318 && CurStr() == "~" )
                         instance.m_Footprint = wxEmptyString;
                     else
                         instance.m_Footprint = FromUTF8();
@@ -2901,7 +2928,13 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
             // when the item has only 2 corners, similar to a SCH_LINE
             SCH_SHAPE* poly = parseSchPolyLine();
 
-            if( poly->GetPointCount() > 2 )
+            if( poly->GetPointCount() < 2 )
+            {
+                delete poly;
+                THROW_PARSE_ERROR( _( "Schematic polyline has too few points" ), CurSource(), CurLine(),
+                                   CurLineNumber(), CurOffset() );
+            }
+            else if( poly->GetPointCount() > 2 )
             {
                 screen->Append( poly );
             }
@@ -3012,7 +3045,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::ParseSchematic( SCH_SHEET* aSheet, bool aIsCopya
             }
             catch( const PARSE_ERROR& e )
             {
-                wxLogError( e.What() );
+                m_parseWarnings.push_back( e.What() );
             }
 
             SyncLineReaderWith( embeddedFilesParser );
@@ -3194,6 +3227,11 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
             NeedRIGHT();
             break;
 
+        case T_in_pos_files:
+            symbol->SetExcludedFromPosFiles( !parseBool() );
+            NeedRIGHT();
+            break;
+
         case T_dnp:
             symbol->SetDNP( parseBool() );
             NeedRIGHT();
@@ -3238,7 +3276,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
                 case T_value:
                     NeedSYMBOL();
 
-                    if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+                    if( m_requiredVersion < 20250318 && CurStr() == "~" )
                         symbol->SetValueFieldText( wxEmptyString );
                     else
                         symbol->SetValueFieldText( FromUTF8() );
@@ -3249,7 +3287,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
                 case T_footprint:
                     NeedSYMBOL();
 
-                    if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+                    if( m_requiredVersion < 20250318 && CurStr() == "~" )
                         symbol->SetFootprintFieldText( wxEmptyString );
                     else
                         symbol->SetFootprintFieldText( FromUTF8() );
@@ -3321,7 +3359,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
                         case T_value:
                             NeedSYMBOL();
 
-                            if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+                            if( m_requiredVersion < 20250318 && CurStr() == "~" )
                                 symbol->SetValueFieldText( wxEmptyString );
                             else
                                 symbol->SetValueFieldText( FromUTF8() );
@@ -3332,7 +3370,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
                         case T_footprint:
                             NeedSYMBOL();
 
-                            if( m_requiredVersion < 20250318 && FromUTF8() == "~" )
+                            if( m_requiredVersion < 20250318 && CurStr() == "~" )
                                 symbol->SetFootprintFieldText( wxEmptyString );
                             else
                                 symbol->SetFootprintFieldText( FromUTF8() );
@@ -3344,6 +3382,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
                         case T_variant:
                         {
                             SCH_SYMBOL_VARIANT variant;
+                            variant.InitializeAttributes( *symbol );
 
                             for( token = NextTok(); token != T_RIGHT; token = NextTok() )
                             {
@@ -3372,29 +3411,68 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
 
                                 case T_in_bom:
                                     variant.m_ExcludedFromBOM = parseBool();
+
+                                    // This fixes the incorrect logic from prior file versions.  The "in_bom" token
+                                    // used in the file format is the positive logic.  However, in the UI the term
+                                    // excluded from BOM is used which is the inverted logic.
+                                    if( m_requiredVersion >= 20260306 )
+                                        variant.m_ExcludedFromBOM = !variant.m_ExcludedFromBOM;
+
+                                    NeedRIGHT();
+                                    break;
+
+                                case T_on_board:
+                                    variant.m_ExcludedFromBoard = !parseBool();
+                                    NeedRIGHT();
+                                    break;
+
+                                case T_in_pos_files:
+                                    variant.m_ExcludedFromPosFiles = !parseBool();
                                     NeedRIGHT();
                                     break;
 
                                 case T_field:
                                 {
-                                    NeedSYMBOL();
-                                    wxString fieldName = FromUTF8();
-                                    NeedRIGHT();
-                                    NeedSYMBOL();
-                                    wxString fieldValue = FromUTF8();
-                                    NeedRIGHT();
+                                    wxString fieldName;
+                                    wxString fieldValue;
+
+                                    for( token = NextTok(); token != T_RIGHT; token = NextTok() )
+                                    {
+                                        if( token != T_LEFT )
+                                            Expecting( T_LEFT );
+
+                                        token = NextTok();
+
+                                        switch( token )
+                                        {
+                                        case T_name:
+                                            NeedSYMBOL();
+                                            fieldName = FromUTF8();
+                                            NeedRIGHT();
+                                            break;
+
+                                        case T_value:
+                                            NeedSYMBOL();
+                                            fieldValue = FromUTF8();
+                                            NeedRIGHT();
+                                            break;
+
+                                        default:
+                                            Expecting( "name or value" );
+                                        }
+                                    }
+
                                     variant.m_Fields[fieldName] = fieldValue;
                                     break;
                                 }
 
                                 default:
-                                    Expecting( "dnp, exclude_from_sim, field, in_bom, or name" );
+                                    Expecting( "dnp, exclude_from_sim, field, in_bom, in_pos_files, name, or on_board" );
                                 }
 
                                 instance.m_Variants[variant.m_Name] = variant;
                             }
 
-                            NeedRIGHT();
                             break;
                         }
 
@@ -3420,6 +3498,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
             if( field->GetCanonicalName() == SIM_LEGACY_ENABLE_FIELD_V7 )
             {
                 symbol->SetExcludedFromSim( field->GetText() == wxS( "0" ) );
+                delete field;
                 break;
             }
 
@@ -3427,6 +3506,7 @@ SCH_SYMBOL* SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol()
             if( field->GetCanonicalName() == SIM_LEGACY_ENABLE_FIELD )
             {
                 symbol->SetExcludedFromSim( field->GetText() == wxS( "N" ) );
+                delete field;
                 break;
             }
 
@@ -3773,6 +3853,7 @@ SCH_SHEET* SCH_IO_KICAD_SEXPR_PARSER::parseSheet()
                         case T_variant:
                         {
                             SCH_SHEET_VARIANT variant;
+                            variant.InitializeAttributes( *sheet );
 
                             for( token = NextTok(); token != T_RIGHT; token = NextTok() )
                             {
@@ -3801,29 +3882,68 @@ SCH_SHEET* SCH_IO_KICAD_SEXPR_PARSER::parseSheet()
 
                                 case T_in_bom:
                                     variant.m_ExcludedFromBOM = parseBool();
+
+                                    // This fixes the incorrect logic from prior file versions.  The "in_bom" token
+                                    // used in the file format is the positive logic.  However, in the UI the term
+                                    // excluded from BOM is used which is the inverted logic.
+                                    if( m_requiredVersion >= 20260306 )
+                                        variant.m_ExcludedFromBOM = !variant.m_ExcludedFromBOM;
+
+                                    NeedRIGHT();
+                                    break;
+
+                                case T_on_board:
+                                    variant.m_ExcludedFromBoard = !parseBool();
+                                    NeedRIGHT();
+                                    break;
+
+                                case T_in_pos_files:
+                                    variant.m_ExcludedFromPosFiles = !parseBool();
                                     NeedRIGHT();
                                     break;
 
                                 case T_field:
                                 {
-                                    NeedSYMBOL();
-                                    wxString fieldName = FromUTF8();
-                                    NeedRIGHT();
-                                    NeedSYMBOL();
-                                    wxString fieldValue = FromUTF8();
-                                    NeedRIGHT();
+                                    wxString fieldName;
+                                    wxString fieldValue;
+
+                                    for( token = NextTok(); token != T_RIGHT; token = NextTok() )
+                                    {
+                                        if( token != T_LEFT )
+                                            Expecting( T_LEFT );
+
+                                        token = NextTok();
+
+                                        switch( token )
+                                        {
+                                        case T_name:
+                                            NeedSYMBOL();
+                                            fieldName = FromUTF8();
+                                            NeedRIGHT();
+                                            break;
+
+                                        case T_value:
+                                            NeedSYMBOL();
+                                            fieldValue = FromUTF8();
+                                            NeedRIGHT();
+                                            break;
+
+                                        default:
+                                            Expecting( "name or value" );
+                                        }
+                                    }
+
                                     variant.m_Fields[fieldName] = fieldValue;
                                     break;
                                 }
 
                                 default:
-                                    Expecting( "dnp, exclude_from_sim, field, in_bom, or name" );
+                                    Expecting( "dnp, exclude_from_sim, field, in_bom, in_pos_files, name, or on_board" );
                                 }
 
                                 instance.m_Variants[variant.m_Name] = variant;
                             }
 
-                            NeedRIGHT();
                             break;
                         }
 
@@ -3846,6 +3966,18 @@ SCH_SHEET* SCH_IO_KICAD_SEXPR_PARSER::parseSheet()
     }
 
     sheet->SetFields( fields );
+
+    if( !FindField( sheet->GetFields(), FIELD_T::SHEET_NAME ) )
+    {
+        THROW_PARSE_ERROR( _( "Missing sheet name property" ), CurSource(), CurLine(),
+                           CurLineNumber(), CurOffset() );
+    }
+
+    if( !FindField( sheet->GetFields(), FIELD_T::SHEET_FILENAME ) )
+    {
+        THROW_PARSE_ERROR( _( "Missing sheet file property" ), CurSource(), CurLine(),
+                           CurLineNumber(), CurOffset() );
+    }
 
     return sheet.release();
 }
@@ -4935,6 +5067,12 @@ SCH_TABLE* SCH_IO_KICAD_SEXPR_PARSER::parseSchTable()
         }
     }
 
+    if( !table->GetCell( 0, 0 ) )
+    {
+        THROW_PARSE_ERROR( _( "Invalid table: no cells defined" ), CurSource(), CurLine(), CurLineNumber(),
+                           CurOffset() );
+    }
+
     return table.release();
 }
 
@@ -4977,7 +5115,7 @@ void SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias( SCH_SCREEN* aScreen )
         if( m_requiredVersion < 20210621 )
             member = ConvertToNewOverbarNotation( member );
 
-        busAlias->Members().emplace_back( member );
+        busAlias->AddMember( member );
 
         token = NextTok();
     }
@@ -5138,4 +5276,22 @@ void SCH_IO_KICAD_SEXPR_PARSER::resolveGroups( SCH_SCREEN* aParent )
     }
 
     aParent->GroupsSanityCheck( true );
+}
+
+
+void SCH_IO_KICAD_SEXPR_PARSER::skipToBlockEnd( int aDepth )
+{
+    // Skip tokens until we exit the current S-expression block.
+    // This is used for error recovery when parsing fails mid-symbol.
+    while( aDepth > 0 )
+    {
+        T token = NextTok();
+
+        if( token == T_EOF )
+            break;
+        else if( token == T_LEFT )
+            aDepth++;
+        else if( token == T_RIGHT )
+            aDepth--;
+    }
 }

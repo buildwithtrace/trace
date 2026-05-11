@@ -34,7 +34,9 @@
 
 #include <confirm.h>
 #include <kidialog.h>
+#include <kiplatform/ui.h>
 #include <wildcards_and_files_ext.h>
+#include <io/pads/pads_common.h>
 
 #include <sch_io/sch_io_mgr.h>
 #include <pcb_io/pcb_io_mgr.h>
@@ -55,8 +57,22 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
 
     wxFileDialog inputdlg( this, aWindowTitle, default_dir, wxEmptyString, aFilesWildcard, style );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &inputdlg );
+
     if( inputdlg.ShowModal() == wxID_CANCEL )
         return;
+
+    wxString inputPath = inputdlg.GetPath();
+    bool     isPadsProject = ( aSchFileType == SCH_IO_MGR::SCH_PADS
+                               && aPcbFileType == PCB_IO_MGR::PADS );
+
+    if( isPadsProject
+        && PADS_COMMON::DetectPadsFileType( inputPath ) == PADS_COMMON::PADS_FILE_TYPE::UNKNOWN )
+    {
+        DisplayErrorMessage( this,
+                             _( "The selected file does not appear to be a PADS ASCII schematic or PCB." ) );
+        return;
+    }
 
     // OK, we got a new project to open.  Time to close any existing project before we go on
     // to collect info about where to put the new one, etc.  Otherwise the workflow is kind of
@@ -68,51 +84,56 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
     std::vector<wxString> pcbFileExts( aPcbFileExtensions.begin(), aPcbFileExtensions.end() );
 
     IMPORT_PROJ_HELPER importProj( this, schFileExts, pcbFileExts );
-    importProj.m_InputFile = inputdlg.GetPath();
+    importProj.m_InputFile = inputPath;
 
-    // Don't use wxFileDialog here.  On GTK builds, the default path is returned unless a
-    // file is actually selected.
-    wxDirDialog prodlg( this, _( "KiCad Project Destination" ), importProj.m_InputFile.GetPath(),
-                        wxDD_DEFAULT_STYLE );
-
-    if( prodlg.ShowModal() == wxID_CANCEL )
-        return;
-
-    wxString targetDir = prodlg.GetPath();
-
-    importProj.m_TargetProj.SetPath( targetDir );
-    importProj.m_TargetProj.SetName( importProj.m_InputFile.GetName() );
-    importProj.m_TargetProj.SetExt( FILEEXT::ProjectFileExtension );
-    importProj.m_TargetProj.MakeAbsolute();
-
-    // Check if the project directory exists and is empty
-    if( !importProj.m_TargetProj.DirExists() )
+    // Loop to allow the user to retry directory selection when cancelling the "not empty" warning
+    for( ;; )
     {
-        if( !importProj.m_TargetProj.Mkdir() )
-        {
-            msg.Printf( _( "Folder '%s' could not be created.\n\n"
-                           "Make sure you have write permissions and try again." ),
-                        importProj.m_TargetProj.GetPath() );
-            DisplayErrorMessage( this, msg );
+        // Don't use wxFileDialog here.  On GTK builds, the default path is returned unless a
+        // file is actually selected.
+        wxDirDialog prodlg( this, _( "KiCad Project Destination" ),
+                            importProj.m_InputFile.GetPath(), wxDD_DEFAULT_STYLE );
+
+        if( prodlg.ShowModal() == wxID_CANCEL )
             return;
+
+        wxString targetDir = prodlg.GetPath();
+
+        importProj.m_TargetProj.SetPath( targetDir );
+        importProj.m_TargetProj.SetName( importProj.m_InputFile.GetName() );
+        importProj.m_TargetProj.SetExt( FILEEXT::ProjectFileExtension );
+        importProj.m_TargetProj.MakeAbsolute();
+
+        if( !importProj.m_TargetProj.DirExists() )
+        {
+            if( !importProj.m_TargetProj.Mkdir() )
+            {
+                msg.Printf( _( "Folder '%s' could not be created.\n\n"
+                               "Make sure you have write permissions and try again." ),
+                            importProj.m_TargetProj.GetPath() );
+                DisplayErrorMessage( this, msg );
+                continue;
+            }
+
+            break;
         }
-    }
-    else
-    {
+
         wxDir targetDirTest( targetDir );
+
         if( targetDirTest.IsOpened() && targetDirTest.HasFiles() )
         {
             msg = _( "The selected directory is not empty.  We recommend you "
                      "create projects in their own clean directory.\n\nDo you "
                      "want to create a new empty directory for the project?" );
 
-            KIDIALOG dlg( this, msg, _( "Confirmation" ), wxYES_NO | wxICON_WARNING );
+            KIDIALOG dlg( this, msg, _( "Confirmation" ),
+                          wxYES_NO | wxCANCEL | wxICON_WARNING );
             dlg.DoNotShowCheckbox( __FILE__, __LINE__ );
 
-            if( dlg.ShowModal() == wxID_YES )
+            int result = dlg.ShowModal();
+
+            if( result == wxID_YES )
             {
-                // Append a new directory with the same name of the project file
-                // Keep iterating until we find an empty directory
                 importProj.FindEmptyTargetDir();
 
                 if( !wxMkdir( importProj.m_TargetProj.GetPath() ) )
@@ -120,21 +141,34 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
                     msg = _( "Error creating new directory. Please try a different path. The "
                              "project cannot be imported." );
 
-                    wxMessageDialog dirErrorDlg( this, msg, _( "Error" ),
-                                                 wxOK_DEFAULT | wxICON_ERROR );
+                    KICAD_MESSAGE_DIALOG dirErrorDlg( this, msg, _( "Error" ),
+                                                      wxOK_DEFAULT | wxICON_ERROR );
                     dirErrorDlg.ShowModal();
-                    return;
+                    continue;
                 }
+
+                break;
             }
+            else if( result == wxID_NO )
+            {
+                break;
+            }
+
+            // wxID_CANCEL — go back to directory selection
+            continue;
         }
 
         targetDirTest.Close();
+        break;
     }
 
     CreateNewProject( importProj.m_TargetProj.GetFullPath(), false /* Don't create stub files */ );
     LoadProject( importProj.m_TargetProj );
 
-    importProj.ImportFiles( aSchFileType, aPcbFileType );
+    if( isPadsProject )
+        importProj.ImportPadsFiles();
+    else
+        importProj.ImportFiles( aSchFileType, aPcbFileType );
 
     ReCreateTreePrj();
     m_active_project = true;
@@ -144,7 +178,8 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
 void KICAD_MANAGER_FRAME::OnImportAltiumProjectFiles( wxCommandEvent& event )
 {
     ImportNonKiCadProject( _( "Import Altium Project Files" ),
-                           FILEEXT::AltiumProjectFilesWildcard(), { "SchDoc" }, { "PcbDoc" },
+                           FILEEXT::AltiumProjectFilesWildcard(), { "SchDoc" },
+                           { "PcbDoc", "CSPcbDoc", "CMPcbDoc", "SWPcbDoc" },
                            SCH_IO_MGR::SCH_ALTIUM, PCB_IO_MGR::ALTIUM_DESIGNER );
 }
 
@@ -175,4 +210,20 @@ void KICAD_MANAGER_FRAME::OnImportEasyEdaProFiles( wxCommandEvent& event )
 {
     ImportNonKiCadProject( _( "Import EasyEDA Pro Project" ), FILEEXT::EasyEdaProFileWildcard(), { "INPUT" },
                            { "INPUT" }, SCH_IO_MGR::SCH_EASYEDAPRO, PCB_IO_MGR::EASYEDAPRO );
+}
+
+
+void KICAD_MANAGER_FRAME::OnImportPadsProjectFiles( wxCommandEvent& event )
+{
+    ImportNonKiCadProject( _( "Import PADS Project Files" ), FILEEXT::PADSProjectFilesWildcard(),
+                           { "asc", "txt" }, { "asc", "txt" }, SCH_IO_MGR::SCH_PADS,
+                           PCB_IO_MGR::PADS );
+}
+
+
+void KICAD_MANAGER_FRAME::OnImportGedaFiles( wxCommandEvent& event )
+{
+    ImportNonKiCadProject( _( "Import gEDA / Lepton EDA Project Files" ),
+                           FILEEXT::GedaProjectFilesWildcard(), { "prj", "sch" }, { "pcb" },
+                           SCH_IO_MGR::SCH_GEDA, PCB_IO_MGR::GEDA_PCB );
 }

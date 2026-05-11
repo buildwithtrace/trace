@@ -28,6 +28,7 @@
 #include <project.h>
 
 
+struct HISTORY_FILE_DATA;
 class BUS_ALIAS;
 class CONNECTION_GRAPH;
 class EDA_BASE_FRAME;
@@ -114,12 +115,19 @@ public:
      */
     SCH_SHEET_LIST Hierarchy() const;
 
+    /**
+     * Check if the hierarchy has been built.
+     *
+     * @return true if RefreshHierarchy() has been called and the hierarchy is populated.
+     */
+    bool HasHierarchy() const { return !m_hierarchy.empty(); }
+
     void RefreshHierarchy();
 
     SCH_ITEM* ResolveItem( const KIID& aID, SCH_SHEET_PATH* aPathOut = nullptr,
                            bool aAllowNullptrReturn = false ) const
     {
-        return BuildUnorderedSheetList().ResolveItem( aID, aPathOut, aAllowNullptrReturn );
+        return m_hierarchy.ResolveItem( aID, aPathOut, aAllowNullptrReturn );
     }
 
     SCH_SHEET& Root() const
@@ -128,21 +136,15 @@ public:
     }
 
     /**
-     * Initialize the schematic with a new root sheet.
-     *
-     * This is typically done by calling a file loader that returns the new root sheet
-     * As a side-effect, takes care of some post-load initialization.
-     *
-     * @param aRootSheet is the new root sheet for this schematic.
-     */
-    void SetRoot( SCH_SHEET* aRootSheet );
-
-    /**
      * Get the list of top-level sheets.
      *
      * @return vector of pointers to top-level sheets (children of virtual root).
      */
     std::vector<SCH_SHEET*> GetTopLevelSheets() const;
+
+    SCH_SHEET* GetTopLevelSheet( int aIndex = 0 ) const;
+
+    void SetTopLevelSheets( const std::vector<SCH_SHEET*>& aSheets );
 
     /**
      * Add a new top-level sheet to the schematic.
@@ -309,7 +311,7 @@ public:
      * This function is needed for some plugins (e.g. Legacy and Cadstar) in order to retain
      * connectivity after loading.
      */
-    void FixupJunctionsAfterImport();
+    int FixupJunctionsAfterImport();
 
     /**
      * Scan existing markers and record data from any that are Excluded.
@@ -462,9 +464,63 @@ public:
      *
      * @param aVariantName is the name of the variant to remove.
      */
-    void DeleteVariant( const wxString& aVariantName );
+    void DeleteVariant( const wxString& aVariantName, SCH_COMMIT* aCommit = nullptr );
 
-    void AddVariant( const wxString& aVariantName ) { m_variantNames.emplace( aVariantName ); }
+    void AddVariant( const wxString& aVariantName );
+
+    /**
+     * Rename a variant from @a aOldName to @a aNewName.
+     *
+     * This updates the variant name in all symbols and sheets throughout the schematic.
+     *
+     * @param aOldName is the current name of the variant to rename.
+     * @param aNewName is the new name for the variant.
+     * @param aCommit is an optional SCH_COMMIT for undo/redo support.
+     */
+    void RenameVariant( const wxString& aOldName, const wxString& aNewName,
+                        SCH_COMMIT* aCommit = nullptr );
+
+    /**
+     * Copy a variant from @a aSourceVariant to @a aNewVariant.
+     *
+     * This creates a new variant with data copied from the source variant for all
+     * symbols and sheets throughout the schematic.
+     *
+     * @param aSourceVariant is the name of the variant to copy from.
+     * @param aNewVariant is the name of the new variant to create.
+     * @param aCommit is an optional SCH_COMMIT for undo/redo support.
+     */
+    void CopyVariant( const wxString& aSourceVariant, const wxString& aNewVariant,
+                      SCH_COMMIT* aCommit = nullptr );
+
+    /**
+     * Return the set of variant names (without the default placeholder).
+     */
+    const std::set<wxString>& GetVariantNames() const { return m_variantNames; }
+
+    /**
+     * Return the description for a variant.
+     *
+     * @param aVariantName is the name of the variant.
+     * @return the description or an empty string if the variant has no description.
+     */
+    wxString GetVariantDescription( const wxString& aVariantName ) const;
+
+    /**
+     * Set the description for a variant.
+     *
+     * @param aVariantName is the name of the variant.
+     * @param aDescription is the description to set.
+     */
+    void SetVariantDescription( const wxString& aVariantName, const wxString& aDescription );
+
+    /**
+     * This is a throw away method for variant testing.
+     *
+     * Once the schematic loading is properly fixed due to SetRoot() method breakage, this method should
+     * be removed.
+     */
+    void LoadVariants();
 
     /**
      * True if a SCHEMATIC exists, false if not
@@ -478,14 +534,15 @@ public:
     PROJECT::ELEM ProjectElementType() override { return PROJECT::ELEM::SCHEMATIC; }
 
     /**
-     * Save schematic files to the .history directory.
+     * Serialize schematic sheets into HISTORY_FILE_DATA for non-blocking history commit.
      *
      * This method is used as a saver callback for LOCAL_HISTORY during autosave operations.
+     * Serialization runs on the UI thread; Prettify and file I/O happen in the background.
      *
      * @param aProjectPath The path to check against this schematic's project path
-     * @param aFiles Output vector to append absolute file paths for history inclusion
+     * @param aFileData Output vector to append serialized data for history inclusion
      */
-    void SaveToHistory( const wxString& aProjectPath, std::vector<wxString>& aFiles );
+    void SaveToHistory( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData );
 
 private:
     friend class SCH_EDIT_FRAME;
@@ -496,6 +553,11 @@ private:
         for( auto&& l : m_listeners )
             ( l->*aFunc )( std::forward<Args>( args )... );
     }
+
+    void ensureVirtualRoot();
+    void ensureDefaultTopLevelSheet();
+    void ensureCurrentSheetIsTopLevel();
+    void rebuildHierarchyState( bool aResetConnectionGraph );
 
     PROJECT* m_project;
 
@@ -558,6 +620,10 @@ private:
     wxString m_currentVariant;
 
     std::set<wxString> m_variantNames;
+
+    /// Re-entry guard to prevent infinite recursion between ensureDefaultTopLevelSheet and
+    /// RefreshHierarchy when setting up new schematics
+    bool m_settingTopLevelSheets = false;
 };
 
 #endif

@@ -21,6 +21,9 @@
 #define KIPLATFORM_IO_H_
 
 #include <stdio.h>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
 
 class wxString;
 class wxFileName;
@@ -29,6 +32,49 @@ namespace KIPLATFORM
 {
 namespace IO
 {
+    /**
+     * RAII wrapper for memory-mapped file I/O.
+     *
+     * Uses mmap on POSIX and MapViewOfFile on Windows. Falls back to reading
+     * the entire file into a heap buffer if memory mapping is unavailable.
+     */
+    class MAPPED_FILE
+    {
+    public:
+        explicit MAPPED_FILE( const wxString& aFileName );
+        ~MAPPED_FILE();
+
+        MAPPED_FILE( const MAPPED_FILE& ) = delete;
+        MAPPED_FILE& operator=( const MAPPED_FILE& ) = delete;
+
+        const uint8_t* Data() const { return m_data; }
+        size_t         Size() const { return m_size; }
+
+    private:
+        void readIntoBuffer( const wxString& aFileName );
+
+        const uint8_t* m_data = nullptr;
+        size_t         m_size = 0;
+
+#ifdef _WIN32
+        void*          m_fileHandle = nullptr;
+        void*          m_mapHandle = nullptr;
+#else
+        bool           m_isMapped = false;
+#endif
+
+        std::vector<uint8_t> m_fallbackBuffer;
+    };
+
+    /**
+     * Buffer size for file I/O operations on cloud-synced folders.
+     *
+     * Cloud sync services like Google Drive, OneDrive, and Dropbox can report stale file sizes
+     * during seek operations immediately after writing. Using a 512KB buffer reduces the number
+     * of I/O operations and allows the cloud sync driver to flush data more reliably before
+     * subsequent reads. This value was determined empirically to eliminate sync issues.
+     */
+    static constexpr size_t CLOUD_SYNC_BUFFER_SIZE = 512 * 1024;
     /**
      * Opens the file like fopen but sets flags (if available) for sequential read hinting.
      * Only use this variant of fopen if the file is truely going to be read sequentially only
@@ -65,6 +111,16 @@ namespace IO
      * This is a no-op on non-Windows platforms.
      */
     void LongPathAdjustment( wxFileName& aFilename );
+
+    /**
+     * Computes a hash of modification times and sizes for files matching a pattern.
+     * Used for cache invalidation by detecting changes to library directories.
+     *
+     * @param aDirPath  Directory to search
+     * @param aFilespec Wildcard pattern to match (e.g. "*.kicad_mod")
+     * @return Hash value that changes when any matching file is modified
+     */
+    long long TimestampDir( const wxString& aDirPath, const wxString& aFilespec );
 } // namespace IO
 } // namespace KIPLATFORM
 

@@ -51,8 +51,8 @@ wxString GetDefaultPlotExtension( PLOT_FORMAT aFormat )
 void PlotDrawingSheet( PLOTTER* plotter, const PROJECT* aProject, const TITLE_BLOCK& aTitleBlock,
                        const PAGE_INFO& aPageInfo, const std::map<wxString, wxString>* aProperties,
                        const wxString& aSheetNumber, int aSheetCount, const wxString& aSheetName,
-                       const wxString& aSheetPath, const wxString& aFilename, COLOR4D aColor,
-                       bool aIsFirstPage )
+                       const wxString& aSheetPath, const wxString& aFilename, COLOR4D aColor, bool aIsFirstPage,
+                       const wxString& aVariantName, const wxString& aVariantDesc )
 {
     /* Note: Page sizes values are given in mils
      */
@@ -81,6 +81,8 @@ void PlotDrawingSheet( PLOTTER* plotter, const PROJECT* aProject, const TITLE_BL
     drawList.SetProject( aProject );
     drawList.SetIsFirstPage( aIsFirstPage );
     drawList.SetProperties( aProperties );
+    drawList.SetVariantName( aVariantName );
+    drawList.SetVariantDesc( aVariantDesc );
 
     drawList.BuildDrawItemsList( aPageInfo, aTitleBlock );
 

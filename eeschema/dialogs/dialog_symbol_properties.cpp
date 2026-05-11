@@ -27,6 +27,7 @@
 
 #include <bitmaps.h>
 #include <wx/tooltip.h>
+#include <wx/uiaction.h>
 #include <grid_tricks.h>
 #include <confirm.h>
 #include <kiface_base.h>
@@ -47,10 +48,12 @@
 #include <tool/actions.h>
 
 #include <dialog_sim_model.h>
+#include <panel_embedded_files.h>
 
 
 wxDEFINE_EVENT( SYMBOL_DELAY_FOCUS, wxCommandEvent );
 wxDEFINE_EVENT( SYMBOL_DELAY_SELECTION, wxCommandEvent );
+
 
 enum PIN_TABLE_COL_ORDER
 {
@@ -313,7 +316,8 @@ DIALOG_SYMBOL_PROPERTIES::DIALOG_SYMBOL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH
         m_lastRequestedPinsSize( 0, 0 ),
         m_editorShown( false ),
         m_fields( nullptr ),
-        m_dataModel( nullptr )
+        m_dataModel( nullptr ),
+        m_embeddedFiles( nullptr )
 {
     m_symbol = aSymbol;
     m_part = m_symbol->GetLibSymbolRef().get();
@@ -335,6 +339,12 @@ DIALOG_SYMBOL_PROPERTIES::DIALOG_SYMBOL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH
     m_fieldsGrid->SetSelectionMode( wxGrid::wxGridSelectRows );
     m_fieldsGrid->ShowHideColumns( "0 1 2 3 4 5 6 7" );
     m_shownColumns = m_fieldsGrid->GetShownColumns();
+
+    if( m_symbol->GetEmbeddedFiles() )
+    {
+        m_embeddedFiles = new PANEL_EMBEDDED_FILES( m_notebook1, m_symbol->GetEmbeddedFiles() );
+        m_notebook1->AddPage( m_embeddedFiles, _( "Embedded Files" ) );
+    }
 
     if( m_part && m_part->IsMultiBodyStyle() )
     {
@@ -388,9 +398,20 @@ DIALOG_SYMBOL_PROPERTIES::DIALOG_SYMBOL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH
     wxCommandEvent* evt = new wxCommandEvent( SYMBOL_DELAY_SELECTION );
     evt->SetClientData( new VECTOR2I( 0, FDC_VALUE ) );
     QueueEvent( evt );
+
     evt = new wxCommandEvent( SYMBOL_DELAY_FOCUS );
     evt->SetClientData( new VECTOR2I( 0, FDC_VALUE ) );
     QueueEvent( evt );
+
+    // Remind user that they are editing the current variant.
+    if( !aParent->Schematic().GetCurrentVariant().IsEmpty() )
+        SetTitle( GetTitle() + wxS( " - " ) + aParent->Schematic().GetCurrentVariant() + _( " Design Variant" ) );
+
+    Layout();
+    m_fieldsGrid->Layout();
+
+    if( GetSizer() )
+        GetSizer()->Fit( this );
 
     finishDialogSettings();
 }
@@ -426,6 +447,10 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
     if( !wxDialog::TransferDataToWindow() )
         return false;
 
+    const SCHEMATIC& schematic = GetParent()->Schematic();
+    SCH_SHEET_PATH& sheetPath = schematic.CurrentSheet();
+    wxString variantName = schematic.GetCurrentVariant();
+    std::optional<SCH_SYMBOL_VARIANT> variant = m_symbol->GetVariant( sheetPath, variantName );
     std::set<wxString> defined;
 
     // Push a copy of each field into m_updateFields
@@ -435,8 +460,8 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
 
         // change offset to be symbol-relative
         field.Offset( -m_symbol->GetPosition() );
-
-        field.SetText( m_symbol->Schematic()->ConvertKIIDsToRefs( field.GetText() ) );
+        field.SetText( schematic.ConvertKIIDsToRefs( m_symbol->GetFieldText( field.GetName(), &sheetPath,
+                                                                             variantName ) ) );
 
         defined.insert( field.GetName() );
         m_fields->push_back( field );
@@ -444,7 +469,7 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
 
     // Add in any template fieldnames not yet defined:
     for( const TEMPLATE_FIELDNAME& templateFieldname :
-            GetParent()->Schematic().Settings().m_TemplateFieldNames.GetTemplateFieldNames() )
+         schematic.Settings().m_TemplateFieldNames.GetTemplateFieldNames() )
     {
         if( defined.count( templateFieldname.m_Name ) <= 0 )
         {
@@ -463,7 +488,7 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
     {
         // Ensure symbol unit is the currently selected unit (mandatory in complex hierarchies)
         // from the current sheet path, because it can be modified by previous calculations
-        m_symbol->SetUnit( m_symbol->GetUnitSelection( &GetParent()->GetCurrentSheet() ) );
+        m_symbol->SetUnit( m_symbol->GetUnitSelection( &sheetPath ) );
 
         for( int ii = 1; ii <= m_symbol->GetUnitCount(); ii++ )
             m_unitChoice->Append( m_symbol->GetUnitDisplayName( ii, false ) );
@@ -531,10 +556,11 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
     case SYM_MIRROR_Y: m_mirrorCtrl->SetSelection( 2 );  break;
     }
 
-    m_cbExcludeFromSim->SetValue( m_symbol->GetExcludedFromSim() );
-    m_cbExcludeFromBom->SetValue( m_symbol->GetExcludedFromBOM() );
-    m_cbExcludeFromBoard->SetValue( m_symbol->GetExcludedFromBoard() );
-    m_cbDNP->SetValue( m_symbol->GetDNP( &GetParent()->GetCurrentSheet() ) );
+    m_cbExcludeFromSim->SetValue( m_symbol->GetExcludedFromSim( &sheetPath, variantName ) );
+    m_cbExcludeFromBom->SetValue( m_symbol->GetExcludedFromBOM( &sheetPath, variantName ) );
+    m_cbExcludeFromBoard->SetValue( m_symbol->GetExcludedFromBoard( &sheetPath, variantName ) );
+    m_cbExcludeFromPosFiles->SetValue( m_symbol->GetExcludedFromPosFiles( &sheetPath, variantName ) );
+    m_cbDNP->SetValue( m_symbol->GetDNP( &sheetPath, variantName ) );
 
     if( m_part )
     {
@@ -545,12 +571,21 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataToWindow()
     // Set the symbol's library name.
     m_tcLibraryID->SetValue( UnescapeString( m_symbol->GetLibId().Format() ) );
 
-    Layout();
-    m_fieldsGrid->Layout();
+    if( m_embeddedFiles && !m_embeddedFiles->TransferDataToWindow() )
+        return false;
 
-#ifdef __WXGTK__
-    wxSafeYield();
-#endif
+    // Recalculate the dialog size now that the grid is populated. On first run, the dialog was
+    // sized before data was available, so the grid had zero height. Recalculating ensures the
+    // minimum size accounts for the actual grid content.
+    m_fieldsGrid->Layout();
+    Layout();
+    GetSizer()->SetSizeHints( this );
+
+    wxSize minSize = GetMinSize();
+    wxSize curSize = GetSize();
+
+    if( curSize.y < minSize.y )
+        SetSize( wxSize( curSize.x, minSize.y ) );
 
     return true;
 }
@@ -672,15 +707,21 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
     if( !wxDialog::TransferDataFromWindow() )  // Calls our Validate() method.
         return false;
 
+    if( m_embeddedFiles && !m_embeddedFiles->TransferDataFromWindow() )
+        return false;
+
     if( !m_fieldsGrid->CommitPendingChanges() )
         return false;
 
     if( !m_pinGrid->CommitPendingChanges() )
         return false;
 
-    SCH_COMMIT  commit( GetParent() );
-    SCH_SCREEN* currentScreen = GetParent()->GetScreen();
-    bool        replaceOnCurrentScreen;
+    SCH_COMMIT     commit( GetParent() );
+    SCH_SCREEN*    currentScreen = GetParent()->GetScreen();
+    SCH_SHEET_PATH currentSheet = GetParent()->Schematic().CurrentSheet();
+    wxString       currentVariant = GetParent()->Schematic().GetCurrentVariant();
+    bool           replaceOnCurrentScreen;
+
     wxCHECK( currentScreen, false );
 
     // This needs to be done before the LIB_ID is changed to prevent stale library symbols in
@@ -726,13 +767,9 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
 
     // change all field positions from relative to absolute
     for( SCH_FIELD& field : *m_fields )
-    {
         field.Offset( m_symbol->GetPosition() );
-        field.SetText( m_symbol->Schematic()->ConvertRefsToKIIDs( field.GetText() ) );
-    }
 
-    SCH_FIELDS& fields = m_symbol->GetFields();
-    fields.clear();
+    int ordinal = 42;   // Arbitrarily larger than any mandatory FIELD_T ids.
 
     for( SCH_FIELD& field : *m_fields )
     {
@@ -743,48 +780,85 @@ bool DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow()
         else if( fieldName.IsEmpty() )
             field.SetName( _( "untitled" ) );
 
-        fields.push_back( field );
-    }
+        const SCH_FIELD* existingField = m_symbol->GetField( fieldName );
+        SCH_FIELD* tmp;
 
-    int ordinal = 42;   // Arbitrarily larger than any mandatory FIELD_T ids.
+        if( !existingField )
+        {
+            tmp = m_symbol->AddField( field );
+            tmp->SetParent( m_symbol );
+        }
+        else
+        {
+            wxString defaultText = m_symbol->Schematic()->ConvertRefsToKIIDs( existingField->GetText() );
+            tmp = const_cast<SCH_FIELD*>( existingField );
 
-    for( SCH_FIELD& field : fields )
-    {
+            *tmp = field;
+
+            if( !currentVariant.IsEmpty() )
+            {
+                // Restore the default field text for existing fields.
+                tmp->SetText( defaultText, &currentSheet );
+
+                wxString variantText = m_symbol->Schematic()->ConvertRefsToKIIDs( field.GetText() );
+                tmp->SetText( variantText, &currentSheet, currentVariant );
+            }
+        }
+
         if( !field.IsMandatory() )
             field.SetOrdinal( ordinal++ );
     }
 
-    // Reference has a specific initialization, depending on the current active sheet
-    // because for a given symbol, in a complex hierarchy, there are more than one
-    // reference.
-    m_symbol->SetRef( &GetParent()->GetCurrentSheet(), m_fields->GetField( FIELD_T::REFERENCE )->GetText() );
+    for( int ii = (int) m_symbol->GetFields().size() - 1; ii >= 0; ii-- )
+    {
+        SCH_FIELD& symbolField = m_symbol->GetFields()[ii];
 
-    // Similar for Value and Footprint, except that the GUI behavior is that they are kept
-    // in sync between multiple instances.
-    m_symbol->SetValueFieldText( m_fields->GetField( FIELD_T::VALUE )->GetText() );
-    m_symbol->SetFootprintFieldText(  m_fields->GetField( FIELD_T::FOOTPRINT )->GetText() );
+        if( symbolField.IsMandatory() )
+            continue;
 
-    m_symbol->SetExcludedFromSim( m_cbExcludeFromSim->IsChecked() );
-    m_symbol->SetExcludedFromBOM( m_cbExcludeFromBom->IsChecked() );
+        bool found = false;
+
+        for( const SCH_FIELD& editedField : *m_fields )
+        {
+            if( editedField.GetName() == symbolField.GetName() )
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if( !found )
+            m_symbol->GetFields().erase( m_symbol->GetFields().begin() + ii );
+    }
+
+    if( currentVariant.IsEmpty() )
+    {
+        // Reference has a specific initialization, depending on the current active sheet
+        // because for a given symbol, in a complex hierarchy, there are more than one
+        // reference.
+        m_symbol->SetRef( &GetParent()->GetCurrentSheet(), m_fields->GetField( FIELD_T::REFERENCE )->GetText() );
+    }
+
+    m_symbol->SetExcludedFromSim( m_cbExcludeFromSim->IsChecked(), &currentSheet, currentVariant );
+    m_symbol->SetExcludedFromBOM( m_cbExcludeFromBom->IsChecked(), &currentSheet, currentVariant );
     m_symbol->SetExcludedFromBoard( m_cbExcludeFromBoard->IsChecked() );
-    m_symbol->SetDNP( m_cbDNP->IsChecked(), &GetParent()->GetCurrentSheet() );
+    m_symbol->SetExcludedFromPosFiles( m_cbExcludeFromPosFiles->IsChecked() );
+    m_symbol->SetDNP( m_cbDNP->IsChecked(), &currentSheet, currentVariant );
 
     // Update any assignments
     if( m_dataModel )
     {
         for( const SCH_PIN& model_pin : *m_dataModel )
         {
-            // map from the edited copy back to the "real" pin in the symbol.
-            SCH_PIN* src_pin = m_symbol->GetPin( model_pin.GetNumber() );
-
-            if( src_pin )
+            // map from the edited copy back to the "real" pin(s) in the symbol.
+            for( SCH_PIN* src_pin : m_symbol->GetPinsByNumber( model_pin.GetNumber() ) )
                 src_pin->SetAlt( model_pin.GetAlt() );
         }
     }
 
     // Keep fields other than the reference, include/exclude flags, and alternate pin assignements
     // in sync in multi-unit parts.
-    m_symbol->SyncOtherUnits( GetParent()->GetCurrentSheet(), commit, nullptr );
+    m_symbol->SyncOtherUnits( currentSheet, commit, nullptr, currentVariant );
 
     if( replaceOnCurrentScreen )
         currentScreen->Append( m_symbol );
@@ -1038,16 +1112,23 @@ void DIALOG_SYMBOL_PROPERTIES::HandleDelayedFocus( wxCommandEvent& event )
 
     wxCHECK_RET( loc, wxT( "Missing focus cell location" ) );
 
+    // Run the AutoColumnSizer before setting focus (as it will clear any shown cell edit control
+    // if it has to resize that column).
+    m_fieldsGrid->RecomputeGridWidths();
+
     // Handle a delayed focus
 
     m_fieldsGrid->SetFocus();
     m_fieldsGrid->MakeCellVisible( loc->x, loc->y );
     m_fieldsGrid->SetGridCursor( loc->x, loc->y );
 
-    m_fieldsGrid->EnableCellEditControl( true );
-    m_fieldsGrid->ShowCellEditControl();
-
     delete loc;
+
+    CallAfter(
+            [this]()
+            {
+                m_fieldsGrid->EnableCellEditControl( true );
+            } );
 }
 
 
@@ -1064,6 +1145,7 @@ void DIALOG_SYMBOL_PROPERTIES::HandleDelayedSelection( wxCommandEvent& event )
         KIUI::SelectReferenceNumber( txt );
 
     cellEditor->DecRef();   // we're done; must release
+    delete loc;
 }
 
 
@@ -1085,15 +1167,6 @@ void DIALOG_SYMBOL_PROPERTIES::OnSizePinsGrid( wxSizeEvent& event )
 
     // Always propagate for a grid repaint (needed if the height changes, as well as width)
     event.Skip();
-}
-
-
-void DIALOG_SYMBOL_PROPERTIES::OnInitDlg( wxInitDialogEvent& event )
-{
-    TransferDataToWindow();
-
-    // Now all widgets have the size fixed, call FinishDialogSettings
-    finishDialogSettings();
 }
 
 

@@ -37,7 +37,10 @@
 #include <widgets/ui_common.h>
 #include <pgm_base.h>
 #include <drc/drc_item.h>
+#include <drc/drc_rule.h>
 #include <trigo.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 
 /// Factor to convert the maker unit shape to internal units:
@@ -71,6 +74,7 @@ PCB_MARKER::PCB_MARKER( std::shared_ptr<RC_ITEM> aItem, const VECTOR2I& aPositio
             case DRCE_EXTRA_FOOTPRINT:
             case DRCE_NET_CONFLICT:
             case DRCE_SCHEMATIC_PARITY:
+            case DRCE_SCHEMATIC_FIELDS_PARITY:
             case DRCE_FOOTPRINT_FILTERS:
                 SetMarkerType( MARKER_BASE::MARKER_PARITY );
                 break;

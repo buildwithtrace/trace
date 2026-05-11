@@ -17,6 +17,7 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <properties/property.h>
 #include <widgets/pcb_net_inspector_panel.h>
 #include <widgets/pcb_net_inspector_panel_data_model.h>
 
@@ -40,9 +41,11 @@
 
 #include <wx/wupdlock.h>
 #include <wx/filedlg.h>
+#include <kiplatform/ui.h>
 
 #include <algorithm>
 #include <thread_pool.h>
+#include <properties/property_mgr.h>
 
 PCB_NET_INSPECTOR_PANEL::PCB_NET_INSPECTOR_PANEL( wxWindow* parent, PCB_EDIT_FRAME* aFrame ) :
         NET_INSPECTOR_PANEL( parent, aFrame ),
@@ -275,6 +278,63 @@ void PCB_NET_INSPECTOR_PANEL::buildColumns()
 }
 
 
+int PCB_NET_INSPECTOR_PANEL::getMinColumnWidth( int aModelColumn ) const
+{
+    constexpr int margins = 15;
+    constexpr int extra_width = 30;
+
+    int headerWidth = GetTextExtent( m_columns[aModelColumn].display_name ).x;
+    headerWidth += ( aModelColumn == COLUMN_NAME ) ? extra_width : margins;
+
+    return headerWidth;
+}
+
+
+void PCB_NET_INSPECTOR_PANEL::autosizeColumn( wxDataViewColumn* aCol )
+{
+    if( !aCol || aCol->IsHidden() )
+        return;
+
+    const unsigned int modelCol = aCol->GetModelColumn();
+
+    if( modelCol >= m_columns.size() )
+        return;
+
+    constexpr int margins = 15;
+    constexpr int extra_width = 30;
+    const bool    isNameCol = ( modelCol == COLUMN_NAME );
+    const int     padding = isNameCol ? extra_width : margins;
+    const int     indent = m_netsList->GetIndent();
+
+    int maxWidth = getMinColumnWidth( modelCol );
+
+    for( unsigned int row = 0; row < m_dataModel->itemCount(); ++row )
+    {
+        wxVariant value = m_dataModel->valueAt( modelCol, row );
+        int       textWidth = GetTextExtent( value.GetString() ).x + padding;
+        maxWidth = std::max( maxWidth, textWidth );
+
+        const LIST_ITEM& item = m_dataModel->itemAt( row );
+
+        if( item.GetIsGroup() )
+        {
+            for( auto it = item.ChildrenBegin(); it != item.ChildrenEnd(); ++it )
+            {
+                wxVariant childValue = m_dataModel->valueForItem( *it, modelCol );
+                int       childWidth = GetTextExtent( childValue.GetString() ).x + padding;
+
+                if( isNameCol )
+                    childWidth += indent;
+
+                maxWidth = std::max( maxWidth, childWidth );
+            }
+        }
+    }
+
+    aCol->SetWidth( maxWidth );
+}
+
+
 void PCB_NET_INSPECTOR_PANEL::adjustListColumnSizes( PANEL_NET_INSPECTOR_SETTINGS* cfg ) const
 {
     wxWindowUpdateLocker locker( m_netsList );
@@ -323,9 +383,11 @@ void PCB_NET_INSPECTOR_PANEL::adjustListColumnSizes( PANEL_NET_INSPECTOR_SETTING
 
         for( size_t ii = 0; ii < m_columns.size(); ++ii )
         {
+            const int modelCol = static_cast<int>( m_netsList->GetColumn( ii )->GetModelColumn() );
+            const int minWidth = getMinColumnWidth( modelCol );
             const int newWidth = cfg->col_widths[ii];
-            // Make sure we end up with something non-zero so we can resize it
-            m_netsList->GetColumn( ii )->SetWidth( std::max( newWidth, 10 ) );
+
+            m_netsList->GetColumn( ii )->SetWidth( std::max( newWidth, minWidth ) );
             m_netsList->GetColumn( ii )->SetHidden( cfg->col_hidden[ii] );
         }
     }
@@ -1151,9 +1213,16 @@ void PCB_NET_INSPECTOR_PANEL::OnExpandCollapseRow( wxCommandEvent& event )
 }
 
 
-void PCB_NET_INSPECTOR_PANEL::OnHeaderContextMenu( wxCommandEvent& event )
+void PCB_NET_INSPECTOR_PANEL::OnHeaderContextMenu( wxDataViewEvent& event )
 {
+    m_contextMenuColumn = event.GetDataViewColumn();
+
     wxMenu menu;
+
+    menu.Append( ID_AUTOFIT_COLUMN, _( "Auto-fit Column" ) );
+    menu.Append( ID_AUTOFIT_ALL_COLUMNS, _( "Auto-fit All Columns" ) );
+    menu.AppendSeparator();
+
     generateShowHideColumnMenu( &menu );
     menu.Bind( wxEVT_COMMAND_MENU_SELECTED, &PCB_NET_INSPECTOR_PANEL::onContextMenuSelection, this );
     PopupMenu( &menu );
@@ -1355,6 +1424,20 @@ void PCB_NET_INSPECTOR_PANEL::onContextMenuSelection( wxCommandEvent& event )
         saveAndRebuild = false;
         break;
 
+    case ID_AUTOFIT_COLUMN:
+        if( m_contextMenuColumn )
+            autosizeColumn( m_contextMenuColumn );
+
+        saveAndRebuild = false;
+        break;
+
+    case ID_AUTOFIT_ALL_COLUMNS:
+        for( unsigned int i = 0; i < m_netsList->GetColumnCount(); ++i )
+            autosizeColumn( m_netsList->GetColumn( i ) );
+
+        saveAndRebuild = false;
+        break;
+
     default:
         if( event.GetId() >= ID_HIDE_COLUMN )
         {
@@ -1406,6 +1489,8 @@ void PCB_NET_INSPECTOR_PANEL::generateReport()
     wxFileDialog dlg( this, _( "Save Net Inspector Report File" ), "", "",
                       _( "Report file" ) + AddFileExtListToFilter( { "csv" } ),
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;

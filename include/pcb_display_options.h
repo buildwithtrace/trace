@@ -61,6 +61,7 @@ public:
     double             m_ZoneOpacity;      ///< Opacity override for filled zone areas
     double             m_ImageOpacity;     ///< Opacity override for user images
     double             m_FilledShapeOpacity;     ///< Opacity override for graphic shapes
+    bool               m_FlipBoardView = false;  ///< true if the board is flipped to show the mirrored view
 };
 
 #endif // PCBSTRUCT_H_

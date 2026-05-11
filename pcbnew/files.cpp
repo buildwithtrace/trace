@@ -5,6 +5,7 @@
  * Copyright (C) 2011 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright (C) 2023 CERN (www.cern.ch)
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,13 +28,15 @@
 #include <string>
 #include <vector>
 
+#include <advanced_config.h>
 #include <confirm.h>
 #include <kidialog.h>
 #include <core/arraydim.h>
+#include <core/profile.h>
 #include <thread_pool.h>
-#include <dialog_HTML_reporter_base.h>
 #include <gestfich.h>
 #include <local_history.h>
+#include <amplitude_client.h>
 #include <pcb_edit_frame.h>
 #include <board_design_settings.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
@@ -49,7 +52,10 @@
 #include <wildcards_and_files_ext.h>
 #include <tool/tool_manager.h>
 #include <board.h>
+#include <collectors.h>
+#include <component_classes/component_class_manager.h>
 #include <kiplatform/app.h>
+#include <kiplatform/ui.h>
 #include <widgets/appearance_controls.h>
 #include <widgets/wx_infobar.h>
 #include <widgets/wx_progress_reporters.h>
@@ -71,13 +77,21 @@
 #include <dialogs/dialog_import_choose_project.h>
 #include <tools/pcb_actions.h>
 #include <tools/board_editor_control.h>
-#include "footprint_info_impl.h"
 #include <board_commit.h>
+#include <reporter.h>
 #include <zone_filler.h>
 #include <widgets/filedlg_import_non_kicad.h>
+#include <widgets/kistatusbar.h>
 #include <widgets/wx_html_report_box.h>
 #include <wx_filename.h>  // For ::ResolvePossibleSymlinks()
 #include <kiplatform/io.h>
+#include <board_item.h>
+#include <board_connected_item.h>
+#include <footprint.h>
+#include <pad.h>
+#include <undo_redo_container.h>
+#include <wx/file.h>
+#include <wx/log.h>
 
 #include <wx/stdpaths.h>
 #include <wx/ffile.h>
@@ -91,6 +105,8 @@
 
 //#define     USE_INSTRUMENTATION     1
 #define     USE_INSTRUMENTATION     0
+
+static const wxChar* const traceAllegroPerf = wxT( "KICAD_ALLEGRO_PERF" );
 
 
 /**
@@ -188,6 +204,8 @@ bool AskLoadBoardFileName( PCB_EDIT_FRAME* aParent, wxString* aFileName, int aCt
     if( !kicadFormat )
         dlg.SetCustomizeHook( importOptions );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_OK )
     {
         *aFileName = dlg.GetPath();
@@ -230,6 +248,8 @@ bool AskSaveBoardFileName( PCB_EDIT_FRAME* aParent, wxString* aFileName, bool* a
     if( Kiface().IsSingle() && aParent->Prj().IsNullProject() )
         dlg.SetCustomizeHook( newProjectHook );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() != wxID_OK )
         return false;
 
@@ -247,17 +267,17 @@ bool AskSaveBoardFileName( PCB_EDIT_FRAME* aParent, wxString* aFileName, bool* a
 
 void PCB_EDIT_FRAME::OnFileHistory( wxCommandEvent& event )
 {
-    wxString fn = GetFileFromHistory( event.GetId(), _( "Printed circuit board" ) );
+    wxString filename = GetFileFromHistory( event.GetId(), _( "Printed circuit board" ) );
 
-    if( !!fn )
+    if( !filename.IsEmpty() )
     {
-        if( !wxFileName::IsFileReadable( fn ) )
+        if( !wxFileName::IsFileReadable( filename ) )
         {
-            if( !AskLoadBoardFileName( this, &fn, KICTL_KICAD_ONLY ) )
+            if( !AskLoadBoardFileName( this, &filename, KICTL_KICAD_ONLY ) )
                 return;
         }
 
-        OpenProjectFiles( std::vector<wxString>( 1, fn ), KICTL_KICAD_ONLY );
+        OpenProjectFiles( std::vector<wxString>( 1, filename ), KICTL_KICAD_ONLY );
     }
 }
 
@@ -361,6 +381,9 @@ int BOARD_EDITOR_CONTROL::New( const TOOL_EVENT& aEvent )
 
 bool PCB_EDIT_FRAME::SaveBoard( bool aSaveAs, bool aSaveCopy )
 {
+    wxLogTrace( traceFileSave, wxT( "SaveBoard: START aSaveAs=%d, aSaveCopy=%d, file=%s" ),
+                aSaveAs, aSaveCopy, GetBoard()->GetFileName() );
+
     if( !aSaveAs )
     {
         if( !GetBoard()->GetFileName().IsEmpty() )
@@ -368,9 +391,11 @@ bool PCB_EDIT_FRAME::SaveBoard( bool aSaveAs, bool aSaveCopy )
             if( SavePcbFile( Prj().AbsolutePath( GetBoard()->GetFileName() ) ) )
             {
                 m_autoSaveRequired = false;
+                wxLogTrace( traceFileSave, wxT( "SaveBoard: SUCCESS" ) );
                 return true;
             }
 
+            wxLogTrace( traceFileSave, wxT( "SaveBoard: FAILED" ) );
             return false;
         }
     }
@@ -412,6 +437,7 @@ bool PCB_EDIT_FRAME::SaveBoard( bool aSaveAs, bool aSaveCopy )
         }
     }
 
+    wxLogTrace( traceFileSave, wxT( "SaveBoard: END success=%d" ), success );
     return success;
 }
 
@@ -461,16 +487,27 @@ int PCB_EDIT_FRAME::inferLegacyEdgeClearance( BOARD* aBoard, bool aShowUserMsg )
 
 bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl )
 {
+    wxLogTrace( traceFileSave, wxT( "OpenProjectFiles: START file=%s" ),
+                aFileSet.empty() ? wxString( wxT( "(empty)" ) ) : aFileSet[0] );
+
     // This is for python:
     if( aFileSet.size() != 1 )
     {
-        UTF8 msg = StrPrintf( "Pcbnew:%s() takes a single filename", __func__ );
-        DisplayError( this, msg );
+        DisplayError( this, wxString::Format( "Pcbnew:%s() takes a single filename", __func__ ) );
         return false;
     }
 
     wxString   fullFileName( aFileSet[0] );
     wxFileName wx_filename( fullFileName );
+    
+    // Convert trace_pcb files to kicad_pcb before processing
+    if( wx_filename.GetExt() == FILEEXT::TracePcbFileExtension )
+    {
+        wx_filename.SetExt( FILEEXT::KiCadPcbFileExtension );
+        fullFileName = wx_filename.GetFullPath();
+        wx_filename = wxFileName( fullFileName );
+    }
+    
     Kiway().LocalHistory().Init( wx_filename.GetPath() );
     wxString   msg;
 
@@ -494,15 +531,23 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     if( !lock->Valid() )
     {
-        msg.Printf( _( "PCB '%s' is already open by '%s' at '%s'." ),
-                    wx_filename.GetFullName(),
-                    lock->GetUsername(),
-                    lock->GetHostname() );
+        // If project-level lock override was already granted, silently override this file's lock
+        if( Prj().IsLockOverrideGranted() )
+        {
+            lock->OverrideLock();
+        }
+        else
+        {
+            msg.Printf( _( "PCB '%s' is already open by '%s' at '%s'." ),
+                        wx_filename.GetFullName(),
+                        lock->GetUsername(),
+                        lock->GetHostname() );
 
-        if( !AskOverrideLock( this, msg ) )
-            return false;
+            if( !AskOverrideLock( this, msg ) )
+                return false;
 
-        lock->OverrideLock();
+            lock->OverrideLock();
+        }
     }
 
     if( IsContentModified() )
@@ -537,8 +582,13 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
     // Get rid of any existing warnings about the old board
     GetInfoBar()->Dismiss();
 
+    if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
+        statusBar->ClearLoadWarningMessages();
+
     WX_PROGRESS_REPORTER progressReporter( this, is_new ? _( "Create PCB" ) : _( "Load PCB" ), 1,
                                            PR_CAN_ABORT );
+    WX_STRING_REPORTER loadReporter;
+    LOAD_INFO_REPORTER_SCOPE loadReporterScope( &loadReporter );
 
     // No save prompt (we already prompted above), and only reset to a new blank board if new
     Clear_Pcb( false, !is_new );
@@ -587,9 +637,6 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         Prj().SetReadOnly( !pro.Exists() && !converted );
     }
 
-    // Clear the cache footprint list which may be project specific
-    GFootprintList.Clear();
-
     if( is_new )
     {
         // Link the existing blank board to the new project
@@ -606,8 +653,11 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
         if( LAYER_MAPPABLE_PLUGIN* mappable_pi = dynamic_cast<LAYER_MAPPABLE_PLUGIN*>( pi.get() ) )
         {
-            mappable_pi->RegisterCallback( std::bind( DIALOG_MAP_LAYERS::RunModal,
-                                                      this, std::placeholders::_1 ) );
+            if( !ADVANCED_CFG::GetCfg().m_ImportSkipLayerMapping )
+            {
+                mappable_pi->RegisterCallback( std::bind( DIALOG_MAP_LAYERS::RunModal,
+                                                          this, std::placeholders::_1 ) );
+            }
         }
 
         if( PROJECT_CHOOSER_PLUGIN* chooser_pi = dynamic_cast<PROJECT_CHOOSER_PLUGIN*>( pi.get() ) )
@@ -617,7 +667,6 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                                                      std::placeholders::_1 ) );
         }
 
-        DIALOG_HTML_REPORTER errorReporter( this );
         bool failedLoad = false;
 
         try
@@ -654,8 +703,10 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
             // measure the time to load a BOARD.
             int64_t startTime = GetRunningMicroSecs();
 #endif
+            // Use loadReporter for import issues - they will be shown in the status bar
+            // warning icon instead of a modal dialog
             if( config()->m_System.show_import_issues )
-                pi->SetReporter( errorReporter.m_Reporter );
+                pi->SetReporter( &loadReporter );
             else
                 pi->SetReporter( &NULL_REPORTER::GetInstance() );
 
@@ -700,6 +751,10 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
             // We didn't create a new blank board above, so do that now
             Clear_Pcb( false );
 
+            // Show any messages collected before the failure
+            if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
+                statusBar->SetLoadWarningMessages( loadReporter.GetMessages() );
+
             return false;
         }
 
@@ -708,17 +763,15 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         // compiled.
         Raise();
 
-        if( errorReporter.m_Reporter->HasMessage() )
-        {
-            errorReporter.m_Reporter->Flush(); // Build HTML messages
-            errorReporter.ShowModal();
-        }
-
         // Skip (possibly expensive) connectivity build here; we build it below after load
-        SetBoard( loadedBoard, false, &progressReporter );
+        progressReporter.AddPhases( 1 );
+        progressReporter.AdvancePhase( _( "Finalizing board" ) );
+        progressReporter.KeepRefreshing();
 
-        if( GFootprintList.GetCount() == 0 )
-            GFootprintList.ReadCacheFromFile( Prj().GetProjectPath() + wxT( "fp-info-cache" ) );
+        PROF_TIMER postLoadTimer;
+        SetBoard( loadedBoard, false, &progressReporter );
+        wxLogTrace( traceAllegroPerf, wxT( "Post-load SetBoard: %.3f ms" ),
+                    postLoadTimer.msecs( true ) );
 
         if( loadedBoard->m_LegacyDesignSettingsLoaded )
         {
@@ -763,8 +816,22 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
         // we should not ask PCB_IOs to do these items:
         loadedBoard->BuildListOfNets();
+        wxLogTrace( traceAllegroPerf, wxT( "Post-load BuildListOfNets: %.3f ms" ),
+                    postLoadTimer.msecs( true ) );
+
+        progressReporter.KeepRefreshing();
+
         m_toolManager->RunAction( PCB_ACTIONS::repairBoard, true);
+        wxLogTrace( traceAllegroPerf, wxT( "Post-load repairBoard: %.3f ms" ),
+                    postLoadTimer.msecs( true ) );
+
+        progressReporter.KeepRefreshing();
+
         m_toolManager->RunAction( PCB_ACTIONS::rehatchShapes );
+        wxLogTrace( traceAllegroPerf, wxT( "Post-load rehatchShapes: %.3f ms" ),
+                    postLoadTimer.msecs( true ) );
+
+        progressReporter.KeepRefreshing();
 
         if( loadedBoard->IsModified() )
             OnModify();
@@ -906,11 +973,16 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
     std::vector<ZONE*> toFill;
 
     // Rebuild list of nets (full ratsnest rebuild)
+    PROF_TIMER connectivityTimer;
     GetBoard()->BuildConnectivity( &progressReporter );
+    wxLogTrace( traceAllegroPerf, wxT( "Post-load BuildConnectivity: %.3f ms" ),
+                connectivityTimer.msecs( true ) );
 
     // Load project settings after setting up board; some of them depend on the nets list
     LoadProjectSettings();
     LoadDrawingSheet();
+    wxLogTrace( traceAllegroPerf, wxT( "Post-load LoadProjectSettings+DrawingSheet: %.3f ms" ),
+                connectivityTimer.msecs( true ) );
 
     // Resolve DRC exclusions after project settings are loaded
     ResolveDRCExclusions( true );
@@ -920,9 +992,15 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 
     // Initialise time domain tuning caches
     GetBoard()->GetLengthCalculation()->SynchronizeTuningProfileProperties();
+    wxLogTrace( traceAllegroPerf, wxT( "Post-load DRC+ComponentClass+Tuning caches: %.3f ms" ),
+                connectivityTimer.msecs( true ) );
 
     // Syncs the UI (appearance panel, etc) with the loaded board and project
     OnBoardLoaded();
+    wxLogTrace( traceAllegroPerf, wxT( "Post-load OnBoardLoaded: %.3f ms" ),
+                connectivityTimer.msecs( true ) );
+    wxLogTrace( traceAllegroPerf, wxT( "=== Post-load pipeline total: %.3f ms ===" ),
+                connectivityTimer.msecs() );
 
     // Refresh the 3D view, if any
     EDA_3D_VIEWER_FRAME* draw3DFrame = Get3DViewerFrame();
@@ -948,6 +1026,19 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         GetCanvas()->SetFocus();
     }
 
+    if( !setProject )
+    {
+        // If we didn't reload the project, we still need to call ProjectChanged() to ensure
+        // frame-specific initialization happens (like registering the autosave saver).
+        // When running under the project manager, KIWAY::ProjectChanged() was called before
+        // this frame existed, so we need to call our own ProjectChanged() now.
+        ProjectChanged();
+    }
+
+    if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
+        statusBar->SetLoadWarningMessages( loadReporter.GetMessages() );
+
+    wxLogTrace( traceFileSave, wxT( "OpenProjectFiles: SUCCESS" ) );
     return true;
 }
 
@@ -955,6 +1046,8 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
 bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
                                   bool aChangeProject )
 {
+    wxLogTrace( traceFileSave, wxT( "SavePcbFile: START file=%s" ), aFileName );
+
     // please, keep it simple.  prompting goes elsewhere.
     wxFileName pcbFileName = aFileName;
 
@@ -966,6 +1059,7 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
 
     if( !IsWritable( pcbFileName ) )
     {
+        wxLogTrace( traceFileSave, wxT( "SavePcbFile: FAILED - not writable" ) );
         wxString msg = wxString::Format( _( "Insufficient permissions to write file '%s'." ),
                                          pcbFileName.GetFullPath() );
 
@@ -1004,8 +1098,6 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
 
     if( projectFile.FileExists() )
     {
-        // Save various DRC parameters, such as violation severities (which may have been
-        // edited via the DRC dialog as well as the Board Setup dialog), DRC exclusions, etc.
         saveProjectSettings();
 
         GetBoard()->SynchronizeProperties();
@@ -1015,14 +1107,21 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
     wxString   upperTxt;
     wxString   lowerTxt;
 
+    // On Windows, ensure the target file is writeable by clearing problematic attributes like
+    // hidden or read-only. This can happen when files are synced via cloud services.
+    if( pcbFileName.FileExists() )
+        KIPLATFORM::IO::MakeWriteable( pcbFileName.GetFullPath() );
+
     try
     {
         IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::KICAD_SEXP ) );
 
+        wxLogTrace( traceFileSave, wxT( "SavePcbFile: calling pi->SaveBoard" ) );
         pi->SaveBoard( pcbFileName.GetFullPath(), GetBoard(), nullptr );
     }
     catch( const IO_ERROR& ioe )
     {
+        wxLogTrace( traceFileSave, wxT( "SavePcbFile: IO_ERROR - %s" ), ioe.What() );
         DisplayError( this, wxString::Format( _( "Error saving board file '%s'.\n%s" ),
                                               pcbFileName.GetFullPath(),
                                               ioe.What() ) );
@@ -1064,15 +1163,28 @@ bool PCB_EDIT_FRAME::SavePcbFile( const wxString& aFileName, bool addToHistory,
     UpdateTitle();
     UpdateStatusBar();
 
+    AMPLITUDE_CLIENT::Instance().Track( "pcb_saved", {
+        { "app_type", "pcbnew" },
+    } );
+
     // Capture entire project state for PCB save events.
     Kiway().LocalHistory().CommitFullProjectSnapshot( pcbFileName.GetPath(), wxS( "PCB Save" ) );
     Kiway().LocalHistory().TagSave( pcbFileName.GetPath(), wxS( "pcb" ) );
+
+    // Convert to trace_pcb format if this is a .kicad_pcb file
+    if( pcbFileName.GetExt() == FILEEXT::KiCadPcbFileExtension )
+    {
+        wxLogTrace( traceFileSave, wxT( "SavePcbFile: converting to trace_pcb format" ) );
+        ConvertKicadPcbToTracePcb( pcbFileName.GetFullPath() );
+    }
 
     if( m_autoSaveTimer )
         m_autoSaveTimer->Stop();
 
     m_autoSavePending = false;
     m_autoSaveRequired = false;
+
+    wxLogTrace( traceFileSave, wxT( "SavePcbFile: SUCCESS" ) );
     return true;
 }
 
@@ -1096,6 +1208,11 @@ bool PCB_EDIT_FRAME::SavePcbCopy( const wxString& aFileName, bool aCreateProject
     SaveProjectLocalSettings();
 
     GetBoard()->SynchronizeNetsAndNetClasses( false );
+
+    // On Windows, ensure the target file is writeable by clearing problematic attributes like
+    // hidden or read-only. This can happen when files are synced via cloud services.
+    if( pcbFileName.FileExists() )
+        KIPLATFORM::IO::MakeWriteable( pcbFileName.GetFullPath() );
 
     try
     {
@@ -1155,12 +1272,14 @@ bool PCB_EDIT_FRAME::importFile( const wxString& aFileName, int aFileType,
     case PCB_IO_MGR::EAGLE:
     case PCB_IO_MGR::EASYEDA:
     case PCB_IO_MGR::EASYEDAPRO:
+    case PCB_IO_MGR::GEDA_PCB:
         return OpenProjectFiles( std::vector<wxString>( 1, aFileName ), KICTL_NONKICAD_ONLY | KICTL_IMPORT_LIB );
 
     case PCB_IO_MGR::ALTIUM_DESIGNER:
     case PCB_IO_MGR::ALTIUM_CIRCUIT_MAKER:
     case PCB_IO_MGR::ALTIUM_CIRCUIT_STUDIO:
     case PCB_IO_MGR::SOLIDWORKS_PCB:
+    case PCB_IO_MGR::PADS:
         return OpenProjectFiles( std::vector<wxString>( 1, aFileName ), KICTL_NONKICAD_ONLY );
 
     default:
@@ -1205,4 +1324,510 @@ int BOARD_EDITOR_CONTROL::GenerateODBPPFiles( const TOOL_EVENT& aEvent )
         DisplayError( m_frame, reporter.GetMessages() );
 
     return 0;
+}
+
+
+bool PCB_EDIT_FRAME::ReloadBoardFromFile( const wxString& aFileName )
+{
+    wxString msg;
+    wxString fullFileName = aFileName;
+    wxFileName wx_filename( fullFileName );
+
+    if( !wx_filename.IsAbsolute() )
+    {
+        wx_filename.MakeAbsolute();
+        fullFileName = wx_filename.GetFullPath();
+    }
+
+    if( !wxFileName::IsFileReadable( fullFileName ) )
+    {
+        msg.Printf( _( "Board file '%s' does not exist or is not readable." ), fullFileName );
+        DisplayErrorMessage( this, msg );
+        return false;
+    }
+
+    // Capture edit state (selection, viewport, zoom) before reload
+    PcbEditState savedState = CaptureEditState();
+
+    wxCommandEvent changingEvt( EDA_EVT_BOARD_CHANGING );
+    ProcessEventLocally( changingEvt );
+
+    GetScreen()->SetContentModified( false );
+
+    // Load the board directly via IO plugin — no lock file acquisition, no project
+    // reload, no dialogs.  We already hold the lock via m_file_checker.
+    IO_RELEASER<PCB_IO> pi( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::KICAD_SEXP ) );
+    pi->SetReporter( &NULL_REPORTER::GetInstance() );
+
+    BOARD* loadedBoard = nullptr;
+
+    try
+    {
+        loadedBoard = pi->LoadBoard( fullFileName, nullptr, nullptr, &Prj() );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxLogDebug( wxT( "AI DEBUG [ReloadBoardFromFile]: Load failed: %s" ), ioe.What() );
+        return false;
+    }
+    catch( const std::bad_alloc& )
+    {
+        wxLogDebug( wxT( "AI DEBUG [ReloadBoardFromFile]: Memory exhausted" ) );
+        return false;
+    }
+
+    if( !loadedBoard )
+        return false;
+
+    // Swap in the new board (skip connectivity build — we do it below)
+    SetBoard( loadedBoard, false );
+
+    loadedBoard->BuildListOfNets();
+    loadedBoard->SynchronizeComponentClasses( std::unordered_set<wxString>() );
+
+    m_toolManager->RunAction( PCB_ACTIONS::repairBoard, true );
+    m_toolManager->RunAction( PCB_ACTIONS::rehatchShapes );
+
+    GetBoard()->BuildConnectivity();
+    GetBoard()->GetComponentClassManager().RebuildRequiredCaches();
+    GetBoard()->InitializeClearanceCache();
+    GetBoard()->GetLengthCalculation()->SynchronizeTuningProfileProperties();
+
+    // Sync UI (appearance panel, layers, DRC engine, etc.)
+    OnBoardLoaded();
+
+    // Restore selection, viewport and zoom from before the reload
+    RestoreEditState( savedState );
+
+    wxCommandEvent changedEvt( EDA_EVT_BOARD_CHANGED );
+    ProcessEventLocally( changedEvt );
+
+    GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
+    GetCanvas()->Refresh();
+
+    EDA_3D_VIEWER_FRAME* viewer3D = Get3DViewerFrame();
+
+    if( viewer3D )
+        viewer3D->ReloadRequest();
+
+    return true;
+}
+
+
+bool PCB_EDIT_FRAME::CaptureBoardStateForAIEdit( const wxString& aTracePcbPath )
+{
+    // Clear any previous state
+    m_aiEditBeforeState.clear();
+    m_aiEditPadNets.clear();
+    m_aiEditTracePcbBackupPath.Clear();
+
+    BOARD* board = GetBoard();
+    if( !board )
+        return false;
+
+    // Create backup of trace_pcb file
+    wxFileName traceFile( aTracePcbPath );
+    if( traceFile.FileExists() )
+    {
+        wxString backupPath = aTracePcbPath + wxT( ".ai_backup" );
+        if( wxCopyFile( aTracePcbPath, backupPath, true ) )
+        {
+            m_aiEditTracePcbBackupPath = backupPath;
+        }
+        else
+        {
+            wxLogWarning( wxT( "Failed to create backup of trace_pcb file: %s" ), aTracePcbPath );
+            // Continue anyway - backup is for safety, not critical
+        }
+    }
+
+    try
+    {
+        BOARD_ITEM_SET itemSet = board->GetItemSet();
+
+        for( BOARD_ITEM* item : itemSet )
+        {
+            if( !item )
+                continue;
+
+            BOARD_ITEM* itemCopy = static_cast<BOARD_ITEM*>( item->Clone() );
+            if( itemCopy )
+            {
+                itemCopy->SetFlags( UR_TRANSIENT );
+                m_aiEditBeforeState[item->m_Uuid] = std::unique_ptr<BOARD_ITEM>( itemCopy );
+            }
+
+            if( item->Type() == PCB_FOOTPRINT_T )
+            {
+                FOOTPRINT* fp = static_cast<FOOTPRINT*>( item );
+                for( PAD* pad : fp->Pads() )
+                {
+                    if( pad->GetNet() )
+                        m_aiEditPadNets[pad->m_Uuid] = pad->GetNet()->GetNetname();
+                }
+            }
+            else if( auto* ci = dynamic_cast<BOARD_CONNECTED_ITEM*>( item ) )
+            {
+                if( ci->GetNet() )
+                    m_aiEditPadNets[ci->m_Uuid] = ci->GetNet()->GetNetname();
+            }
+        }
+    }
+    catch( ... )
+    {
+        m_aiEditBeforeState.clear();
+        m_aiEditPadNets.clear();
+        return false;
+    }
+
+    return true;
+}
+
+
+static void remapNetsToBoard( BOARD_ITEM* aItem, BOARD* aBoard,
+                              const std::map<KIID, wxString>& aPadNets )
+{
+    if( !aItem || !aBoard )
+        return;
+
+    try
+    {
+        auto remapConnected = [&]( BOARD_CONNECTED_ITEM* ci )
+        {
+            auto it = aPadNets.find( ci->m_Uuid );
+            if( it != aPadNets.end() && !it->second.IsEmpty() )
+            {
+                NETINFO_ITEM* newNet = aBoard->FindNet( it->second );
+                ci->SetNet( newNet ? newNet : aBoard->FindNet( 0 ) );
+            }
+            else
+            {
+                ci->SetNet( aBoard->FindNet( 0 ) );
+            }
+        };
+
+        if( aItem->Type() == PCB_FOOTPRINT_T )
+        {
+            FOOTPRINT* fp = static_cast<FOOTPRINT*>( aItem );
+
+            for( PAD* pad : fp->Pads() )
+                remapConnected( pad );
+        }
+        else if( auto* ci = dynamic_cast<BOARD_CONNECTED_ITEM*>( aItem ) )
+        {
+            remapConnected( ci );
+        }
+    }
+    catch( ... )
+    {
+    }
+}
+
+
+bool PCB_EDIT_FRAME::CompareAndCreateAIEditUndoEntries()
+{
+    if( m_aiEditBeforeState.empty() )
+    {
+        // No before state captured, nothing to compare
+        return false;
+    }
+
+    BOARD* board = GetBoard();
+    if( !board )
+    {
+        // Clear state and return
+        m_aiEditBeforeState.clear();
+        m_aiEditTracePcbBackupPath.Clear();
+        return false;
+    }
+
+    // Build map of current items by UUID
+    std::map<KIID, BOARD_ITEM*> currentState;
+    BOARD_ITEM_SET itemSet = board->GetItemSet();
+    
+    for( BOARD_ITEM* item : itemSet )
+    {
+        if( !item )
+            continue;
+
+        currentState[item->m_Uuid] = item;
+    }
+
+    // Create a PICKED_ITEMS_LIST for this undo entry
+    PICKED_ITEMS_LIST* undoList = new PICKED_ITEMS_LIST();
+    undoList->SetDescription( _( "AI Edit" ) );
+
+    bool hasChanges = false;
+
+    // Find deleted items (in old but not new)
+    for( auto& [uuid, oldItemCopy] : m_aiEditBeforeState )
+    {
+        if( currentState.find( uuid ) == currentState.end() )
+        {
+            if( oldItemCopy )
+            {
+                EDA_ITEM_FLAGS savedFlags = oldItemCopy->GetFlags();
+                BOARD_ITEM* restoredItem = oldItemCopy.release();
+                if( restoredItem )
+                {
+                    remapNetsToBoard( restoredItem, board, m_aiEditPadNets );
+                    restoredItem->SetParent( board );
+                    restoredItem->SetFlags( UR_TRANSIENT );
+                    ITEM_PICKER picker( nullptr, restoredItem, UNDO_REDO::DELETED );
+                    picker.SetFlags( savedFlags );
+                    undoList->PushItem( picker );
+                    hasChanges = true;
+                }
+            }
+        }
+    }
+
+    int compIdx = 0;
+    // Find new items (in new but not old) and changed items (in both but different)
+    for( const auto& pair : currentState )
+    {
+        const KIID& uuid = pair.first;
+        BOARD_ITEM* newItem = pair.second;
+
+        auto oldIt = m_aiEditBeforeState.find( uuid );
+        if( oldIt == m_aiEditBeforeState.end() )
+        {
+            ITEM_PICKER picker( nullptr, newItem, UNDO_REDO::NEWITEM );
+            picker.SetFlags( newItem->GetFlags() );
+            undoList->PushItem( picker );
+            hasChanges = true;
+        }
+        else
+        {
+            BOARD_ITEM* oldItem = oldIt->second.get();
+
+            if( !oldItem )
+                continue;
+
+            bool isDifferent = false;
+
+            if( oldItem->Type() != newItem->Type() )
+            {
+                isDifferent = true;
+            }
+            else
+            {
+                try
+                {
+                    isDifferent = !( *oldItem == *newItem );
+                }
+                catch( ... )
+                {
+                    isDifferent = true;
+                }
+            }
+
+            compIdx++;
+
+            if( isDifferent )
+            {
+                EDA_ITEM* link = BOARD_COMMIT::MakeImage( newItem );
+
+                if( link && link->IsBOARD_ITEM() )
+                {
+                    BOARD_ITEM* linkBI = static_cast<BOARD_ITEM*>( link );
+                    BOARD_ITEM* oldClone = oldIt->second.get();
+
+                    if( oldClone && oldClone->Type() == newItem->Type() )
+                    {
+                        // Both objects must have null parents during the swap to prevent
+                        // FOOTPRINT's move assignment from calling GetBoard()->UncacheItemById()
+                        // on children whose UUIDs match live board items.
+                        EDA_ITEM* savedLinkParent = linkBI->GetParent();
+                        linkBI->SetParent( nullptr );
+                        oldClone->SetParent( nullptr );
+
+                        linkBI->SwapItemData( oldClone );
+
+                        // SwapItemData restores linkBI's parent to the saved value (nullptr),
+                        // so we need to explicitly set it to the correct board.
+                        linkBI->SetParent( savedLinkParent );
+                        oldClone->SetParent( nullptr );
+                        remapNetsToBoard( linkBI, board, m_aiEditPadNets );
+                    }
+                }
+
+                if( link )
+                {
+                    ITEM_PICKER picker( nullptr, newItem, UNDO_REDO::CHANGED );
+                    picker.SetLink( link );
+                    undoList->PushItem( picker );
+                    hasChanges = true;
+                }
+            }
+        }
+    }
+
+    // Save the undo list if there are changes
+    if( hasChanges && undoList->GetCount() > 0 )
+    {
+        SaveCopyInUndoList( *undoList, UNDO_REDO::UNSPECIFIED );
+    }
+    else
+    {
+        delete undoList;
+    }
+
+    // Null out stale parents on remaining clones before destruction to prevent
+    // their destructors from chasing freed parent pointers (use-after-free).
+    for( auto& [uuid, clone] : m_aiEditBeforeState )
+    {
+        if( clone )
+            clone->SetParent( nullptr );
+    }
+
+    // Clean up state and backup file
+    m_aiEditBeforeState.clear();
+    m_aiEditPadNets.clear();
+    if( !m_aiEditTracePcbBackupPath.IsEmpty() && wxFile::Exists( m_aiEditTracePcbBackupPath ) )
+    {
+        wxRemoveFile( m_aiEditTracePcbBackupPath );
+    }
+    m_aiEditTracePcbBackupPath.Clear();
+
+    return hasChanges;
+}
+
+
+void PCB_EDIT_FRAME::CaptureNetPointersBeforeReload()
+{
+    BOARD* board = GetBoard();
+    if( !board )
+        return;
+
+    for( NETINFO_ITEM* ni : board->GetNetInfo() )
+    {
+        if( ni )
+            m_oldNetPtrToName[reinterpret_cast<uintptr_t>( ni )] = ni->GetNetname();
+    }
+}
+
+
+void PCB_EDIT_FRAME::RemapUndoRedoAfterReload()
+{
+    BOARD* board = GetBoard();
+
+    if( !board )
+        return;
+
+    std::map<KIID, BOARD_ITEM*> uuidMap;
+
+    try
+    {
+        const BOARD_ITEM_SET items = board->GetItemSet();
+
+        for( BOARD_ITEM* item : items )
+        {
+            if( item )
+                uuidMap[item->m_Uuid] = item;
+        }
+    }
+    catch( ... )
+    {
+        return;
+    }
+
+    auto remapItemNets = [&]( BOARD_ITEM* aItem )
+    {
+        if( !aItem )
+            return;
+
+        try
+        {
+            auto fixConnected = [&]( BOARD_CONNECTED_ITEM* ci )
+            {
+                uintptr_t oldPtr = reinterpret_cast<uintptr_t>( ci->GetNet() );
+                auto nameIt = m_oldNetPtrToName.find( oldPtr );
+
+                if( nameIt != m_oldNetPtrToName.end() && !nameIt->second.IsEmpty() )
+                {
+                    NETINFO_ITEM* newNet = board->FindNet( nameIt->second );
+                    ci->SetNet( newNet ? newNet : board->FindNet( 0 ) );
+                }
+                else
+                {
+                    ci->SetNet( board->FindNet( 0 ) );
+                }
+            };
+
+            if( aItem->Type() == PCB_FOOTPRINT_T )
+            {
+                FOOTPRINT* fp = static_cast<FOOTPRINT*>( aItem );
+                for( PAD* pad : fp->Pads() )
+                    fixConnected( pad );
+            }
+            else if( auto* ci = dynamic_cast<BOARD_CONNECTED_ITEM*>( aItem ) )
+            {
+                fixConnected( ci );
+            }
+        }
+        catch( ... )
+        {
+        }
+    };
+
+    auto remapList = [&]( UNDO_REDO_CONTAINER& aContainer )
+    {
+        for( int ci = static_cast<int>( aContainer.m_CommandsList.size() ) - 1; ci >= 0; --ci )
+        {
+            PICKED_ITEMS_LIST* cmd = aContainer.m_CommandsList[ci];
+            if( !cmd )
+                continue;
+
+            bool anyValid = false;
+
+            for( unsigned pi = 0; pi < cmd->GetCount(); ++pi )
+            {
+                UNDO_REDO status = cmd->GetPickedItemStatus( pi );
+                EDA_ITEM* item   = cmd->GetPickedItem( pi );
+
+                if( !item )
+                    continue;
+
+                if( status == UNDO_REDO::DELETED )
+                {
+                    if( item->IsBOARD_ITEM() )
+                    {
+                        static_cast<BOARD_ITEM*>( item )->SetParent( board );
+                        remapItemNets( static_cast<BOARD_ITEM*>( item ) );
+                    }
+                    anyValid = true;
+                    continue;
+                }
+
+                auto it = uuidMap.find( item->m_Uuid );
+
+                if( it != uuidMap.end() )
+                {
+                    cmd->SetPickedItem( it->second, pi );
+                    anyValid = true;
+                }
+
+                EDA_ITEM* link = cmd->GetPickedItemLink( pi );
+                if( link && link->IsBOARD_ITEM() )
+                {
+                    BOARD_ITEM* linkBI = static_cast<BOARD_ITEM*>( link );
+                    linkBI->SetParent( board );
+                    remapItemNets( linkBI );
+                }
+            }
+
+            if( !anyValid )
+            {
+                cmd->ClearListAndDeleteItems( []( EDA_ITEM* aItem ) { delete aItem; } );
+                delete cmd;
+                aContainer.m_CommandsList.erase( aContainer.m_CommandsList.begin() + ci );
+            }
+        }
+    };
+
+    remapList( m_undoList );
+    remapList( m_redoList );
+
+    m_oldNetPtrToName.clear();
 }

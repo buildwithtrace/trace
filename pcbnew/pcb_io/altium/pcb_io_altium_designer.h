@@ -31,8 +31,18 @@
 
 #include <map>
 #include <memory>
+#include <vector>
 
 class ALTIUM_PCB_COMPOUND_FILE;
+class BOARD;
+struct ALTIUM_PROJECT_VARIANT;
+
+/**
+ * Apply parsed Altium project variants to a board by setting FOOTPRINT_VARIANT
+ * data on each footprint whose reference matches a variant entry.
+ */
+void ApplyAltiumProjectVariantsToBoard( BOARD* aBoard,
+                                        const std::vector<ALTIUM_PROJECT_VARIANT>& aVariants );
 
 
 class PCB_IO_ALTIUM_DESIGNER : public PCB_IO, public LAYER_MAPPABLE_PLUGIN

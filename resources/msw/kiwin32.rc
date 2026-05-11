@@ -65,8 +65,8 @@ MANIFEST_ID RT_MANIFEST MANIFEST_FILE
 #endif
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION KICAD_WIN32_RC_FILEVER
-PRODUCTVERSION KICAD_WIN32_RC_PRODVER
+FILEVERSION TRACE_WIN32_RC_FILEVER
+PRODUCTVERSION TRACE_WIN32_RC_PRODVER
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS (VER_DEBUG)
 FILEOS VOS__WINDOWS32
@@ -79,15 +79,15 @@ BEGIN
         BEGIN
             // this gets displayed in the windows 10 task manager
             VALUE "FileDescription", RC_VER_FILE_DESCRIPTION
-            VALUE "FileVersion", KICAD_WIN32_RC_FILEVER_STR
+            VALUE "FileVersion", TRACE_WIN32_RC_FILEVER_STR
             //original filename without extension
             VALUE "InternalName", RC_VER_INTERNALNAME
-            VALUE "LegalCopyright", "Copyright (C) 2024 KiCad Developers"
+            VALUE "LegalCopyright", "Copyright (C) 2024 Trace Developers, based on KiCad"
             // the exe name
             VALUE "OriginalFilename", RC_VER_ORIGINALFILENAME
             // name of distributed package
-            VALUE "ProductName", "KiCad EDA"
-            VALUE "ProductVersion", KICAD_WIN32_RC_PRODVER_STR
+            VALUE "ProductName", "Trace"
+            VALUE "ProductVersion", TRACE_WIN32_RC_PRODVER_STR
         END
     END
     BLOCK "VarFileInfo"

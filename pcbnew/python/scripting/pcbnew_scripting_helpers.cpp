@@ -35,6 +35,7 @@
 #include <action_plugin.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <settings/common_settings.h>
 #include <pcb_marker.h>
 #include <cstdlib>
 #include <drawing_sheet/ds_data_model.h>
@@ -48,6 +49,7 @@
 #include <macros.h>
 #include <pcbnew_scripting_helpers.h>
 #include <pgm_base.h>
+#include <settings/common_settings.h>
 #include <project.h>
 #include <project_pcb.h>
 #include <project/net_settings.h>
@@ -59,6 +61,8 @@
 #include <wx/app.h>
 #include <wx/crt.h>
 #include <wx/image.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 static PCB_EDIT_FRAME* s_PcbEditFrame = nullptr;
 static SETTINGS_MANAGER* s_SettingsManager = nullptr;
@@ -153,20 +157,24 @@ BOARD* LoadBoard( const wxString& aFileName, PCB_IO_MGR::PCB_FILE_T aFormat, boo
     // Ensure image handlers are loaded, because a board can include bitmap images
     // using various formats.
     // By default only the BMP handler is available.
-    wxInitAllImageHandlers();
+    // Guard: skip if already registered (e.g., by PGM_BASE::InitPgm at app startup)
+    if( !wxImage::FindHandler( wxBITMAP_TYPE_PNG ) )
+        wxInitAllImageHandlers();
 
-    PROJECT* project = GetSettingsManager()->GetProject( projectPath );
+    SETTINGS_MANAGER& settingsManager = PgmOrNull() ? Pgm().GetSettingsManager() : *GetSettingsManager();
+
+    PROJECT* project = settingsManager.GetProject( projectPath );
 
     if( !project )
     {
         if( wxFileExists( projectPath ) )
         {
             // cli
-            GetSettingsManager()->LoadProject( projectPath, aSetActive );
-            project = GetSettingsManager()->GetProject( projectPath );
+            settingsManager.LoadProject( projectPath, aSetActive );
+            project = settingsManager.GetProject( projectPath );
         }
     }
-    else if( s_PcbEditFrame && project == &GetSettingsManager()->Prj() )
+    else if( s_PcbEditFrame && project == &settingsManager.Prj() )
     {
         // Project is already loaded?  Then so is the board
         return s_PcbEditFrame->GetBoard();
@@ -595,6 +603,7 @@ bool WriteDRCReport( BOARD* aBoard, const wxString& aFileName, EDA_UNITS aUnits,
                     || aItem->GetErrorCode() == DRCE_EXTRA_FOOTPRINT
                     || aItem->GetErrorCode() == DRCE_NET_CONFLICT
                     || aItem->GetErrorCode() == DRCE_SCHEMATIC_PARITY
+                    || aItem->GetErrorCode() == DRCE_SCHEMATIC_FIELDS_PARITY
                     || aItem->GetErrorCode() == DRCE_FOOTPRINT_FILTERS )
                 {
                     footprints.push_back( aItem );

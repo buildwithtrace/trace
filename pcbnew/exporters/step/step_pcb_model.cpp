@@ -25,6 +25,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <new>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -85,6 +87,7 @@
 #include <TDocStd_XLinkTool.hxx>
 #include <TDataStd_Name.hxx>
 #include <TDataStd_TreeNode.hxx>
+#include <TDF_ChildIterator.hxx>
 #include <TDF_LabelSequence.hxx>
 #include <TDF_Tool.hxx>
 #include <TopExp_Explorer.hxx>
@@ -653,15 +656,36 @@ static bool fuseShapes( auto& aInputShapes, TopoDS_Shape& aOutShape, REPORTER* a
             shapeTools.Append( sh );
     }
 
-    mkFuse.SetRunParallel( true );
-    mkFuse.SetToFillHistory( false );
-    mkFuse.SetArguments( shapeArguments );
-    mkFuse.SetTools( shapeTools );
-    mkFuse.Build();
+    try
+    {
+        mkFuse.SetRunParallel( true );
+        mkFuse.SetToFillHistory( false );
+        mkFuse.SetArguments( shapeArguments );
+        mkFuse.SetTools( shapeTools );
+        mkFuse.Build();
+    }
+    catch( const std::bad_alloc& )
+    {
+        aReporter->Report( _( "Out of memory while fusing shapes. Consider disabling shape fusing, "
+                              "reducing the number of objects (e.g., vias), or freeing system memory." ),
+                          RPT_SEVERITY_ERROR );
+        return false;
+    }
+    catch( const Standard_Failure& e )
+    {
+        aReporter->Report( wxString::Format( _( "OpenCASCADE error while fusing shapes: %s\n"
+                                                "This may indicate insufficient memory. Consider "
+                                                "disabling shape fusing or reducing board complexity." ),
+                                             e.GetMessageString() ),
+                          RPT_SEVERITY_ERROR );
+        return false;
+    }
 
     if( mkFuse.HasErrors() || mkFuse.HasWarnings() )
     {
-        aReporter->Report( _( "** Got problems while fusing shapes **" ), RPT_SEVERITY_ERROR );
+        aReporter->Report( _( "Problems encountered while fusing shapes. This operation is "
+                              "memory-intensive; insufficient memory may cause failures." ),
+                          RPT_SEVERITY_ERROR );
 
         if( mkFuse.HasErrors() )
         {
@@ -688,21 +712,38 @@ static bool fuseShapes( auto& aInputShapes, TopoDS_Shape& aOutShape, REPORTER* a
     {
         TopoDS_Shape fusedShape = mkFuse.Shape();
 
-        ShapeUpgrade_UnifySameDomain unify( fusedShape, true, true, false );
-        unify.History() = nullptr;
-        unify.Build();
-
-        TopoDS_Shape unifiedShapes = unify.Shape();
-
-        if( unifiedShapes.IsNull() )
+        try
         {
-            aReporter->Report( _( "** ShapeUpgrade_UnifySameDomain produced a null shape **" ),
-                               RPT_SEVERITY_ERROR );
+            ShapeUpgrade_UnifySameDomain unify( fusedShape, true, true, false );
+            unify.History() = nullptr;
+            unify.Build();
+
+            TopoDS_Shape unifiedShapes = unify.Shape();
+
+            if( unifiedShapes.IsNull() )
+            {
+                aReporter->Report( _( "ShapeUpgrade_UnifySameDomain produced a null shape." ),
+                                   RPT_SEVERITY_ERROR );
+            }
+            else
+            {
+                aOutShape = unifiedShapes;
+                return true;
+            }
         }
-        else
+        catch( const std::bad_alloc& )
         {
-            aOutShape = unifiedShapes;
-            return true;
+            aReporter->Report( _( "Out of memory while unifying shape domains. Consider disabling "
+                                  "shape fusing or reducing the number of objects." ),
+                              RPT_SEVERITY_ERROR );
+            return false;
+        }
+        catch( const Standard_Failure& e )
+        {
+            aReporter->Report( wxString::Format( _( "OpenCASCADE error while unifying shapes: %s" ),
+                                                 e.GetMessageString() ),
+                              RPT_SEVERITY_ERROR );
+            return false;
         }
     }
 
@@ -795,6 +836,7 @@ STEP_PCB_MODEL::STEP_PCB_MODEL( const wxString& aPcbName, REPORTER* aReporter ) 
     m_minx = 1.0e10;    // absurdly large number; any valid PCB X value will be smaller
     m_pcbName = aPcbName;
     m_fuseShapes = false;
+    m_extraPadThickness = true;
     m_outFmt = OUTPUT_FORMAT::FMT_OUT_UNKNOWN;
 }
 
@@ -828,7 +870,7 @@ bool STEP_PCB_MODEL::AddPadShape( const PAD* aPad, const VECTOR2D& aOrigin, bool
         double Zpos, thickness;
         getLayerZPlacement( pcb_layer, Zpos, thickness );
 
-        if( !aVia )
+        if( !aVia && m_extraPadThickness )
         {
             // Pad surface as a separate face for FEM simulations.
             if( pcb_layer == F_Cu )
@@ -861,7 +903,7 @@ bool STEP_PCB_MODEL::AddPadShape( const PAD* aPad, const VECTOR2D& aOrigin, bool
                 testShape = testShapes.front();
         }
 
-        if( !aVia && !testShape.IsNull() )
+        if( !aVia && m_extraPadThickness && !testShape.IsNull() )
         {
             if( pcb_layer == F_Cu || pcb_layer == B_Cu )
             {
@@ -892,7 +934,7 @@ bool STEP_PCB_MODEL::AddPadShape( const PAD* aPad, const VECTOR2D& aOrigin, bool
         getLayerZPlacement( F_Cu, f_pos, f_thickness );
         getLayerZPlacement( B_Cu, b_pos, b_thickness );
 
-        if( !aVia )
+        if( !aVia && m_extraPadThickness )
         {
             // Pad surface is slightly thicker
             f_thickness += c_padExtraThickness;
@@ -988,7 +1030,7 @@ bool STEP_PCB_MODEL::AddHole( const SHAPE_SEGMENT& aShape, int aPlatingThickness
                            // must be > OCC_MAX_DISTANCE_TO_MERGE_POINTS
 
     // Pads are taller by 0.01 mm
-    if( !aVia )
+    if( !aVia && m_extraPadThickness)
         margin += 0.01;
 
     double f_pos, f_thickness;
@@ -1671,28 +1713,30 @@ bool STEP_PCB_MODEL::AddPolygonShapes( const SHAPE_POLY_SET* aPolyShapes, PCB_LA
 }
 
 
-bool STEP_PCB_MODEL::AddComponent( const std::string& aFileNameUTF8, const std::string& aRefDes,
-                             bool aBottom, const VECTOR2D& aPosition, double aRotation, const VECTOR3D& aOffset,
-                             const VECTOR3D& aOrientation, const VECTOR3D& aScale, bool aSubstituteModels )
+bool STEP_PCB_MODEL::AddComponent( const wxString& aBaseName, const wxString& aFileName,
+                                   const std::vector<wxString>& aAltFilenames,
+                                   const wxString& aRefDes, bool aBottom, VECTOR2D aPosition,
+                                   double aRotation, VECTOR3D aOffset, VECTOR3D aOrientation,
+                                   VECTOR3D aScale, bool aSubstituteModels )
 {
-    if( aFileNameUTF8.empty() )
+    if( aFileName.empty() )
     {
         m_reporter->Report( wxString::Format( _( "No model defined for %s." ), aRefDes ),
                             RPT_SEVERITY_WARNING );
         return false;
     }
 
-    wxString fileName( wxString::FromUTF8( aFileNameUTF8.c_str() ) );
     m_reporter->Report( wxString::Format( wxT( "Adding component %s." ), aRefDes ), RPT_SEVERITY_DEBUG );
 
     // first retrieve a label
     TDF_Label lmodel;
     wxString  errorMessage;
 
-    if( !getModelLabel( aFileNameUTF8, aScale, lmodel, aSubstituteModels, &errorMessage ) )
+    if( !getModelLabel( aBaseName, aFileName, aAltFilenames, aScale, lmodel, aSubstituteModels,
+                        &errorMessage ) )
     {
         if( errorMessage.IsEmpty() )
-            errorMessage.Printf( _( "No model for filename '%s'." ), fileName );
+            errorMessage.Printf( _( "No model for filename '%s'." ), aFileName );
 
         m_reporter->Report( errorMessage, RPT_SEVERITY_ERROR );
         return false;
@@ -1703,7 +1747,8 @@ bool STEP_PCB_MODEL::AddComponent( const std::string& aFileNameUTF8, const std::
 
     if( !getModelLocation( aBottom, aPosition, aRotation, aOffset, aOrientation, toploc ) )
     {
-        m_reporter->Report( wxString::Format( _( "No location data for filename '%s'." ), fileName ),
+        m_reporter->Report(
+                wxString::Format( _( "No location data for filename '%s'." ), aFileName ),
                             RPT_SEVERITY_ERROR );
         return false;
     }
@@ -1713,16 +1758,17 @@ bool STEP_PCB_MODEL::AddComponent( const std::string& aFileNameUTF8, const std::
 
     if( llabel.IsNull() )
     {
-        m_reporter->Report( wxString::Format( _( "Could not add component with filename '%s'." ), fileName ),
+        m_reporter->Report(
+                wxString::Format( _( "Could not add component with filename '%s'." ), aFileName ),
                             RPT_SEVERITY_ERROR );
         return false;
     }
 
     // attach the RefDes name
-    TCollection_ExtendedString refdes( aRefDes.c_str() );
+    TCollection_ExtendedString refdes( aRefDes.utf8_str() );
     TDataStd_Name::Set( llabel, refdes );
 
-    KICAD3D_INFO::Set( llabel, KICAD3D_MODEL_TYPE::COMPONENT, aRefDes );
+    KICAD3D_INFO::Set( llabel, KICAD3D_MODEL_TYPE::COMPONENT, aRefDes.utf8_string() );
 
     return true;
 }
@@ -1755,6 +1801,12 @@ void STEP_PCB_MODEL::SetStackup( const BOARD_STACKUP& aStackup )
 void STEP_PCB_MODEL::SetNetFilter( const wxString& aFilter )
 {
     m_netFilter = aFilter;
+}
+
+
+void STEP_PCB_MODEL::SetExtraPadThickness( bool aValue )
+{
+    m_extraPadThickness = aValue;
 }
 
 
@@ -2452,13 +2504,15 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
                         RPT_SEVERITY_DEBUG );
 
     auto buildBSB =
-            [&brdBndBox]( std::vector<TopoDS_Shape>& input, Bnd_BoundSortBox& bsbHoles )
+            [&brdBndBox]( std::vector<TopoDS_Shape>& input, Bnd_BoundSortBox& bsbHoles,
+                          std::vector<Bnd_Box>& holeBoxes )
             {
                 // We need to encompass every location we'll need to test in the global bbox,
                 // otherwise Bnd_BoundSortBox doesn't work near the boundaries.
                 Bnd_Box brdWithHolesBndBox = brdBndBox;
 
                 Handle( Bnd_HArray1OfBox ) holeBoxSet = new Bnd_HArray1OfBox( 0, input.size() - 1 );
+                holeBoxes.resize( input.size() );
 
                 for( size_t i = 0; i < input.size(); i++ )
                 {
@@ -2466,6 +2520,7 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
                     BRepBndLib::Add( input[i], bbox );
                     brdWithHolesBndBox.Add( bbox );
                     ( *holeBoxSet )[i] = bbox;
+                    holeBoxes[i] = bbox;
                 }
 
                 bsbHoles.Initialize( brdWithHolesBndBox, holeBoxSet );
@@ -2473,7 +2528,8 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
 
     auto subtractShapesMap =
             [&tp, this]( const wxString& aWhat, std::map<wxString, std::vector<TopoDS_Shape>>& aShapesMap,
-                         std::vector<TopoDS_Shape>& aHolesList, Bnd_BoundSortBox& aBSBHoles )
+                         std::vector<TopoDS_Shape>& aHolesList, Bnd_BoundSortBox& aBSBHoles,
+                         const std::vector<Bnd_Box>& aHoleBoxes )
             {
                 m_reporter->Report( wxString::Format( _( "Subtracting holes for %s" ), aWhat ),
                                     RPT_SEVERITY_DEBUG );
@@ -2498,6 +2554,19 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
 
                             for( const Standard_Integer& index : indices )
                                 holelist.Append( aHolesList[index] );
+
+                            // Workaround for OCCT bug (https://github.com/Open-Cascade-SAS/OCCT/issues/506)
+                            // Bnd_BoundSortBox::Compare can fail to detect intersections in certain edge
+                            // cases (e.g., single item). Fall back to direct bounding box intersection
+                            // checks when Compare returns empty but intersections may exist.
+                            if( holelist.IsEmpty() )
+                            {
+                                for( size_t i = 0; i < aHoleBoxes.size(); i++ )
+                                {
+                                    if( !shapeBbox.IsOut( aHoleBoxes[i] ) )
+                                        holelist.Append( aHolesList[i] );
+                                }
+                            }
                         }
 
                         if( holelist.IsEmpty() )
@@ -2554,30 +2623,33 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
 
     auto subtractShapes =
             [subtractShapesMap]( const wxString& aWhat, std::vector<TopoDS_Shape>& aShapesList,
-                                 std::vector<TopoDS_Shape>& aHolesList, Bnd_BoundSortBox& aBSBHoles )
+                                 std::vector<TopoDS_Shape>& aHolesList, Bnd_BoundSortBox& aBSBHoles,
+                                 const std::vector<Bnd_Box>& aHoleBoxes )
             {
                 std::map<wxString, std::vector<TopoDS_Shape>> aShapesMap{ { wxEmptyString, aShapesList } };
 
-                subtractShapesMap( aWhat, aShapesMap, aHolesList, aBSBHoles );
+                subtractShapesMap( aWhat, aShapesMap, aHolesList, aBSBHoles, aHoleBoxes );
                 aShapesList = aShapesMap[wxEmptyString];
             };
 
 
     if( m_boardCutouts.size() )
     {
-        Bnd_BoundSortBox bsbHoles;
-        buildBSB( m_boardCutouts, bsbHoles );
+        Bnd_BoundSortBox     bsbHoles;
+        std::vector<Bnd_Box> holeBoxes;
+        buildBSB( m_boardCutouts, bsbHoles, holeBoxes );
 
-        subtractShapes( _( "shapes" ), m_board_outlines, m_boardCutouts, bsbHoles );
+        subtractShapes( _( "shapes" ), m_board_outlines, m_boardCutouts, bsbHoles, holeBoxes );
     }
 
     if( m_copperCutouts.size() )
     {
-        Bnd_BoundSortBox bsbHoles;
-        buildBSB( m_copperCutouts, bsbHoles );
+        Bnd_BoundSortBox     bsbHoles;
+        std::vector<Bnd_Box> holeBoxes;
+        buildBSB( m_copperCutouts, bsbHoles, holeBoxes );
 
-        subtractShapesMap( _( "pads" ), m_board_copper_pads, m_copperCutouts, bsbHoles );
-        subtractShapesMap( _( "vias" ), m_board_copper_vias, m_copperCutouts, bsbHoles );
+        subtractShapesMap( _( "pads" ), m_board_copper_pads, m_copperCutouts, bsbHoles, holeBoxes );
+        subtractShapesMap( _( "vias" ), m_board_copper_vias, m_copperCutouts, bsbHoles, holeBoxes );
     }
 
     if( m_fuseShapes )
@@ -3205,11 +3277,15 @@ bool STEP_PCB_MODEL::WriteXAO( const wxString& aFileName )
 }
 
 
-bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECTOR3D& aScale, TDF_Label& aLabel,
-                                    bool aSubstituteModels, wxString* aErrorMessage )
+bool STEP_PCB_MODEL::getModelLabel( const wxString& aBaseName, const wxString& aFileName,
+                                    const std::vector<wxString>& aAltFilenames, VECTOR3D aScale,
+                                    TDF_Label& aLabel, bool aSubstituteModels,
+                                    wxString* aErrorMessage )
 {
-    std::string model_key = aFileNameUTF8 + "_" + std::to_string( aScale.x )
-                            + "_" + std::to_string( aScale.y ) + "_" + std::to_string( aScale.z );
+    std::string fileNameUTF8 = aFileName.utf8_string();
+
+    std::string model_key = fileNameUTF8 + "_" + std::to_string( aScale.x ) + "_"
+                            + std::to_string( aScale.y ) + "_" + std::to_string( aScale.z );
 
     MODEL_MAP::const_iterator mm = m_models.find( model_key );
 
@@ -3224,41 +3300,37 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
     Handle( TDocStd_Document )  doc;
     m_app->NewDocument( "MDTV-XCAF", doc );
 
-    wxString            fileName( wxString::FromUTF8( aFileNameUTF8.c_str() ) );
-    MODEL3D_FORMAT_TYPE modelFmt = fileType( aFileNameUTF8.c_str() );
-
-    wxFileName                 modelFile( fileName );
-    std::string                pname( modelFile.GetName().ToUTF8() );
-    TCollection_ExtendedString partname( pname.c_str() );
+    MODEL3D_FORMAT_TYPE modelFmt = fileType( fileNameUTF8.c_str() );
+    TCollection_ExtendedString partname( aBaseName.utf8_str() );
 
     switch( modelFmt )
     {
     case FMT_IGES:
-        if( !readIGES( doc, aFileNameUTF8.c_str() ) )
+        if( !readIGES( doc, fileNameUTF8.c_str() ) )
         {
-            m_reporter->Report( wxString::Format( wxT( "readIGES() failed on filename '%s'." ),
-                                                  fileName ),
+            m_reporter->Report( wxString::Format( wxT( "readIGES() failed on filename '%s'." ), aFileName ),
                                 RPT_SEVERITY_ERROR );
             return false;
         }
+
         break;
 
     case FMT_STEP:
-        if( !readSTEP( doc, aFileNameUTF8.c_str() ) )
+        if( !readSTEP( doc, fileNameUTF8.c_str() ) )
         {
-            m_reporter->Report( wxString::Format( wxT( "readSTEP() failed on filename '%s'." ),
-                                                  fileName ),
+            m_reporter->Report( wxString::Format( wxT( "readSTEP() failed on filename '%s'." ), aFileName ),
                                 RPT_SEVERITY_ERROR );
             return false;
         }
+
         break;
 
     case FMT_STEPZ:
     {
         // To export a compressed step file (.stpz or .stp.gz file), the best way is to
         // decaompress it in a temporaty file and load this temporary file
-        wxFFileInputStream ifile( fileName );
-        wxFileName         outFile( fileName );
+        wxFFileInputStream ifile( aFileName );
+        wxFileName         outFile( aFileName );
 
         outFile.SetPath( wxStandardPaths::Get().GetTempDir() );
         outFile.SetExt( wxT( "step" ) );
@@ -3267,60 +3339,62 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
         if( size == wxInvalidOffset )
         {
             m_reporter->Report( wxString::Format( wxT( "getModelLabel() failed on filename '%s'." ),
-                                                  fileName ),
+                                                  aFileName ),
                                 RPT_SEVERITY_ERROR );
             return false;
         }
 
         {
-            bool                success = false;
-            wxFFileOutputStream ofile( outFile.GetFullPath() );
+            bool success = false;
 
-            if( !ofile.IsOk() )
-                return false;
-
-            char* buffer = new char[size];
-
-            ifile.Read( buffer, size );
-            std::string expanded;
-
-            try
             {
-                expanded = gzip::decompress( buffer, size );
-                success = true;
-            }
-            catch( ... )
-            {
-                m_reporter->Report( wxString::Format( wxT( "failed to decompress '%s'." ),
-                                                      fileName ),
-                                    RPT_SEVERITY_ERROR );
-            }
+                wxFFileOutputStream ofile( outFile.GetFullPath() );
 
-            if( expanded.empty() )
-            {
-                ifile.Reset();
-                ifile.SeekI( 0 );
-                wxZipInputStream            izipfile( ifile );
-                std::unique_ptr<wxZipEntry> zip_file( izipfile.GetNextEntry() );
+                if( !ofile.IsOk() )
+                    return false;
 
-                if( zip_file && !zip_file->IsDir() && izipfile.CanRead() )
+                char* buffer = new char[size];
+
+                ifile.Read( buffer, size );
+                std::string expanded;
+
+                try
                 {
-                    izipfile.Read( ofile );
+                    expanded = gzip::decompress( buffer, size );
                     success = true;
                 }
-            }
-            else
-            {
-                ofile.Write( expanded.data(), expanded.size() );
-            }
+                catch( ... )
+                {
+                    m_reporter->Report(
+                            wxString::Format( wxT( "failed to decompress '%s'." ), aFileName ),
+                            RPT_SEVERITY_ERROR );
+                }
 
-            delete[] buffer;
-            ofile.Close();
+                if( expanded.empty() )
+                {
+                    ifile.Reset();
+                    ifile.SeekI( 0 );
+                    wxZipInputStream            izipfile( ifile );
+                    std::unique_ptr<wxZipEntry> zip_file( izipfile.GetNextEntry() );
+
+                    if( zip_file && !zip_file->IsDir() && izipfile.CanRead() )
+                    {
+                        izipfile.Read( ofile );
+                        success = true;
+                    }
+                }
+                else
+                {
+                    ofile.Write( expanded.data(), expanded.size() );
+                }
+
+                delete[] buffer;
+            }
 
             if( success )
             {
-                std::string altFileNameUTF8 = TO_UTF8( outFile.GetFullPath() );
-                success = getModelLabel( altFileNameUTF8, VECTOR3D( 1.0, 1.0, 1.0 ), aLabel, false );
+                success = getModelLabel( aBaseName, outFile.GetFullPath(), aAltFilenames,
+                                         VECTOR3D( 1.0, 1.0, 1.0 ), aLabel, false );
             }
 
             return success;
@@ -3341,7 +3415,7 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
          */
         if( aSubstituteModels )
         {
-            wxFileName wrlName( fileName );
+            wxFileName wrlName( aFileName );
 
             wxString basePath = wrlName.GetPath();
             wxString baseName = wrlName.GetName();
@@ -3372,14 +3446,30 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
 
             //TODO - Other alternative formats?
 
-            for( const auto& alt : alts )
+            for( const auto& altExt : alts )
             {
-                wxFileName altFile( basePath, baseName + wxT( "." ) + alt );
+                wxFileName altFile;
+
+                if( !aAltFilenames.empty() )
+                {
+                    for( const wxString& altPath : aAltFilenames )
+                    {
+                        wxFileName iterFn( altPath );
+
+                        if( iterFn.GetExt() == altExt )
+                        {
+                            altFile = iterFn;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    altFile = wxFileName( basePath, baseName + wxT( "." ) + altExt );
+                }
 
                 if( altFile.IsOk() && altFile.FileExists() )
                 {
-                    std::string altFileNameUTF8 = TO_UTF8( altFile.GetFullPath() );
-
                     // When substituting a STEP/IGS file for VRML, do not apply the VRML scaling
                     // to the new STEP model.  This process of auto-substitution is janky as all
                     // heck so let's not mix up un-displayed scale factors with potentially
@@ -3387,7 +3477,8 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
                     // named "model.wrl" and "model.stp" referring to different parts.
                     // TODO: Fix model handling in v7.  Default models should only be STP.
                     //       Have option to override this in DISPLAY.
-                    if( getModelLabel( altFileNameUTF8, VECTOR3D( 1.0, 1.0, 1.0 ), aLabel, false ) )
+                    if( getModelLabel( aBaseName, altFile.GetFullPath(), {},
+                                       VECTOR3D( 1.0, 1.0, 1.0 ), aLabel, false ) )
                     {
                         return true;
                     }
@@ -3398,23 +3489,27 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
         // VRML models only work when exporting to mesh formats
         // Also OCCT < 7.9.0 fails to load most VRML 2.0 models because of Switch nodes
         if( m_outFmt == OUTPUT_FORMAT::FMT_OUT_GLTF || m_outFmt == OUTPUT_FORMAT::FMT_OUT_STL
-            || m_outFmt == OUTPUT_FORMAT::FMT_OUT_PLY || m_outFmt == OUTPUT_FORMAT::FMT_OUT_U3D
+            || m_outFmt == OUTPUT_FORMAT::FMT_OUT_PLY  || m_outFmt == OUTPUT_FORMAT::FMT_OUT_U3D
             || m_outFmt == OUTPUT_FORMAT::FMT_OUT_PDF )
         {
-            if( readVRML( doc, aFileNameUTF8.c_str() ) )
+            if( readVRML( doc, fileNameUTF8.c_str() ) )
             {
-                Handle( XCAFDoc_ShapeTool ) shapeTool = XCAFDoc_DocumentTool::ShapeTool( doc->Main() );
+                Handle( XCAFDoc_ShapeTool ) shapeTool =
+                        XCAFDoc_DocumentTool::ShapeTool( doc->Main() );
 
                 prefixNames( shapeTool->Label(), partname );
             }
             else
             {
-                m_reporter->Report( wxString::Format( wxT( "readVRML() failed on filename '%s'." ), fileName ),
-                                    RPT_SEVERITY_ERROR );
+                m_reporter->Report(
+                        wxString::Format( wxT( "readVRML() failed on filename '%s'." ),
+                                            aFileName ),
+                        RPT_SEVERITY_ERROR );
+
                 return false;
             }
         }
-        else
+        else // Substitution is not allowed
         {
             if( aErrorMessage )
                 aErrorMessage->Printf( _( "Cannot use VRML models when exporting to non-mesh formats." ) );
@@ -3427,8 +3522,7 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
         // TODO: implement IDF and EMN converters
 
     default:
-        m_reporter->Report( wxString::Format( _( "Cannot identify actual file type for '%s'." ),
-                                              fileName ),
+        m_reporter->Report( wxString::Format( _( "Cannot identify actual file type for '%s'." ), aFileName ),
                             RPT_SEVERITY_ERROR );
         return false;
     }
@@ -3437,8 +3531,7 @@ bool STEP_PCB_MODEL::getModelLabel( const std::string& aFileNameUTF8, const VECT
 
     if( aLabel.IsNull() )
     {
-        m_reporter->Report( wxString::Format( _( "Could not transfer model data from file '%s'." ),
-                                              fileName  ),
+        m_reporter->Report( wxString::Format( _( "Could not transfer model data from file '%s'." ), aFileName ),
                             RPT_SEVERITY_ERROR );
         return false;
     }
@@ -3628,12 +3721,126 @@ bool STEP_PCB_MODEL::readVRML( Handle( TDocStd_Document ) & doc, const char* fna
 }
 
 
+void STEP_PCB_MODEL::transferColors( Handle( XCAFDoc_ShapeTool )& aSrcShapeTool,
+                                     Handle( XCAFDoc_ColorTool )& aSrcColorTool,
+                                     Handle( XCAFDoc_ShapeTool )& aDstShapeTool,
+                                     Handle( XCAFDoc_ColorTool )& aDstColorTool )
+{
+    // Get all shapes from the source document
+    TDF_LabelSequence srcLabels;
+    aSrcShapeTool->GetShapes( srcLabels );
+
+    for( Standard_Integer i = 1; i <= srcLabels.Length(); i++ )
+    {
+        TDF_Label srcLabel = srcLabels.Value( i );
+        TopoDS_Shape srcShape = aSrcShapeTool->GetShape( srcLabel );
+
+        if( srcShape.IsNull() )
+            continue;
+
+        // Try to find the same shape in the destination document
+        TDF_Label dstLabel;
+
+        if( !aDstShapeTool->Search( srcShape, dstLabel, Standard_True, Standard_True, Standard_False ) )
+            continue;
+
+        // Transfer surface color
+        Quantity_ColorRGBA surfColor;
+
+        if( aSrcColorTool->GetColor( srcLabel, XCAFDoc_ColorSurf, surfColor ) )
+            aDstColorTool->SetColor( dstLabel, surfColor, XCAFDoc_ColorSurf );
+
+        // Transfer curve color
+        Quantity_ColorRGBA curvColor;
+
+        if( aSrcColorTool->GetColor( srcLabel, XCAFDoc_ColorCurv, curvColor ) )
+            aDstColorTool->SetColor( dstLabel, curvColor, XCAFDoc_ColorCurv );
+
+        // Transfer generic color
+        Quantity_ColorRGBA genColor;
+
+        if( aSrcColorTool->GetColor( srcLabel, XCAFDoc_ColorGen, genColor ) )
+            aDstColorTool->SetColor( dstLabel, genColor, XCAFDoc_ColorGen );
+
+        // Also check for colors on individual faces
+        if( aSrcShapeTool->IsSimpleShape( srcLabel ) )
+        {
+            TopoDS_Shape shape = aSrcShapeTool->GetShape( srcLabel );
+
+            for( TopExp_Explorer exp( shape, TopAbs_FACE ); exp.More(); exp.Next() )
+            {
+                TopoDS_Face face = TopoDS::Face( exp.Current() );
+                Quantity_ColorRGBA faceColor;
+
+                if( aSrcColorTool->GetColor( face, XCAFDoc_ColorSurf, faceColor ) )
+                    aDstColorTool->SetColor( face, faceColor, XCAFDoc_ColorSurf );
+                else if( aSrcColorTool->GetColor( face, XCAFDoc_ColorGen, faceColor ) )
+                    aDstColorTool->SetColor( face, faceColor, XCAFDoc_ColorGen );
+            }
+        }
+    }
+
+    // Also iterate through subshapes and components recursively
+    TDF_LabelSequence srcFreeShapes;
+    aSrcShapeTool->GetFreeShapes( srcFreeShapes );
+
+    std::function<void( const TDF_Label& )> transferColorsRecursive = [&]( const TDF_Label& aLabel )
+    {
+        TopoDS_Shape shape = aSrcShapeTool->GetShape( aLabel );
+
+        if( shape.IsNull() )
+            return;
+
+        // Find this shape in destination
+        TDF_Label dstLabel;
+
+        if( aDstShapeTool->Search( shape, dstLabel, Standard_True, Standard_True, Standard_False ) )
+        {
+            Quantity_ColorRGBA color;
+
+            if( aSrcColorTool->GetColor( aLabel, XCAFDoc_ColorSurf, color ) )
+                aDstColorTool->SetColor( dstLabel, color, XCAFDoc_ColorSurf );
+
+            if( aSrcColorTool->GetColor( aLabel, XCAFDoc_ColorCurv, color ) )
+                aDstColorTool->SetColor( dstLabel, color, XCAFDoc_ColorCurv );
+
+            if( aSrcColorTool->GetColor( aLabel, XCAFDoc_ColorGen, color ) )
+                aDstColorTool->SetColor( dstLabel, color, XCAFDoc_ColorGen );
+        }
+
+        // Process children
+        for( TDF_ChildIterator it( aLabel ); it.More(); it.Next() )
+            transferColorsRecursive( it.Value() );
+
+        // Process components if this is an assembly
+        if( aSrcShapeTool->IsAssembly( aLabel ) )
+        {
+            TDF_LabelSequence components;
+            aSrcShapeTool->GetComponents( aLabel, components );
+
+            for( Standard_Integer j = 1; j <= components.Length(); j++ )
+            {
+                TDF_Label compLabel = components.Value( j );
+                TDF_Label refLabel;
+
+                if( aSrcShapeTool->GetReferredShape( compLabel, refLabel ) )
+                    transferColorsRecursive( refLabel );
+            }
+        }
+    };
+
+    for( Standard_Integer i = 1; i <= srcFreeShapes.Length(); i++ )
+        transferColorsRecursive( srcFreeShapes.Value( i ) );
+}
+
+
 TDF_Label STEP_PCB_MODEL::transferModel( Handle( TDocStd_Document ) & source,
                                          Handle( TDocStd_Document ) & dest, const VECTOR3D& aScale )
 {
     // transfer data from Source into a top level component of Dest
     // s_assy = shape tool for the source
     Handle( XCAFDoc_ShapeTool ) s_assy = XCAFDoc_DocumentTool::ShapeTool( source->Main() );
+    Handle( XCAFDoc_ColorTool ) s_color = XCAFDoc_DocumentTool::ColorTool( source->Main() );
 
     // retrieve all free shapes within the assembly
     TDF_LabelSequence frshapes;
@@ -3641,28 +3848,70 @@ TDF_Label STEP_PCB_MODEL::transferModel( Handle( TDocStd_Document ) & source,
 
     // d_assy = shape tool for the destination
     Handle( XCAFDoc_ShapeTool ) d_assy = XCAFDoc_DocumentTool::ShapeTool( dest->Main() );
+    Handle( XCAFDoc_ColorTool ) d_color = XCAFDoc_DocumentTool::ColorTool( dest->Main() );
 
     // create a new shape within the destination and set the assembly tool to point to it
     TDF_Label d_targetLabel = d_assy->NewShape();
 
+    auto copyLabel = [&]( TDF_Label& d_label, const TDF_Label& s_label ) -> bool
+    {
+        // TDocStd_XLinkTool::Copy requires the source to be "self-contained", meaning it has
+        // no external references. Some STEP files (e.g. from Fusion 360 with linked components)
+        // may contain internal references that violate this constraint. In such cases, we fall
+        // back to extracting just the geometric shape without the full XDE document structure.
+        if( TDF_Tool::IsSelfContained( s_label ) )
+        {
+            TDocStd_XLinkTool link;
+            link.Copy( d_label, s_label );
+            return true;
+        }
+        else
+        {
+            // The source label is not self-contained. Extract the shape directly.
+            TopoDS_Shape shape = s_assy->GetShape( s_label );
+
+            if( shape.IsNull() )
+                return false;
+
+            // Add the shape directly without the XDE structure. This loses some metadata
+            // like colors and names, but allows the model to be successfully transferred.
+            d_assy->SetShape( d_label, shape );
+
+            m_reporter->Report( wxT( "Model contains non-self-contained data; some metadata may be lost." ),
+                                RPT_SEVERITY_INFO );
+            return true;
+        }
+    };
+
     if( frshapes.Size() == 1 )
     {
-        TDocStd_XLinkTool link;
-        link.Copy( d_targetLabel, frshapes.First() );
+        if( !copyLabel( d_targetLabel, frshapes.First() ) )
+        {
+            m_reporter->Report( wxT( "Failed to transfer model." ), RPT_SEVERITY_ERROR );
+            return TDF_Label();
+        }
     }
     else
     {
-        // Rare case
+        // Rare case with multiple free shapes
         for( TDF_Label& s_shapeLabel : frshapes )
         {
             TDF_Label d_component = d_assy->NewShape();
 
-            TDocStd_XLinkTool link;
-            link.Copy( d_component, s_shapeLabel );
+            if( !copyLabel( d_component, s_shapeLabel ) )
+            {
+                m_reporter->Report( wxT( "Failed to transfer model component." ), RPT_SEVERITY_ERROR );
+                return TDF_Label();
+            }
 
             d_assy->AddComponent( d_targetLabel, d_component, TopLoc_Location() );
         }
     }
+
+    // Transfer colors from source to destination document
+    // This is necessary because TDocStd_XLinkTool::Copy may not properly transfer
+    // color associations which are stored separately in the ColorTool section
+    transferColors( s_assy, s_color, d_assy, d_color );
 
     if( aScale.x != 1.0 || aScale.y != 1.0 || aScale.z != 1.0 )
         rescaleShapes( d_targetLabel, gp_XYZ( aScale.x, aScale.y, aScale.z ) );

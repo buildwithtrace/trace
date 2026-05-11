@@ -237,7 +237,7 @@ public:
      *
      * @param aIncrement = the increment value to add to the number ending the text.
      */
-    bool IncrementLabel( int aIncrement );
+    virtual bool IncrementLabel( int aIncrement );
 
     void Move( const VECTOR2I& aMoveVector ) override;
     void Rotate( const VECTOR2I& aCenter, bool aRotateCCW ) override;
@@ -408,6 +408,11 @@ public:
         return wxT( "SCH_LABEL" );
     }
 
+    wxString GetFriendlyName() const override
+    {
+        return _( "Label" );
+    }
+
     const BOX2I GetBodyBoundingBox( const RENDER_SETTINGS* aSettings ) const override;
 
     bool IsConnectable() const override { return true; }
@@ -445,7 +450,7 @@ public:
 
     SCH_DIRECTIVE_LABEL( const SCH_DIRECTIVE_LABEL& aClassLabel );
 
-    ~SCH_DIRECTIVE_LABEL() { }
+    ~SCH_DIRECTIVE_LABEL() override;
 
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
@@ -458,6 +463,11 @@ public:
     wxString GetClass() const override
     {
         return wxT( "SCH_DIRECTIVE_LABEL" );
+    }
+
+    wxString GetFriendlyName() const override
+    {
+        return _( "Directive Label" );
     }
 
     EDA_ITEM* Clone() const override
@@ -506,6 +516,9 @@ public:
     /// @brief Determines dangling state from connectivity and cached connected rule areas
     virtual bool IsDangling() const override;
 
+    /// Increment the netclass and component class labels if possible
+    bool IncrementLabel( int aIncrement ) override;
+
 private:
     int       m_pinLength;
     int       m_symbolSize;
@@ -536,6 +549,11 @@ public:
     wxString GetClass() const override
     {
         return wxT( "SCH_GLOBALLABEL" );
+    }
+
+    wxString GetFriendlyName() const override
+    {
+        return _( "Global Label" );
     }
 
     EDA_ITEM* Clone() const override
@@ -601,6 +619,11 @@ public:
     static inline bool ClassOf( const EDA_ITEM* aItem )
     {
         return aItem && SCH_HIER_LABEL_T == aItem->Type();
+    }
+
+    wxString GetFriendlyName() const override
+    {
+        return _( "Hierarchical Label" );
     }
 
     wxString GetClass() const override

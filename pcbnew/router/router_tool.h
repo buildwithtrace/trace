@@ -103,6 +103,9 @@ private:
     PCB_LAYER_ID                 m_originalActiveLayer;
 
     bool                         m_inRouterTool;         // Re-entrancy guard
+    bool                         m_inRouteSelected;
+
+    bool                         m_startWithVia;         // User pressed V before routing started
 };
 
 #endif

@@ -28,8 +28,11 @@
 
 #include <board.h>
 #include <footprint.h>
+#include <pcb_generator.h>
 #include <pcb_group.h>
 #include <pcb_text.h>
+#include <pcb_track.h>
+#include <generators/pcb_tuning_pattern.h>
 #include <common.h>
 #include <pcbnew_utils/board_construction_utils.h>
 #include <pcbnew_utils/board_file_utils.h>
@@ -220,26 +223,36 @@ void testSaveLoad( const std::vector<std::vector<ItemType>>& spec )
 }
 
 
-// Test saving & loading of a few configurations
+// Test saving & loading of a few configurations.
+// Groups with fewer than 2 members are not saved, so all round-trip tests
+// use groups with at least 2 members.
 BOOST_AUTO_TEST_CASE( HealthyGroups )
 {
     // Test board with no groups
     testSaveLoad( {} );
 
-    // Single group
-    testSaveLoad( { { TEXT0 } } );
+    // Single group with 2 members
     testSaveLoad( { { TEXT0, TEXT1 } } );
 
     // Two groups
     testSaveLoad( { { TEXT0, TEXT1 }, { TEXT2, TEXT3 } } );
     testSaveLoad( { { TEXT0, TEXT1 }, { TEXT2, GROUP0 } } );
 
-    // Subgroups by no cycle
-    testSaveLoad( { { TEXT0, GROUP1 }, { TEXT2 }, { TEXT3, GROUP0 } } );
-    testSaveLoad( { { TEXT0 }, { TEXT2 }, { GROUP1, GROUP0 } } );
-    testSaveLoad( { { TEXT0 }, { TEXT1 }, { TEXT2, NAME_GROUP3 }, { TEXT3 } } );
-    testSaveLoad( { { TEXT0 }, { TEXT1 }, { TEXT2, NAME_GROUP3 }, { TEXT3, GROUP0 } } );
-    testSaveLoad( { { TEXT0 }, { TEXT1 }, { TEXT2 }, { TEXT3 }, { NAME_GROUP3, GROUP0 } } );
+    // Subgroups with 2+ members each
+    testSaveLoad( { { TEXT0, TEXT1, GROUP1 }, { TEXT2, TEXT3 }, { TEXT4, GROUP0 } } );
+    testSaveLoad( { { TEXT0, TEXT1 }, { TEXT2, TEXT3 }, { GROUP1, GROUP0 } } );
+    testSaveLoad( { { TEXT0, TEXT1 }, { TEXT2, TEXT3 }, { TEXT4, NAME_GROUP3 }, { TEXT5, TEXT6 } } );
+}
+
+
+BOOST_AUTO_TEST_CASE( SingleMemberGroupsSaved )
+{
+    std::unique_ptr<BOARD> board1 = createBoard( { { TEXT0 } } );
+    auto path = std::filesystem::temp_directory_path() / "group_saveload_tst.kicad_pcb";
+    ::KI_TEST::DumpBoardToFile( *board1, path.string() );
+
+    std::unique_ptr<BOARD> board2 = ::KI_TEST::ReadBoardFromFileOrStream( path.string() );
+    BOOST_CHECK_EQUAL( board2->Groups().size(), 1u );
 }
 
 
@@ -263,6 +276,125 @@ BOOST_AUTO_TEST_CASE( InvalidGroups )
     board1.reset( nullptr );
     delete s_removedText;
     s_removedText = nullptr;
+}
+
+
+/**
+ * Verify that PCB_GROUP::DeepClone produces a group whose m_items reference
+ * the cloned children rather than the originals, and that the cloned group
+ * round-trips through save/load with correct membership.
+ */
+BOOST_AUTO_TEST_CASE( DeepCloneGroupMembership )
+{
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    PCB_TEXT* text0 = new PCB_TEXT( board.get() );
+    text0->SetText( wxT( "child-0" ) );
+    board->Add( text0 );
+
+    PCB_TEXT* text1 = new PCB_TEXT( board.get() );
+    text1->SetText( wxT( "child-1" ) );
+    board->Add( text1 );
+
+    PCB_GROUP* group = new PCB_GROUP( board.get() );
+    group->SetName( wxT( "TestGroup" ) );
+    group->AddItem( text0 );
+    group->AddItem( text1 );
+    board->Add( group );
+
+    BOOST_CHECK_EQUAL( group->GetItems().size(), 2 );
+
+    PCB_GROUP* deepCopy = group->DeepClone();
+
+    // DeepClone preserves the UUID
+    BOOST_CHECK_EQUAL( deepCopy->m_Uuid.AsString(), group->m_Uuid.AsString() );
+    BOOST_CHECK_EQUAL( deepCopy->GetName(), group->GetName() );
+    BOOST_CHECK_EQUAL( deepCopy->GetItems().size(), 2 );
+
+    // The cloned group's children must be different objects from the originals
+    for( EDA_ITEM* clonedChild : deepCopy->GetItems() )
+    {
+        BOOST_CHECK( clonedChild != text0 );
+        BOOST_CHECK( clonedChild != text1 );
+    }
+
+    // Children must NOT be the same pointers as the original group's children
+    for( EDA_ITEM* clonedChild : deepCopy->GetItems() )
+    {
+        bool foundInOriginal = group->GetItems().count( clonedChild ) > 0;
+        BOOST_CHECK_MESSAGE( !foundInOriginal,
+                             "DeepClone child should not be in original group's m_items" );
+    }
+
+    // Round-trip: add the deep clone and its children to a temp board, save, reload
+    std::unique_ptr<BOARD> tempBoard = std::make_unique<BOARD>();
+    tempBoard->Add( deepCopy );
+
+    deepCopy->RunOnChildren(
+            [&]( BOARD_ITEM* child )
+            {
+                tempBoard->Add( child, ADD_MODE::APPEND, false );
+            },
+            RECURSE_MODE::RECURSE );
+
+    auto path = std::filesystem::temp_directory_path() / "group_deepclone_tst.kicad_pcb";
+    ::KI_TEST::DumpBoardToFile( *tempBoard, path.string() );
+
+    std::unique_ptr<BOARD> reloaded = ::KI_TEST::ReadBoardFromFileOrStream( path.string() );
+
+    BOOST_CHECK_EQUAL( reloaded->Groups().size(), 1 );
+
+    if( !reloaded->Groups().empty() )
+    {
+        PCB_GROUP* loadedGroup = static_cast<PCB_GROUP*>( reloaded->Groups().front() );
+        BOOST_CHECK_EQUAL( loadedGroup->GetItems().size(), 2 );
+        BOOST_CHECK_EQUAL( loadedGroup->GetName(), wxT( "TestGroup" ) );
+    }
+}
+
+
+/**
+ * Verify that PCB_GENERATOR::DeepClone correctly recurses into nested generators,
+ * not just nested groups. Without this, a generator containing another generator
+ * would leave the inner generator's m_items pointing at original board items.
+ */
+BOOST_AUTO_TEST_CASE( DeepCloneNestedGeneratorMembership )
+{
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    PCB_TEXT* text = new PCB_TEXT( board.get() );
+    text->SetText( wxT( "generated-child" ) );
+    board->Add( text );
+
+    PCB_TUNING_PATTERN* nested = new PCB_TUNING_PATTERN( board.get() );
+    nested->AddItem( text );
+    board->Add( nested );
+
+    PCB_TUNING_PATTERN* root = new PCB_TUNING_PATTERN( board.get() );
+    root->AddItem( nested );
+    board->Add( root );
+
+    PCB_GENERATOR* deepCopy = root->DeepClone();
+
+    BOOST_CHECK_EQUAL( deepCopy->GetItems().size(), 1 );
+
+    EDA_ITEM* clonedNestedRaw = *deepCopy->GetItems().begin();
+    BOOST_CHECK( clonedNestedRaw != nested );
+    BOOST_CHECK_EQUAL( clonedNestedRaw->Type(), PCB_GENERATOR_T );
+
+    PCB_GENERATOR* clonedNested = static_cast<PCB_GENERATOR*>( clonedNestedRaw );
+    BOOST_CHECK_EQUAL( clonedNested->GetItems().size(), 1 );
+
+    for( EDA_ITEM* member : clonedNested->GetItems() )
+    {
+        BOOST_CHECK( member != text );
+    }
+
+    // Clean up the deep copy tree (not owned by any board)
+    EDA_ITEM* clonedText = *clonedNested->GetItems().begin();
+    delete clonedText;
+    delete clonedNested;
+    delete deepCopy;
 }
 
 

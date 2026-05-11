@@ -754,6 +754,10 @@ void RENDER_3D_OPENGL::reload( REPORTER* aStatusReporter, REPORTER* aWarningRepo
 
     SHAPE_POLY_SET outerPolyTHT = m_boardAdapter.GetTH_ODPolys().CloneDropTriangulation();
 
+    // Include NPTH polygons so their barrel walls are also generated
+    if( m_boardAdapter.GetNPTH_ODPolys().OutlineCount() > 0 )
+        outerPolyTHT.BooleanAdd( m_boardAdapter.GetNPTH_ODPolys() );
+
     outerPolyTHT.BooleanIntersection( m_boardAdapter.GetBoardPoly() );
 
     m_outerThroughHoles = generateHoles( m_boardAdapter.GetTH_ODs().GetList(), outerPolyTHT,
@@ -1324,9 +1328,8 @@ void RENDER_3D_OPENGL::generateViaBarrels( float aPlatingThickness3d, float aUni
         if( hasBackPostMachining )
             applyViaPostMachining( false );
 
-        // generateCylinder( via_center, hole_inner_radius,
-        //                     hole_inner_radius + aPlatingThickness3d, ztop_plated,
-        //                     zbot_plated, nrSegments, layerTriangleVIA );
+        generateCylinder( via_center, hole_inner_radius, hole_inner_radius + aPlatingThickness3d, ztop_plated,
+                          zbot_plated, nrSegments, layerTriangleVIA );
     }
 
     const float padFrontSurface =
@@ -1577,9 +1580,9 @@ void RENDER_3D_OPENGL::generateViasAndPads()
     const float unitScale           = m_boardAdapter.BiuTo3dUnits();
     const float platingThickness3d  = platingThickness * unitScale;
 
-    // generateViaBarrels( platingThickness3d, unitScale );
-    // generatePlatedHoleShells( platingThickness, unitScale );
-    // generateViaCovers( platingThickness3d, unitScale );
+    generateViaBarrels( platingThickness3d, unitScale );
+    generatePlatedHoleShells( platingThickness, unitScale );
+    generateViaCovers( platingThickness3d, unitScale );
 }
 
 

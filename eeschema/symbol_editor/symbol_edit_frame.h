@@ -4,6 +4,7 @@
  * Copyright (C) 2014 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  * Copyright (C) 2017 CERN
  * @author Maciej Suminski <maciej.suminski@cern.ch>
  *
@@ -205,6 +206,10 @@ public:
     void doCloseWindow() override;
     void OnExitKiCad( wxCommandEvent& event );
 
+    void onSignIn( wxCommandEvent& event );
+    void onSignOut( wxCommandEvent& event );
+    void onAuthStateChanged( wxCommandEvent& event );
+
     void LoadSettings( APP_SETTINGS_BASE* aCfg ) override;
     void SaveSettings( APP_SETTINGS_BASE* aCfg ) override;
 
@@ -374,7 +379,7 @@ public:
      */
     void HardRedraw() override;
 
-    void KiwayMailIn( KIWAY_EXPRESS& mail ) override;
+    void KiwayMailIn( KIWAY_MAIL_EVENT& mail ) override;
 
     void FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll = true ) override;
 
@@ -404,6 +409,8 @@ public:
 
     ///< Restore the empty editor screen, without any symbol or library selected.
     void emptyScreen();
+
+    void ClearToolbarControl( int aId ) override;
 
 protected:
     void configureToolbars() override;

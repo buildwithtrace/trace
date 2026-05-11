@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,11 +23,17 @@
  */
 
 #include <local_history.h>
+#include <dialogs/dialog_restore_local_history.h>
 #include <history_lock.h>
+#include <io/kicad/kicad_io_utils.h>
 #include <lockfile.h>
 #include <settings/common_settings.h>
 #include <pgm_base.h>
+#include <thread_pool.h>
 #include <trace_helpers.h>
+#include <wildcards_and_files_ext.h>
+#include <confirm.h>
+#include <amplitude_client.h>
 
 #include <git2.h>
 #include <wx/filename.h>
@@ -36,7 +43,6 @@
 #include <wx/datetime.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
-#include <wx/choicdlg.h>
 
 #include <vector>
 #include <string>
@@ -60,21 +66,23 @@ LOCAL_HISTORY::LOCAL_HISTORY()
 
 LOCAL_HISTORY::~LOCAL_HISTORY()
 {
+    WaitForPendingSave();
 }
 
 void LOCAL_HISTORY::NoteFileChange( const wxString& aFile )
 {
     wxFileName fn( aFile );
 
-    if( fn.GetFullName() == wxS( "fp-info-cache" ) || fn.GetExt() == wxS( "kicad_prl" ) || !Pgm().GetCommonSettings()->m_Backup.enabled )
+    if( fn.GetFullName() == wxS( "fp-info-cache" ) || !Pgm().GetCommonSettings()->m_Backup.enabled )
         return;
 
     m_pendingFiles.insert( fn.GetFullPath() );
 }
 
 
-void LOCAL_HISTORY::RegisterSaver( const void* aSaverObject,
-                                   const std::function<void( const wxString&, std::vector<wxString>& )>& aSaver )
+void LOCAL_HISTORY::RegisterSaver(
+        const void* aSaverObject,
+        const std::function<void( const wxString&, std::vector<HISTORY_FILE_DATA>& )>& aSaver )
 {
     if( m_savers.find( aSaverObject ) != m_savers.end() )
     {
@@ -89,6 +97,8 @@ void LOCAL_HISTORY::RegisterSaver( const void* aSaverObject,
 
 void LOCAL_HISTORY::UnregisterSaver( const void* aSaverObject )
 {
+    WaitForPendingSave();
+
     auto it = m_savers.find( aSaverObject );
 
     if( it != m_savers.end() )
@@ -101,6 +111,7 @@ void LOCAL_HISTORY::UnregisterSaver( const void* aSaverObject )
 
 void LOCAL_HISTORY::ClearAllSavers()
 {
+    WaitForPendingSave();
     m_savers.clear();
     wxLogTrace( traceAutoSave, wxS("[history] Cleared all savers") );
 }
@@ -123,37 +134,102 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
         return false;
     }
 
-    std::vector<wxString> files;
+    // Skip if previous background save is still running
+    if( m_saveInProgress.load( std::memory_order_acquire ) )
+    {
+        wxLogTrace( traceAutoSave, wxS("[history] previous save still in progress; skipping cycle") );
+        return false;
+    }
+
+    // Phase 1 (UI thread): call savers to collect serialized data
+    std::vector<HISTORY_FILE_DATA> fileData;
 
     for( const auto& [saverObject, saver] : m_savers )
     {
-        size_t before = files.size();
-        saver( aProjectPath, files );
-        wxLogTrace( traceAutoSave, wxS("[history] saver %p added %zu files (total=%zu)"),
-                    saverObject, files.size() - before, files.size() );
+        size_t before = fileData.size();
+        saver( aProjectPath, fileData );
+        wxLogTrace( traceAutoSave, wxS("[history] saver %p produced %zu entries (total=%zu)"),
+                    saverObject, fileData.size() - before, fileData.size() );
     }
 
-    // Filter out any files not within the project directory
+    // Filter out any entries not within the project directory
     wxString projectDir = aProjectPath;
     if( !projectDir.EndsWith( wxFileName::GetPathSeparator() ) )
         projectDir += wxFileName::GetPathSeparator();
 
-    auto it = std::remove_if( files.begin(), files.end(),
-        [&projectDir]( const wxString& file )
+    auto it = std::remove_if( fileData.begin(), fileData.end(),
+        [&projectDir]( const HISTORY_FILE_DATA& entry )
         {
-            if( !file.StartsWith( projectDir ) )
+            if( !entry.path.StartsWith( projectDir ) )
             {
-                wxLogTrace( traceAutoSave, wxS("[history] filtered out file outside project: %s"), file );
+                wxLogTrace( traceAutoSave, wxS("[history] filtered out entry outside project: %s"), entry.path );
                 return true;
             }
             return false;
         } );
-    files.erase( it, files.end() );
+    fileData.erase( it, fileData.end() );
 
-    if( files.empty() )
+    if( fileData.empty() )
     {
-        wxLogTrace( traceAutoSave, wxS("[history] saver set produced no files; skipping") );
+        wxLogTrace( traceAutoSave, wxS("[history] saver set produced no entries; skipping") );
         return false;
+    }
+
+    // Phase 2: submit Prettify + file I/O + git to background thread
+    m_saveInProgress.store( true, std::memory_order_release );
+
+    m_pendingFuture = GetKiCadThreadPool().submit_task(
+            [this, projectPath = aProjectPath, title = aTitle,
+             data = std::move( fileData )]() mutable -> bool
+            {
+                bool result = commitInBackground( projectPath, title, data );
+                m_saveInProgress.store( false, std::memory_order_release );
+                return result;
+            } );
+
+    return true;
+}
+
+
+bool LOCAL_HISTORY::commitInBackground( const wxString& aProjectPath, const wxString& aTitle,
+                                        const std::vector<HISTORY_FILE_DATA>& aFileData )
+{
+    wxLogTrace( traceAutoSave, wxS("[history] background: writing %zu entries for '%s'"),
+                aFileData.size(), aProjectPath );
+
+    wxString hist = historyPath( aProjectPath );
+
+    // Write files to the .history mirror
+    for( const HISTORY_FILE_DATA& entry : aFileData )
+    {
+        if( !entry.content.empty() )
+        {
+            std::string buf = entry.content;
+
+            if( entry.prettify )
+                KICAD_FORMAT::Prettify( buf, entry.formatMode );
+
+            wxFFile fp( entry.path, wxS( "wb" ) );
+
+            if( fp.IsOpened() )
+            {
+                fp.Write( buf.data(), buf.size() );
+                fp.Close();
+                wxLogTrace( traceAutoSave, wxS("[history] background: wrote %zu bytes to '%s'"),
+                            buf.size(), entry.path );
+            }
+            else
+            {
+                wxLogTrace( traceAutoSave, wxS("[history] background: failed to open '%s' for writing"),
+                            entry.path );
+            }
+        }
+        else if( !entry.sourcePath.IsEmpty() )
+        {
+            wxCopyFile( entry.sourcePath, entry.path, true );
+            wxLogTrace( traceAutoSave, wxS("[history] background: copied '%s' -> '%s'"),
+                        entry.sourcePath, entry.path );
+        }
     }
 
     // Acquire locks using hybrid locking strategy
@@ -161,50 +237,26 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
 
     if( !lock.IsLocked() )
     {
-        wxLogTrace( traceAutoSave, wxS("[history] failed to acquire lock: %s"), lock.GetLockError() );
+        wxLogTrace( traceAutoSave, wxS("[history] background: failed to acquire lock: %s"), lock.GetLockError() );
         return false;
     }
 
     git_repository* repo = lock.GetRepository();
     git_index* index = lock.GetIndex();
-    wxString hist = historyPath( aProjectPath );
 
-    // Stage selected files (mirroring logic from CommitSnapshot but limited to given files)
-    for( const wxString& file : files )
+    // Stage all written files
+    for( const HISTORY_FILE_DATA& entry : aFileData )
     {
-        wxFileName src( file );
+        wxFileName src( entry.path );
 
         if( !src.FileExists() )
-        {
-            wxLogTrace( traceAutoSave, wxS("[history] skip missing '%s'"), file );
             continue;
-        }
 
-        // If saver already produced a path inside history mirror, just stage it.
         if( src.GetFullPath().StartsWith( hist + wxFILE_SEP_PATH ) )
         {
             std::string relHist = src.GetFullPath().ToStdString().substr( hist.length() + 1 );
             git_index_add_bypath( index, relHist.c_str() );
-            wxLogTrace( traceAutoSave, wxS("[history] staged pre-mirrored '%s'"), file );
-            continue;
         }
-
-        wxString relStr;
-        wxString proj = wxFileName( aProjectPath ).GetFullPath();
-
-        if( src.GetFullPath().StartsWith( proj + wxFILE_SEP_PATH ) )
-            relStr = src.GetFullPath().Mid( proj.length() + 1 );
-        else
-            relStr = src.GetFullName();
-
-        wxFileName dst( hist + wxFILE_SEP_PATH + relStr );
-        wxFileName dstDir( dst );
-        dstDir.SetFullName( wxEmptyString );
-        wxFileName::Mkdir( dstDir.GetPath(), 0777, wxPATH_MKDIR_FULL );
-        wxCopyFile( src.GetFullPath(), dst.GetFullPath(), true );
-        std::string rel = dst.GetFullPath().ToStdString().substr( hist.length() + 1 );
-        git_index_add_bypath( index, rel.c_str() );
-        wxLogTrace( traceAutoSave, wxS("[history] staged '%s' as '%s'"), file, wxString::FromUTF8( rel ) );
     }
 
     // Compare index to HEAD; if no diff -> abort to avoid empty commit.
@@ -223,7 +275,7 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
     {
         if( head_tree ) git_tree_free( head_tree );
         if( head_commit ) git_commit_free( head_commit );
-        wxLogTrace( traceAutoSave, wxS("[history] failed to write index tree" ) );
+        wxLogTrace( traceAutoSave, wxS("[history] background: failed to write index tree" ) );
         return false;
     }
 
@@ -239,7 +291,7 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
         if( git_diff_tree_to_tree( &diff, repo, head_tree, indexTree.get(), nullptr ) == 0 )
         {
             hasChanges = git_diff_num_deltas( diff ) > 0;
-            wxLogTrace( traceAutoSave, wxS("[history] diff deltas=%u"), (unsigned) git_diff_num_deltas( diff ) );
+            wxLogTrace( traceAutoSave, wxS("[history] background: diff deltas=%u"), (unsigned) git_diff_num_deltas( diff ) );
             git_diff_free( diff );
         }
     }
@@ -249,12 +301,12 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
 
     if( !hasChanges )
     {
-        wxLogTrace( traceAutoSave, wxS("[history] no changes detected; no commit") );
+        wxLogTrace( traceAutoSave, wxS("[history] background: no changes detected; no commit") );
         return false; // Nothing new; skip commit.
     }
 
     git_signature* rawSig = nullptr;
-    git_signature_now( &rawSig, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &rawSig, "Trace", "hello@buildwithtrace.com" );
     std::unique_ptr<git_signature, decltype( &git_signature_free )> sig( rawSig, &git_signature_free );
 
     git_commit* parent = nullptr;
@@ -276,15 +328,25 @@ bool LOCAL_HISTORY::RunRegisteredSaversAndCommit( const wxString& aProjectPath, 
                        parents ? &constParent : nullptr );
 
     if( rc == 0 )
-        wxLogTrace( traceAutoSave, wxS("[history] commit created %s (%s files=%zu)"),
-                    wxString::FromUTF8( git_oid_tostr_s( &commit_id ) ), msg, files.size() );
+        wxLogTrace( traceAutoSave, wxS("[history] background: commit created %s (%s entries=%zu)"),
+                    wxString::FromUTF8( git_oid_tostr_s( &commit_id ) ), msg, aFileData.size() );
     else
-        wxLogTrace( traceAutoSave, wxS("[history] commit failed rc=%d"), rc );
+        wxLogTrace( traceAutoSave, wxS("[history] background: commit failed rc=%d"), rc );
 
     if( parent ) git_commit_free( parent );
 
     git_index_write( index );
     return rc == 0;
+}
+
+
+void LOCAL_HISTORY::WaitForPendingSave()
+{
+    if( m_pendingFuture.valid() )
+    {
+        wxLogTrace( traceAutoSave, wxS("[history] waiting for pending background save") );
+        m_pendingFuture.get();
+    }
 }
 
 
@@ -307,7 +369,15 @@ bool LOCAL_HISTORY::Init( const wxString& aProjectPath )
     wxString hist = historyPath( aProjectPath );
 
     if( !wxDirExists( hist ) )
-        wxMkdir( hist );
+    {
+        if( wxIsWritable( aProjectPath ) )
+        {
+            if( !wxMkdir( hist ) )
+            {
+                return false;
+            }
+        }
+    }
 
     git_repository* rawRepo = nullptr;
     bool isNewRepo = false;
@@ -325,7 +395,30 @@ bool LOCAL_HISTORY::Init( const wxString& aProjectPath )
             wxFFile f( ignoreFile.GetFullPath(), wxT( "w" ) );
             if( f.IsOpened() )
             {
-                f.Write( wxS( "fp-info-cache\n*.kicad_prl\n*-backups\n" ) );
+                f.Write( wxS( "fp-info-cache\n*-backups\nREADME.txt\n" ) );
+                f.Close();
+            }
+        }
+
+        wxFileName readmeFile( hist, wxS( "README.txt" ) );
+
+        if( !readmeFile.FileExists() )
+        {
+            wxFFile f( readmeFile.GetFullPath(), wxT( "w" ) );
+
+            if( f.IsOpened() )
+            {
+                f.Write( wxS( "KiCad Local History Directory\n"
+                              "=============================\n\n"
+                              "This directory contains automatic snapshots of your project files.\n"
+                              "KiCad periodically saves copies of your work here, allowing you to\n"
+                              "recover from accidental changes or data loss.\n\n"
+                              "You can browse and restore previous versions through KiCad's\n"
+                              "File > Local History menu.\n\n"
+                              "To disable this feature:\n"
+                              "  Preferences > Common > Project Backup > Enable automatic backups\n\n"
+                              "This directory can be safely deleted if you no longer need the\n"
+                              "history, but doing so will permanently remove all saved snapshots.\n" ) );
                 f.Close();
             }
         }
@@ -361,15 +454,16 @@ bool LOCAL_HISTORY::Init( const wxString& aProjectPath )
                 }
 
                 wxFileName fn( path, name );
+                wxString   fullPath = fn.GetFullPath();
 
-                if( fn.DirExists() )
+                if( wxFileName::DirExists( fullPath ) )
                 {
-                    collect( fn.GetFullPath() );
+                    collect( fullPath );
                 }
                 else if( fn.FileExists() )
                 {
                     // Skip transient files
-                    if( fn.GetFullName() != wxS( "fp-info-cache" ) && fn.GetExt() != wxS( "kicad_prl" ) )
+                    if( fn.GetFullName() != wxS( "fp-info-cache" ) )
                         files.Add( fn.GetFullPath() );
                 }
 
@@ -389,6 +483,10 @@ bool LOCAL_HISTORY::Init( const wxString& aProjectPath )
 
             wxLogTrace( traceAutoSave, wxS( "[history] Init: Creating initial snapshot with %zu files" ), vec.size() );
             CommitSnapshot( vec, wxS( "Initial snapshot" ) );
+
+            // Tag the initial snapshot as saved so HeadNewerThanLastSave() doesn't
+            // incorrectly offer to restore when the project is first opened
+            TagSave( aProjectPath, wxS( "project" ) );
         }
         else
         {
@@ -400,62 +498,81 @@ bool LOCAL_HISTORY::Init( const wxString& aProjectPath )
 }
 
 
-bool LOCAL_HISTORY::CommitSnapshot( const std::vector<wxString>& aFiles, const wxString& aTitle )
+// Helper function to commit files using an already-acquired lock
+enum class SNAPSHOT_COMMIT_RESULT
 {
-    if( aFiles.empty() || !Pgm().GetCommonSettings()->m_Backup.enabled )
-        return true;
+    Error,
+    NoChanges,
+    Committed
+};
 
-    wxString        proj = wxFileName( aFiles[0] ).GetPath();
-    wxString        hist = historyPath( proj );
 
-    // Acquire locks using hybrid locking strategy
-    HISTORY_LOCK_MANAGER lock( proj );
-
-    if( !lock.IsLocked() )
-    {
-        wxLogTrace( traceAutoSave, wxS("[history] CommitSnapshot failed to acquire lock: %s"),
-                   lock.GetLockError() );
-        return false;
-    }
-
-    git_repository* repo = lock.GetRepository();
-    git_index* index = lock.GetIndex();
+static SNAPSHOT_COMMIT_RESULT commitSnapshotWithLock( git_repository* repo, git_index* index,
+                                                      const wxString& aHistoryPath, const wxString& aProjectPath,
+                                                      const std::vector<wxString>& aFiles, const wxString& aTitle )
+{
+    std::vector<std::string> filesArrStr;
 
     for( const wxString& file : aFiles )
     {
         wxFileName src( file );
-        wxString relStr;
+        wxString   relPath;
 
-        if( src.GetFullPath().StartsWith( proj + wxFILE_SEP_PATH ) )
-            relStr = src.GetFullPath().Mid( proj.length() + 1 );
+        if( src.GetFullPath().StartsWith( aProjectPath + wxFILE_SEP_PATH ) )
+            relPath = src.GetFullPath().Mid( aProjectPath.length() + 1 );
         else
-            relStr = src.GetFullName(); // Fallback (should not normally happen)
+            relPath = src.GetFullName(); // Fallback (should not normally happen)
 
-        wxFileName dst( hist + wxFILE_SEP_PATH + relStr );
+        relPath.Replace( "\\", "/" ); // libgit2 needs forward slashes on all platforms
+        std::string relPathStr = relPath.ToStdString();
 
-        // Ensure directory tree exists.
-        wxFileName dstDir( dst );
-        dstDir.SetFullName( wxEmptyString );
-        wxFileName::Mkdir( dstDir.GetPath(), 0777, wxPATH_MKDIR_FULL );
+        unsigned int status = 0;
+        int          rc = git_status_file( &status, repo, relPathStr.data() );
 
-        // Copy file into history mirror.
-        wxCopyFile( src.GetFullPath(), dst.GetFullPath(), true );
-
-        // Path inside repo (strip hist + '/').
-        std::string rel = dst.GetFullPath().ToStdString().substr( hist.length() + 1 );
-        git_index_add_bypath( index, rel.c_str() );
+        if( rc == 0 && status != 0 )
+        {
+            wxLogTrace( traceAutoSave, wxS( "File %s status %d " ), relPath, status );
+            filesArrStr.emplace_back( relPathStr );
+        }
+        else if( rc != 0 )
+        {
+            wxLogTrace( traceAutoSave, wxS( "File %s status error %d " ), relPath, rc );
+            filesArrStr.emplace_back( relPathStr ); // Add anyway even if the file is untracked.
+        }
     }
+
+    std::vector<char*> cStrings( filesArrStr.size() );
+
+    for( size_t i = 0; i < filesArrStr.size(); i++ )
+        cStrings[i] = filesArrStr[i].data();
+
+    git_strarray filesArrGit;
+    filesArrGit.count = filesArrStr.size();
+    filesArrGit.strings = cStrings.data();
+
+    if( filesArrStr.size() == 0 )
+    {
+        wxLogTrace( traceAutoSave, wxS( "No changes, skipping" ) );
+        return SNAPSHOT_COMMIT_RESULT::NoChanges;
+    }
+
+    int rc = git_index_add_all( index, &filesArrGit, GIT_INDEX_ADD_DISABLE_PATHSPEC_MATCH | GIT_INDEX_ADD_FORCE, NULL,
+                                NULL );
+    wxLogTrace( traceAutoSave, wxS( "Adding %zu files, rc %d" ), filesArrStr.size(), rc );
+
+    if( rc != 0 )
+        return SNAPSHOT_COMMIT_RESULT::Error;
 
     git_oid tree_id;
     if( git_index_write_tree( &tree_id, index ) != 0 )
-        return false;
+        return SNAPSHOT_COMMIT_RESULT::Error;
 
     git_tree* rawTree = nullptr;
     git_tree_lookup( &rawTree, repo, &tree_id );
     std::unique_ptr<git_tree, decltype( &git_tree_free )> tree( rawTree, &git_tree_free );
 
     git_signature* rawSig = nullptr;
-    git_signature_now( &rawSig, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &rawSig, "Trace", "hello@buildwithtrace.com" );
     std::unique_ptr<git_signature, decltype( &git_signature_free )> sig( rawSig,
                                                                          &git_signature_free );
 
@@ -483,14 +600,22 @@ bool LOCAL_HISTORY::CommitSnapshot( const std::vector<wxString>& aFiles, const w
     git_diff_tree_to_index( &rawDiff, repo, parentTree.get(), index, nullptr );
     std::unique_ptr<git_diff, decltype( &git_diff_free )> diff( rawDiff, &git_diff_free );
 
+    size_t numChangedFiles = git_diff_num_deltas( diff.get() );
+
+    if( numChangedFiles == 0 )
+    {
+        wxLogTrace( traceAutoSave, wxS( "No actual changes in tree, skipping commit" ) );
+        return SNAPSHOT_COMMIT_RESULT::NoChanges;
+    }
+
     wxString msg;
 
     if( !aTitle.IsEmpty() )
         msg << aTitle << wxS( ": " );
 
-    msg << aFiles.size() << wxS( " files changed" );
+    msg << numChangedFiles << wxS( " files changed" );
 
-    for( size_t i = 0; i < git_diff_num_deltas( diff.get() ); ++i )
+    for( size_t i = 0; i < numChangedFiles; ++i )
     {
         const git_diff_delta* delta = git_diff_get_delta( diff.get(), i );
         git_patch* rawPatch = nullptr;
@@ -509,22 +634,50 @@ bool LOCAL_HISTORY::CommitSnapshot( const std::vector<wxString>& aFiles, const w
     git_oid commit_id;
     git_commit* parentPtr = parent.get();
     const git_commit* constParentPtr = parentPtr;
-    git_commit_create( &commit_id, repo, "HEAD", sig.get(), sig.get(), nullptr,
-                       msg.mb_str().data(), tree.get(), parents,
-                       parentPtr ? &constParentPtr : nullptr );
+    if( git_commit_create( &commit_id, repo, "HEAD", sig.get(), sig.get(), nullptr, msg.mb_str().data(), tree.get(),
+                           parents, parentPtr ? &constParentPtr : nullptr )
+        != 0 )
+    {
+        return SNAPSHOT_COMMIT_RESULT::Error;
+    }
+
     git_index_write( index );
-    return true;
+    return SNAPSHOT_COMMIT_RESULT::Committed;
 }
 
 
-bool LOCAL_HISTORY::CommitFullProjectSnapshot( const wxString& aProjectPath, const wxString& aTitle )
+bool LOCAL_HISTORY::CommitSnapshot( const std::vector<wxString>& aFiles, const wxString& aTitle )
 {
-    // Enumerate all regular files under the project path (non-recursive through .history).
-    wxArrayString files;
+    if( aFiles.empty() || !Pgm().GetCommonSettings()->m_Backup.enabled )
+        return true;
+
+    wxString        proj = wxFileName( aFiles[0] ).GetPath();
+    wxString        hist = historyPath( proj );
+
+    // Acquire locks using hybrid locking strategy
+    HISTORY_LOCK_MANAGER lock( proj );
+
+    if( !lock.IsLocked() )
+    {
+        wxLogTrace( traceAutoSave, wxS("[history] CommitSnapshot failed to acquire lock: %s"),
+                   lock.GetLockError() );
+        return false;
+    }
+
+    git_repository* repo = lock.GetRepository();
+    git_index* index = lock.GetIndex();
+
+    return commitSnapshotWithLock( repo, index, hist, proj, aFiles, aTitle ) == SNAPSHOT_COMMIT_RESULT::Committed;
+}
+
+
+// Helper to collect all project files (excluding .history, backups, and transient files)
+static void collectProjectFiles( const wxString& aProjectPath, std::vector<wxString>& aFiles )
+{
     wxDir dir( aProjectPath );
 
     if( !dir.IsOpened() )
-        return false;
+        return;
 
     // Collect recursively.
     std::function<void(const wxString&)> collect = [&]( const wxString& path )
@@ -546,16 +699,17 @@ bool LOCAL_HISTORY::CommitFullProjectSnapshot( const wxString& aProjectPath, con
             }
 
             wxFileName fn( path, name );
+            wxString   fullPath = fn.GetFullPath();
 
-            if( fn.IsDir() && fn.DirExists() )
+            if( wxFileName::DirExists( fullPath ) )
             {
-                collect( fn.GetFullPath() );
+                collect( fullPath );
             }
             else if( fn.FileExists() )
             {
                 // Reuse NoteFileChange filters implicitly by skipping the transient names.
-                if( fn.GetFullName() != wxS( "fp-info-cache" ) && fn.GetExt() != wxS( "kicad_prl" ) )
-                    files.Add( fn.GetFullPath() );
+                if( fn.GetFullName() != wxS( "fp-info-cache" ) )
+                    aFiles.push_back( fn.GetFullPath() );
             }
 
             cont = d.GetNext( &name );
@@ -563,14 +717,18 @@ bool LOCAL_HISTORY::CommitFullProjectSnapshot( const wxString& aProjectPath, con
     };
 
     collect( aProjectPath );
+}
 
-    std::vector<wxString> vec;
-    vec.reserve( files.GetCount() );
 
-    for( unsigned i = 0; i < files.GetCount(); ++i )
-        vec.push_back( files[i] );
+bool LOCAL_HISTORY::CommitFullProjectSnapshot( const wxString& aProjectPath, const wxString& aTitle )
+{
+    std::vector<wxString> files;
+    collectProjectFiles( aProjectPath, files );
 
-    return CommitSnapshot( vec, aTitle );
+    if( files.empty() )
+        return false;
+
+    return CommitSnapshot( files, aTitle );
 }
 
 bool LOCAL_HISTORY::HistoryExists( const wxString& aProjectPath )
@@ -675,7 +833,12 @@ bool LOCAL_HISTORY::HeadNewerThanLastSave( const wxString& aProjectPath )
     git_commit_free( head_commit );
     git_repository_free( repo );
 
-    return save_time && head_time > save_time;
+    // If there are no Last_Save tags but there IS a HEAD commit, we have autosaved
+    // data that was never explicitly saved - offer to restore
+    if( save_time == 0 )
+        return true;
+
+    return head_time > save_time;
 }
 
 bool LOCAL_HISTORY::CommitDuplicateOfLastSave( const wxString& aProjectPath, const wxString& aFileType,
@@ -723,7 +886,7 @@ bool LOCAL_HISTORY::CommitDuplicateOfLastSave( const wxString& aProjectPath, con
     }
 
     git_signature* sigRaw = nullptr;
-    git_signature_now( &sigRaw, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &sigRaw, "Trace", "hello@buildwithtrace.com" );
     std::unique_ptr<git_signature, decltype( &git_signature_free )> sig( sigRaw, &git_signature_free );
 
     wxString msg = aMessage.IsEmpty() ? wxS("Discard unsaved ") + aFileType : aMessage;
@@ -761,8 +924,10 @@ static size_t dirSizeRecursive( const wxString& path )
     while( cont )
     {
         wxFileName fn( path, name );
-        if( fn.DirExists() )
-            total += dirSizeRecursive( fn.GetFullPath() );
+        wxString   fullPath = fn.GetFullPath();
+
+        if( wxFileName::DirExists( fullPath ) )
+            total += dirSizeRecursive( fullPath );
         else if( fn.FileExists() )
             total += (size_t) fn.GetSize().GetValue();
         cont = dir.GetNext( &name );
@@ -824,10 +989,14 @@ bool LOCAL_HISTORY::EnforceSizeLimit( const wxString& aProjectPath, size_t aMaxB
     size_t keptBytes = 0;
     std::vector<git_oid> keep;
 
+    git_odb* odb = nullptr;
+    git_repository_odb( &odb, repo );
+
     std::function<size_t( git_tree* )> accountTree = [&]( git_tree* tree )
     {
         size_t added = 0;
         size_t cnt = git_tree_entrycount( tree );
+
         for( size_t i = 0; i < cnt; ++i )
         {
             const git_tree_entry* entry = git_tree_entry_byindex( tree, i );
@@ -838,13 +1007,11 @@ bool LOCAL_HISTORY::EnforceSizeLimit( const wxString& aProjectPath, size_t aMaxB
 
                 if( seenBlobs.find( *bid ) == seenBlobs.end() )
                 {
-                    git_blob* blob = nullptr;
+                    size_t         len = 0;
+                    git_object_t   type = GIT_OBJECT_ANY;
 
-                    if( git_blob_lookup( &blob, repo, bid ) == 0 )
-                    {
-                        added += git_blob_rawsize( blob );
-                        git_blob_free( blob );
-                    }
+                    if( odb && git_odb_read_header( &len, &type, odb, bid ) == 0 )
+                        added += len;
 
                     seenBlobs.insert( *bid );
                 }
@@ -860,6 +1027,7 @@ bool LOCAL_HISTORY::EnforceSizeLimit( const wxString& aProjectPath, size_t aMaxB
                 }
             }
         }
+
         return added;
     };
 
@@ -884,6 +1052,8 @@ bool LOCAL_HISTORY::EnforceSizeLimit( const wxString& aProjectPath, size_t aMaxB
         else
             break; // stop once limit exceeded
     }
+
+    git_odb_free( odb );
 
     if( keep.empty() )
         keep.push_back( commits.front() ); // ensure at least head
@@ -1181,10 +1351,18 @@ bool checkForLockedFiles( const wxString& aProjectPath, std::vector<wxString>& a
             {
                 findLocks( fullPath.GetFullPath() );
             }
-            else if( fullPath.FileExists() && filename.EndsWith( wxS(".lock") ) )
+            else if( fullPath.FileExists()
+                     && filename.StartsWith( FILEEXT::LockFilePrefix )
+                     && filename.EndsWith( wxString( wxS( "." ) ) + FILEEXT::LockFileExtension ) )
             {
+                // Reconstruct the original filename from the lock file name
+                // Lock files are: ~<original>.<ext>.lck -> need to get <original>.<ext>
+                wxString baseName = filename.Mid( FILEEXT::LockFilePrefix.length() );
+                baseName = baseName.BeforeLast( '.' );  // Remove .lck
+                wxFileName originalFile( dirPath, baseName );
+
                 // Check if this is a valid LOCKFILE (not stale and not ours)
-                LOCKFILE testLock( fullPath.GetFullPath().BeforeLast( '.' ) );
+                LOCKFILE testLock( originalFile.GetFullPath() );
                 if( testLock.Valid() && !testLock.IsLockedByMe() )
                 {
                     aLockedFiles.push_back( fullPath.GetFullPath() );
@@ -1311,6 +1489,16 @@ void collectFilesInDirectory( const wxString& aRootPath, const wxString& aSearch
 
 
 /**
+ * Check if a file should be excluded from backup (and thus not deleted during restore).
+ */
+bool shouldExcludeFromBackup( const wxString& aFilename )
+{
+    // Files explicitly excluded from backup should not be deleted during restore
+    return aFilename == wxS( "fp-info-cache" );
+}
+
+
+/**
  * Find files in current project that won't exist in the restored version.
  */
 void findFilesToDelete( const wxString& aProjectPath, const std::set<wxString>& aRestoredFiles,
@@ -1349,7 +1537,9 @@ void findFilesToDelete( const wxString& aProjectPath, const std::set<wxString>& 
                 // Check if this file exists in the restored commit
                 if( aRestoredFiles.find( relativePath ) == aRestoredFiles.end() )
                 {
-                    aFilesToDelete.push_back( relativePath );
+                    // Don't propose deletion of files that were never in backup scope
+                    if( !shouldExcludeFromBackup( filename ) )
+                        aFilesToDelete.push_back( relativePath );
                 }
             }
 
@@ -1389,8 +1579,8 @@ bool confirmFileDeletion( wxWindow* aParent, const std::vector<wxString>& aFiles
                                      aFilesToDelete.size() - displayCount );
     }
 
-    wxMessageDialog dlg( aParent, message, _( "Delete Files during Restore" ),
-                        wxYES_NO | wxCANCEL | wxICON_QUESTION );
+    KICAD_MESSAGE_DIALOG dlg( aParent, message, _( "Delete Files during Restore" ),
+                              wxYES_NO | wxCANCEL | wxICON_QUESTION );
     dlg.SetYesNoCancelLabels( _( "Proceed" ), _( "Keep All Files" ), _( "Abort" ) );
     dlg.SetExtendedMessage(
         _( "Choosing 'Keep All Files' will restore the selected commit but retain any existing "
@@ -1581,7 +1771,7 @@ bool recordRestoreInHistory( git_repository* aRepo, git_commit* aCommit, git_tre
     git_time_t t = git_commit_time( aCommit );
     wxDateTime dt( (time_t) t );
     git_signature* sig = nullptr;
-    git_signature_now( &sig, "KiCad", "noreply@kicad.org" );
+    git_signature_now( &sig, "Trace", "hello@buildwithtrace.com" );
     git_commit* parent = nullptr;
     git_oid parent_id;
 
@@ -1624,6 +1814,14 @@ bool LOCAL_HISTORY::RestoreCommit( const wxString& aProjectPath, const wxString&
         wxLogTrace( traceAutoSave,
                    wxS( "[history] RestoreCommit: Cannot restore - files are open:%s" ),
                    lockList );
+
+        // Show user-visible warning dialog
+        if( aParent )
+        {
+            wxString msg = _( "Cannot restore - the following files are open by another user:" );
+            msg += lockList;
+            wxMessageBox( msg, _( "Restore Failed" ), wxOK | wxICON_WARNING, aParent );
+        }
         return false;
     }
 
@@ -1660,16 +1858,32 @@ bool LOCAL_HISTORY::RestoreCommit( const wxString& aProjectPath, const wxString&
     git_tree* tree = nullptr;
     git_commit_tree( &tree, commit );
 
-    // Create pre-restore backup snapshot
+    // Create pre-restore backup snapshot using the existing lock
     wxLogTrace( traceAutoSave, wxS( "[history] RestoreCommit: Creating pre-restore backup" ) );
 
-    if( !CommitFullProjectSnapshot( aProjectPath, wxS("Pre-restore backup") ) )
+    std::vector<wxString> backupFiles;
+    collectProjectFiles( aProjectPath, backupFiles );
+
+    if( !backupFiles.empty() )
     {
-        wxLogTrace( traceAutoSave,
-                   wxS( "[history] RestoreCommit: Failed to create pre-restore backup" ) );
-        git_tree_free( tree );
-        git_commit_free( commit );
-        return false;
+        wxString hist = historyPath( aProjectPath );
+        SNAPSHOT_COMMIT_RESULT backupResult = commitSnapshotWithLock( repo, lock.GetIndex(), hist, aProjectPath,
+                                                                      backupFiles, wxS( "Pre-restore backup" ) );
+
+        if( backupResult == SNAPSHOT_COMMIT_RESULT::Error )
+        {
+            wxLogTrace( traceAutoSave,
+                       wxS( "[history] RestoreCommit: Failed to create pre-restore backup" ) );
+            git_tree_free( tree );
+            git_commit_free( commit );
+            return false;
+        }
+
+        if( backupResult == SNAPSHOT_COMMIT_RESULT::NoChanges )
+        {
+            wxLogTrace( traceAutoSave, wxS( "[history] RestoreCommit: Current state already matches HEAD; "
+                                            "continuing without a new backup commit" ) );
+        }
     }
 
     // STEP 3: Extract commit to temporary location
@@ -1767,6 +1981,11 @@ bool LOCAL_HISTORY::RestoreCommit( const wxString& aProjectPath, const wxString&
     git_commit_free( commit );
 
     wxLogTrace( traceAutoSave, wxS( "[history] RestoreCommit: Complete" ) );
+
+    AMPLITUDE_CLIENT::Instance().Track( "local_history_restored", {
+        { "app_type", "unknown" },
+    } );
+
     return true;
 }
 
@@ -1775,46 +1994,87 @@ void LOCAL_HISTORY::ShowRestoreDialog( const wxString& aProjectPath, wxWindow* a
     if( !HistoryExists( aProjectPath ) )
         return;
 
+    std::vector<LOCAL_HISTORY_SNAPSHOT_INFO> snapshots = LoadSnapshots( aProjectPath );
+
+    if( snapshots.empty() )
+        return;
+
+    DIALOG_RESTORE_LOCAL_HISTORY dlg( aParent, snapshots );
+
+    if( dlg.ShowModal() == wxID_OK )
+    {
+        wxString selectedHash = dlg.GetSelectedHash();
+
+        if( !selectedHash.IsEmpty() )
+            RestoreCommit( aProjectPath, selectedHash, aParent );
+    }
+}
+
+std::vector<LOCAL_HISTORY_SNAPSHOT_INFO> LOCAL_HISTORY::LoadSnapshots( const wxString& aProjectPath )
+{
+    std::vector<LOCAL_HISTORY_SNAPSHOT_INFO> snapshots;
+
     wxString hist = historyPath( aProjectPath );
     git_repository* repo = nullptr;
 
     if( git_repository_open( &repo, hist.mb_str().data() ) != 0 )
-        return;
+        return snapshots;
 
     git_revwalk* walk = nullptr;
-    git_revwalk_new( &walk, repo );
+    if( git_revwalk_new( &walk, repo ) != 0 )
+    {
+        git_repository_free( repo );
+        return snapshots;
+    }
+
     git_revwalk_push_head( walk );
 
-    std::vector<wxString> choices;
-    std::vector<wxString> hashes;
     git_oid oid;
 
     while( git_revwalk_next( &oid, walk ) == 0 )
     {
         git_commit* commit = nullptr;
-        git_commit_lookup( &commit, repo, &oid );
 
-        git_time_t t = git_commit_time( commit );
-        wxDateTime dt( (time_t) t );
-        wxString   line;
+        if( git_commit_lookup( &commit, repo, &oid ) != 0 )
+            continue;
 
-        line.Printf( wxS( "%s %s" ), dt.FormatISOCombined().c_str(),
-                     wxString::FromUTF8( git_commit_summary( commit ) ) );
-        choices.push_back( line );
-        hashes.push_back( wxString::FromUTF8( git_oid_tostr_s( &oid ) ) );
+        LOCAL_HISTORY_SNAPSHOT_INFO info;
+        info.hash = wxString::FromUTF8( git_oid_tostr_s( &oid ) );
+        info.date = wxDateTime( static_cast<time_t>( git_commit_time( commit ) ) );
+        info.message = wxString::FromUTF8( git_commit_message( commit ) );
+
+        wxString firstLine = info.message.BeforeFirst( '\n' );
+
+        long     parsedCount = 0;
+        wxString remainder;
+        firstLine.BeforeFirst( ':', &remainder );
+        remainder.Trim( true ).Trim( false );
+
+        if( remainder.EndsWith( wxS( "files changed" ) ) )
+        {
+            wxString countText = remainder.BeforeFirst( ' ' );
+
+            if( countText.ToLong( &parsedCount ) )
+                info.filesChanged = static_cast<int>( parsedCount );
+        }
+
+        info.summary = firstLine.BeforeFirst( ':' );
+
+        wxString rest;
+        info.message.BeforeFirst( '\n', &rest );
+        wxArrayString lines = wxSplit( rest, '\n', '\0' );
+
+        for( const wxString& line : lines )
+        {
+            if( !line.IsEmpty() )
+                info.changedFiles.Add( line );
+        }
+
+        snapshots.push_back( std::move( info ) );
         git_commit_free( commit );
     }
 
     git_revwalk_free( walk );
     git_repository_free( repo );
-
-    if( choices.empty() )
-        return;
-
-    int index = wxGetSingleChoiceIndex( _( "Select snapshot" ), _( "Restore" ),
-                                        (int) choices.size(), &choices[0], aParent );
-
-    if( index != wxNOT_FOUND )
-        RestoreCommit( aProjectPath, hashes[index] );
+    return snapshots;
 }
-

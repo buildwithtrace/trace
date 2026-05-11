@@ -1,0 +1,17 @@
+{
+  "name": "gettext",
+  "version": "0.21",
+  "port-version": 100,
+  "description": "GNU gettext - stub port that uses pre-built binaries from PATH (workaround for vcpkg build issues on Windows)",
+  "homepage": "https://www.gnu.org/software/gettext/",
+  "license": "GPL-3.0-or-later",
+  "supports": "windows",
+  "dependencies": [
+    "gettext-libintl"
+  ],
+  "features": {
+    "tools": {
+      "description": "GNU gettext tools - uses pre-built msgfmt/xgettext from PATH"
+    }
+  }
+}

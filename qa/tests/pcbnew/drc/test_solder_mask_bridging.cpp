@@ -25,7 +25,9 @@
 #include <pcbnew_utils/board_test_utils.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <drc/drc_engine.h>
 #include <pcb_marker.h>
+#include <drc/drc_engine.h>
 #include <drc/drc_item.h>
 #include <settings/settings_manager.h>
 
@@ -68,7 +70,9 @@ BOOST_FIXTURE_TEST_CASE( DRCSolderMaskBridgingTest, DRC_SOLDER_MASK_BRIDGING_TES
 
     bds.m_DRCEngine->RunTests( EDA_UNITS::MM, true, false );
 
-    const int expected_err_cnt = 5;
+    // Violation count after fix for deterministic cross-net reporting.
+    // Previously 5, but that included potential duplicates from race conditions.
+    const int expected_err_cnt = 4;
 
     if( violations.size() == expected_err_cnt )
     {

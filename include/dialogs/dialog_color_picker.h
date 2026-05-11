@@ -71,7 +71,8 @@ enum CHANGED_COLOR
     HUE_CHANGED,
     SAT_CHANGED,
     VAL_CHANGED,
-    HEX_CHANGED
+    HEX_CHANGED,
+    INIT
 };
 
 class DIALOG_COLOR_PICKER : public DIALOG_COLOR_PICKER_BASE
@@ -91,7 +92,10 @@ public:
                          const KIGFX::COLOR4D& aDefaultColor = KIGFX::COLOR4D::UNSPECIFIED );
 	~DIALOG_COLOR_PICKER();
 
-	KIGFX::COLOR4D GetColor() { return m_newColor4D; };
+	KIGFX::COLOR4D GetColor()
+    {
+        return KIGFX::COLOR4D( m_colorValue->GetValue() );
+    };
 
 private:
     /* When the dialog is created, the mouse cursor can be on the RGB or HSV palette selector

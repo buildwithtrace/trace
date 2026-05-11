@@ -3,6 +3,7 @@
  *
  * Copyright (C) 1992-2010 jean-pierre.charras
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -42,6 +43,7 @@
 
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
+#include <kiplatform/ui.h>
 
 
 #define DEFAULT_DPI 300     // the image DPI used in formats that do not define a DPI
@@ -152,7 +154,7 @@ BITMAP2CMP_FRAME::BITMAP2CMP_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_panel( nullptr ),
         m_statusBar( nullptr )
 {
-    m_aboutTitle = _HKI( "KiCad Image Converter" );
+    m_aboutTitle = _HKI( "Trace Image Converter" );
 
     // Give an icon
     wxIcon icon;
@@ -205,7 +207,12 @@ BITMAP2CMP_FRAME::BITMAP2CMP_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
 BITMAP2CMP_FRAME::~BITMAP2CMP_FRAME()
 {
+    // Shutdown all running tools
+    if( m_toolManager )
+        m_toolManager->ShutdownAllTools();
+
     SaveSettings( config() );
+
     /*
      * This needed for OSX: avoids further OnDraw processing after this
      * destructor and before the native window is destroyed
@@ -394,8 +401,9 @@ void BITMAP2CMP_FRAME::OnLoadFile()
         path = m_mruPath;
 
     wxFileDialog fileDlg( this, _( "Choose Image" ), path, wxEmptyString,
-                          _( "Image Files" ) + wxS( " " )+ wxImage::GetImageExtWildcard(),
-                          wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+                          FILEEXT::ImageFileWildcard(), wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &fileDlg );
 
     if( fileDlg.ShowModal() != wxID_OK )
         return;
@@ -438,6 +446,8 @@ void BITMAP2CMP_FRAME::ExportDrawingSheetFormat()
     wxFileDialog fileDlg( this, _( "Create Drawing Sheet File" ), path, wxEmptyString,
                           FILEEXT::DrawingSheetFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &fileDlg );
+
     if( fileDlg.ShowModal() != wxID_OK )
         return;
 
@@ -470,6 +480,8 @@ void BITMAP2CMP_FRAME::ExportPostScriptFormat()
 
     wxFileDialog fileDlg( this, _( "Create PostScript File" ), path, wxEmptyString,
                           FILEEXT::PSFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &fileDlg );
 
     if( fileDlg.ShowModal() != wxID_OK )
         return;
@@ -505,6 +517,8 @@ void BITMAP2CMP_FRAME::ExportEeschemaFormat()
                           FILEEXT::KiCadSymbolLibFileWildcard(),
                           wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &fileDlg );
+
     if( fileDlg.ShowModal() != wxID_OK )
         return;
 
@@ -537,6 +551,8 @@ void BITMAP2CMP_FRAME::ExportPcbnewFormat()
     wxFileDialog fileDlg( this, _( "Create Footprint Library" ), path, wxEmptyString,
                           FILEEXT::KiCadFootprintLibFileWildcard(),
                           wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &fileDlg );
 
     if( fileDlg.ShowModal() != wxID_OK )
         return;

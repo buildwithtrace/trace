@@ -19,14 +19,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <set>
 
 #include <wx/string.h>
 #include <wx/filename.h>
 
-#include <mmh3_hash.h>
-#include <picosha2.h>
 #include <wildcards_and_files_ext.h>
 #include <functional>
 #include <kicommon.h>
@@ -41,7 +40,7 @@ namespace KIFONT
 class KICOMMON_API EMBEDDED_FILES
 {
 public:
-    struct EMBEDDED_FILE
+    struct KICOMMON_API EMBEDDED_FILE
     {
         enum class FILE_TYPE
         {
@@ -57,30 +56,13 @@ public:
                 is_valid( false )
         {}
 
-        bool Validate()
-        {
-            MMH3_HASH hash( EMBEDDED_FILES::Seed() );
-            hash.add( decompressedData );
-
-            is_valid = ( hash.digest().ToString() == data_hash );
-            return is_valid;
-        }
+        bool Validate();
 
         // This is the old way of validating the file.  It is deprecated and retained only
         // to validate files that were previously embedded.
-        bool Validate_SHA256()
-        {
-            std::string new_sha;
-            picosha2::hash256_hex_string( decompressedData, new_sha );
+        bool Validate_SHA256();
 
-            is_valid = ( new_sha == data_hash );
-            return is_valid;
-        }
-
-        wxString GetLink() const
-        {
-            return wxString::Format( "%s://%s", FILEEXT::KiCadUriPrefix, name );
-        }
+        wxString GetLink() const;
 
         wxString          name;
         FILE_TYPE         type;
@@ -104,8 +86,9 @@ public:
 
     EMBEDDED_FILES( EMBEDDED_FILES&& other ) noexcept;
     EMBEDDED_FILES( const EMBEDDED_FILES& other );
+    EMBEDDED_FILES( const EMBEDDED_FILES& other, bool aDeepCopy );
 
-    ~EMBEDDED_FILES()
+    virtual ~EMBEDDED_FILES()
     {
         for( auto& file : m_files )
             delete file.second;
@@ -220,6 +203,15 @@ public:
      * This call is used when loading the embedded files using the parsers.
      */
     static RETURN_CODE  DecompressAndDecode( EMBEDDED_FILE& aFile );
+
+    /**
+     * Compute the hash of a file on disk without fully embedding it.
+     *
+     * @param aFileName is the path to the file to hash.
+     * @param aHash is the output string to store the computed hash.
+     * @return OK on success, FILE_NOT_FOUND if file cannot be read.
+     */
+    static RETURN_CODE ComputeFileHash( const wxFileName& aFileName, std::string& aHash );
 
     /**
      * Returns the embedded file with the given name or nullptr if it does not exist.

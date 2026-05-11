@@ -48,7 +48,20 @@ public:
 
     wxSize GetSize() const override
     {
-        return wxSize( GetOwner()->GetWidth(), GetTextExtent( m_text ).y + 2 );
+        wxSize size( GetOwner()->GetWidth(), GetTextExtent( m_text ).y + 2 );
+
+#if defined( __WXGTK__ ) && !wxCHECK_VERSION( 3, 2, 7 )
+        // Somehow returning 0 or negative width prevents the returned height from
+        // being taken into account at all, even if we return strictly positive
+        // width from later calls to GetSize(), meaning that it's enough to return
+        // 0 from it once to completely break the layout for the entire lifetime of
+        // the control.
+        //
+        // As this is completely unexpected, forcefully prevent this from happening
+        size.IncTo( wxSize( 1, 1 ) );
+#endif
+
+        return size;
     }
 
     bool GetValue( wxVariant& aValue ) const override
@@ -152,6 +165,12 @@ LIB_TREE_MODEL_ADAPTER::~LIB_TREE_MODEL_ADAPTER()
 {}
 
 
+TOOL_DISPATCHER* LIB_TREE_MODEL_ADAPTER::GetToolDispatcher() const
+{
+    return m_parent->GetToolDispatcher();
+}
+
+
 void LIB_TREE_MODEL_ADAPTER::loadColumnConfig()
 {
     for( const std::pair<const wxString, int>& pair : m_cfg.column_widths )
@@ -230,8 +249,7 @@ void LIB_TREE_MODEL_ADAPTER::SetPreselectNode( const LIB_ID& aLibId, int aUnit )
 }
 
 
-LIB_TREE_NODE_LIBRARY& LIB_TREE_MODEL_ADAPTER::DoAddLibraryNode( const wxString& aNodeName,
-                                                                 const wxString& aDesc,
+LIB_TREE_NODE_LIBRARY& LIB_TREE_MODEL_ADAPTER::DoAddLibraryNode( const wxString& aNodeName, const wxString& aDesc,
                                                                  bool pinned )
 {
     LIB_TREE_NODE_LIBRARY& lib_node = m_tree.AddLib( aNodeName, aDesc );
@@ -242,15 +260,17 @@ LIB_TREE_NODE_LIBRARY& LIB_TREE_MODEL_ADAPTER::DoAddLibraryNode( const wxString&
 }
 
 
-LIB_TREE_NODE_LIBRARY& LIB_TREE_MODEL_ADAPTER::DoAddLibrary( const wxString& aNodeName,
-                                                             const wxString& aDesc,
+LIB_TREE_NODE_LIBRARY& LIB_TREE_MODEL_ADAPTER::DoAddLibrary( const wxString& aNodeName, const wxString& aDesc,
                                                              const std::vector<LIB_TREE_ITEM*>& aItemList,
                                                              bool pinned, bool presorted )
 {
     LIB_TREE_NODE_LIBRARY& lib_node = DoAddLibraryNode( aNodeName, aDesc, pinned );
 
     for( LIB_TREE_ITEM* item: aItemList )
-        lib_node.AddItem( item );
+    {
+        if( item )
+            lib_node.AddItem( item );
+    }
 
     lib_node.AssignIntrinsicRanks( m_shownColumns, presorted );
 
@@ -266,6 +286,8 @@ void LIB_TREE_MODEL_ADAPTER::RemoveGroup( bool aRecentGroup, bool aPlacedGroup )
 
 void LIB_TREE_MODEL_ADAPTER::UpdateSearchString( const wxString& aSearch, bool aState )
 {
+    const LIB_TREE_NODE* firstMatch = nullptr;
+
     {
         wxWindowUpdateLocker updateLock( m_widget );
 
@@ -314,9 +336,13 @@ void LIB_TREE_MODEL_ADAPTER::UpdateSearchString( const wxString& aSearch, bool a
         m_tree.SortNodes( m_sort_mode == BEST_MATCH );
         AfterReset();
         Thaw();
-    }
 
-    const LIB_TREE_NODE* firstMatch = showResults();
+        // Move showResults inside the update locker to ensure all tree manipulation
+        // (including ExpandAncestors) happens while the window is frozen. This prevents
+        // GTK from rendering stale cached cell data during partial updates.
+        // https://gitlab.com/kicad/code/kicad/-/issues/18407
+        firstMatch = showResults();
+    }
 
 #ifdef __WXGTK__
     // Ensure the control is repainted with the updated data.  Without an explicit
@@ -324,7 +350,10 @@ void LIB_TREE_MODEL_ADAPTER::UpdateSearchString( const wxString& aSearch, bool a
     // them, leading to mismatched tree contents.
     m_widget->Refresh();
     m_widget->Update();
-    wxYield();
+
+    // This causes crashes on Linux.  Until someone can figure out why, please leave this commented
+    // out.
+    // wxSafeYield();
 #endif
 
     if( firstMatch )
@@ -443,9 +472,9 @@ wxDataViewColumn* LIB_TREE_MODEL_ADAPTER::doAddColumn( const wxString& aHeader, 
 
     int index = (int) m_columns.size();
 
-    wxDataViewColumn* col = new wxDataViewColumn(
-            translatedHeader, new LIB_TREE_RENDERER(), index, m_colWidths[aHeader], wxALIGN_NOT,
-            wxDATAVIEW_CELL_INERT | static_cast<int>( wxDATAVIEW_COL_RESIZABLE ) );
+    wxDataViewColumn* col = new wxDataViewColumn( translatedHeader, new LIB_TREE_RENDERER(), index,
+                                                  m_colWidths[aHeader], wxALIGN_NOT,
+                                                  wxDATAVIEW_CELL_INERT | (int) wxDATAVIEW_COL_RESIZABLE );
     m_widget->AppendColumn( col );
 
     col->SetMinWidth( headerMinWidth.x );
@@ -551,8 +580,8 @@ wxDataViewItem LIB_TREE_MODEL_ADAPTER::GetCurrentDataViewItem()
 }
 
 
-unsigned int LIB_TREE_MODEL_ADAPTER::GetChildren( const wxDataViewItem&   aItem,
-                                                  wxDataViewItemArray&    aChildren ) const
+unsigned int LIB_TREE_MODEL_ADAPTER::GetChildren( const wxDataViewItem& aItem,
+                                                  wxDataViewItemArray& aChildren ) const
 {
     const LIB_TREE_NODE* node = ( aItem.IsOk() ? ToNode( aItem ) : &m_tree );
     unsigned int         count = 0;
@@ -623,7 +652,10 @@ void LIB_TREE_MODEL_ADAPTER::RefreshTree()
         size_t i = 0;
 
         for( const auto& [ colName, colPtr ] : m_colNameMap )
-            m_colWidths[ colName ] = widths[i++];
+        {
+            if( i < widths.size() )
+                m_colWidths[ colName ] = widths[i++];
+        }
     }
 
     auto colIt = m_colWidths.begin();
@@ -636,7 +668,7 @@ void LIB_TREE_MODEL_ADAPTER::RefreshTree()
 
     for( const auto& [ colName, colPtr ] : m_colNameMap )
     {
-        if( colPtr == m_columns[0] )
+        if( colPtr == m_columns[0] || colPtr == nullptr )
             continue;
 
         wxASSERT( m_colWidths.count( colName ) );
@@ -680,9 +712,8 @@ wxDataViewItem LIB_TREE_MODEL_ADAPTER::GetParent( const wxDataViewItem& aItem ) 
 }
 
 
-void LIB_TREE_MODEL_ADAPTER::GetValue( wxVariant&              aVariant,
-                                       const wxDataViewItem&   aItem,
-                                       unsigned int            aCol ) const
+void LIB_TREE_MODEL_ADAPTER::GetValue( wxVariant& aVariant, const wxDataViewItem& aItem,
+                                       unsigned int aCol ) const
 {
     if( IsFrozen() )
     {
@@ -726,9 +757,8 @@ void LIB_TREE_MODEL_ADAPTER::GetValue( wxVariant&              aVariant,
 }
 
 
-bool LIB_TREE_MODEL_ADAPTER::GetAttr( const wxDataViewItem&   aItem,
-                                      unsigned int            aCol,
-                                      wxDataViewItemAttr&     aAttr ) const
+bool LIB_TREE_MODEL_ADAPTER::GetAttr( const wxDataViewItem& aItem, unsigned int aCol,
+                                      wxDataViewItemAttr& aAttr ) const
 {
     if( IsFrozen() )
         return false;

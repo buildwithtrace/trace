@@ -23,8 +23,11 @@
 
 
 #include <board_commit.h>
+#include <footprint.h>
+#include <tools/pcb_selection.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
+#include <widgets/wx_infobar.h>
 #include <widgets/wx_progress_reporters.h>
 
 #include "ar_autoplacer.h"
@@ -129,7 +132,7 @@ int AUTOPLACE_TOOL::autoplaceSelected( const TOOL_EVENT& aEvent )
 int AUTOPLACE_TOOL::autoplaceOffboard( const TOOL_EVENT& aEvent )
 {
     SHAPE_POLY_SET boardShape;
-    board()->GetBoardPolygonOutlines( boardShape );
+    board()->GetBoardPolygonOutlines( boardShape, true );
 
     std::vector<FOOTPRINT*> footprints;
 

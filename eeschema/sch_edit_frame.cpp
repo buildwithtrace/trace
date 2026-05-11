@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2017 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,24 +24,33 @@
  */
 
 #include <algorithm>
+#include <fstream>
 #include <api/api_handler_sch.h>
 #include <api/api_server.h>
 #include <base_units.h>
 #include <bitmaps.h>
 #include <confirm.h>
+#include <amplitude_client.h>
 #include <connection_graph.h>
 #include <dialogs/dialog_erc.h>
 #include <dialogs/dialog_book_reporter.h>
 #include <dialogs/dialog_symbol_fields_table.h>
 #include <widgets/sch_design_block_pane.h>
 #include <widgets/panel_remote_symbol.h>
+#include <widgets/ai_chat_panel.h>
 #include <wx/srchctrl.h>
+#include <wx/dir.h>
 #include <mail_type.h>
 #include <wx/clntdata.h>
 #include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/menu.h>
 #include <local_history.h>
+#include <auth/auth_manager.h>
+#include <ai_diff_analyzer.h>
+#include <reporter.h>
+#include <sch_commit.h>
+#include <sch_reference_list.h>
 #include <eeschema_id.h>
 #include <executable_names.h>
 #include <gal/graphics_abstraction_layer.h>
@@ -50,10 +60,12 @@
 #include <string_utils.h>
 #include <kiface_base.h>
 #include <kiplatform/app.h>
+#include <kiplatform/ui.h>
 #include <kiway.h>
 #include <symbol_edit_frame.h>
 #include <symbol_viewer_frame.h>
 #include <pgm_base.h>
+#include <process/python_process_manager.h>
 #include <core/profile.h>
 #include <project/project_file.h>
 #include <project/net_settings.h>
@@ -65,6 +77,9 @@
 #include <sch_sheet_pin.h>
 #include <sch_commit.h>
 #include <sch_rule_area.h>
+#include <sch_pin.h>
+#include <erc/erc_item.h>
+#include <erc/erc.h>
 #include <settings/settings_manager.h>
 #include <advanced_config.h>
 #include <sim/simulator_frame.h>
@@ -119,6 +134,7 @@
 #include <wx/log.h>
 #include <wx/choicdlg.h>
 #include <wx/textdlg.h>
+#include <wx/generic/treectlg.h>
 
 
 #ifdef KICAD_IPC_API
@@ -143,8 +159,14 @@ BEGIN_EVENT_TABLE( SCH_EDIT_FRAME, SCH_BASE_FRAME )
 
     EVT_MENU( ID_IMPORT_NON_KICAD_SCH, SCH_EDIT_FRAME::OnImportProject )
 
+    EVT_MENU( ID_ACCOUNT_SIGN_IN, SCH_EDIT_FRAME::OnAccountSignIn )
+    EVT_MENU( ID_ACCOUNT_SIGN_OUT, SCH_EDIT_FRAME::OnAccountSignOut )
+
     EVT_MENU( wxID_EXIT, SCH_EDIT_FRAME::OnExit )
     EVT_MENU( wxID_CLOSE, SCH_EDIT_FRAME::OnExit )
+
+    EVT_CHOICE( ID_ON_ZOOM_SELECT, SCH_EDIT_FRAME::OnSelectZoom )
+    EVT_CHOICE( ID_ON_GRID_SELECT, SCH_EDIT_FRAME::OnSelectGrid )
 
     // Drop files event
     EVT_DROP_FILES( SCH_EDIT_FRAME::OnDropFiles )
@@ -167,7 +189,9 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         m_netNavigatorMenuNetName(),
         m_highlightedConnChanged( false ),
         m_designBlocksPane( nullptr ),
-        m_remoteSymbolPane( nullptr )
+        m_remoteSymbolPane( nullptr ),
+        m_currentVariantCtrl( nullptr ),
+        m_currentManufacturerCtrl( nullptr )
 {
     m_maximizeByDefault = true;
     m_schematic = new SCHEMATIC( &Prj() );
@@ -177,7 +201,7 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_showBorderAndTitleBlock = true;   // true to show sheet references
     m_supportsAutoSave = true;
     m_syncingPcbToSchSelection = false;
-    m_aboutTitle = _HKI( "KiCad Schematic Editor" );
+    m_aboutTitle = _HKI( "Trace Schematic Editor" );
     m_show_search = false;
     // Ensure timer has an owner before binding so it generates events.
     m_crossProbeFlashTimer.SetOwner( this );
@@ -208,7 +232,6 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_toolbarSettings = GetToolbarSettings<SCH_EDIT_TOOLBAR_SETTINGS>( "eeschema-toolbars" );
     configureToolbars();
-    RecreateToolbars();
 
     // Ensure the "Line modes" toolbar group shows the current angle mode on startup
     if( GetToolManager() )
@@ -217,6 +240,9 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 #ifdef KICAD_IPC_API
     wxTheApp->Bind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED, &SCH_EDIT_FRAME::onPluginAvailabilityChanged, this );
 #endif
+
+    // Listen for auth state changes to update the Account menu
+    AUTH_MANAGER::Instance().Bind( EVT_AUTH_STATE_CHANGED, &SCH_EDIT_FRAME::OnAuthStateChanged, this );
 
     m_hierarchy = new HIERARCHY_PANE( this );
 
@@ -229,6 +255,7 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_searchPane = new SCH_SEARCH_PANE( this );
     m_propertiesPanel = new SCH_PROPERTIES_PANEL( this, this );
     m_remoteSymbolPane = new PANEL_REMOTE_SYMBOL( this );
+    m_aiChatPanel = new AI_CHAT_PANEL( this, this );
 
     m_propertiesPanel->SetSplitterProportion( eeconfig()->m_AuiPanels.properties_splitter );
 
@@ -236,6 +263,8 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_designBlocksPane = new SCH_DESIGN_BLOCK_PANE( this, nullptr, m_designBlockHistoryList );
 
     m_auimgr.SetManagedWindow( this );
+
+    RecreateToolbars();
 
     CreateInfoBar();
 
@@ -245,11 +274,12 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     EESCHEMA_SETTINGS::APPEARANCE appearance_cfg = eeconfig()->m_Appearance;
 
     // Rows; layers 4 - 6
-    m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( wxS( "TopMainToolbar" ) )
-                      .Top().Layer( 6 ) );
+    if( m_tbTopMain )
+        m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( wxS( "TopMainToolbar" ) )
+                          .Top().Layer( 6 ) );
 
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( wxS( "MsgPanel" ) )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     // Columns; layers 1 - 3
     m_auimgr.AddPane( m_hierarchy, EDA_PANE().Palette().Name( SchematicHierarchyPaneName() )
@@ -269,14 +299,17 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_auimgr.AddPane( m_designBlocksPane, defaultDesignBlocksPaneInfo( this ) );
     m_auimgr.AddPane( m_remoteSymbolPane, defaultRemoteSymbolPaneInfo( this ) );
+    m_auimgr.AddPane( m_aiChatPanel, defaultAIChatPaneInfo( this ) );
 
     m_auimgr.AddPane( createHighlightedNetNavigator(), defaultNetNavigatorPaneInfo() );
 
-    m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( wxS( "LeftToolbar" ) )
-                      .Left().Layer( 2 ) );
+    if( m_tbLeft )
+        m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( wxS( "LeftToolbar" ) )
+                          .Left().Layer( 2 ) );
 
-    m_auimgr.AddPane( m_tbRight, EDA_PANE().VToolbar().Name( wxS( "RightToolbar" ) )
-                      .Right().Layer( 2 ) );
+    if( m_tbRight )
+        m_auimgr.AddPane( m_tbRight, EDA_PANE().VToolbar().Name( wxS( "RightToolbar" ) )
+                          .Right().Layer( 2 ) );
 
     // Center
     m_auimgr.AddPane( GetCanvas(), EDA_PANE().Canvas().Name( wxS( "DrawFrame" ) )
@@ -303,11 +336,24 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     wxAuiPaneInfo& selectionFilterPane = m_auimgr.GetPane( wxS( "SelectionFilter" ) );
     wxAuiPaneInfo& designBlocksPane = m_auimgr.GetPane( DesignBlocksPaneName() );
     wxAuiPaneInfo& remoteSymbolPane = m_auimgr.GetPane( RemoteSymbolPaneName() );
+    wxAuiPaneInfo& aiChatPane = m_auimgr.GetPane( wxS( "AIChat" ) );
 
     hierarchy_pane.Show( aui_cfg.show_schematic_hierarchy );
     netNavigatorPane.Show( aui_cfg.show_net_nav_panel );
     propertiesPane.Show( aui_cfg.show_properties );
     designBlocksPane.Show( aui_cfg.design_blocks_show );
+    aiChatPane.Show( aui_cfg.ai_chat_show );
+
+    wxAuiPaneInfo& topMainToolbar = m_auimgr.GetPane( wxS( "TopMainToolbar" ) );
+    wxAuiPaneInfo& leftToolbar = m_auimgr.GetPane( wxS( "LeftToolbar" ) );
+    wxAuiPaneInfo& rightToolbar = m_auimgr.GetPane( wxS( "RightToolbar" ) );
+
+    if( topMainToolbar.IsOk() )
+        topMainToolbar.Top().Layer( 6 ).Position( 0 ).Show( true );
+    if( leftToolbar.IsOk() )
+        leftToolbar.Position( 0 ).Show( true );
+    if( rightToolbar.IsOk() )
+        rightToolbar.Show( true );
 
     if( m_remoteSymbolPane && !m_remoteSymbolPane->HasDataSources() )
         remoteSymbolPane.Show( false );
@@ -339,18 +385,16 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     if( aui_cfg.schematic_hierarchy_float )
         hierarchy_pane.Float();
 
-    if( aui_cfg.search_panel_height > 0
-        && ( aui_cfg.search_panel_dock_direction == wxAUI_DOCK_TOP
-            || aui_cfg.search_panel_dock_direction == wxAUI_DOCK_BOTTOM ) )
+    if( aui_cfg.search_panel_height > 0 && (   aui_cfg.search_panel_dock_direction == wxAUI_DOCK_TOP
+                                            || aui_cfg.search_panel_dock_direction == wxAUI_DOCK_BOTTOM ) )
     {
         wxAuiPaneInfo& searchPane = m_auimgr.GetPane( SearchPaneName() );
         searchPane.Direction( aui_cfg.search_panel_dock_direction );
         SetAuiPaneSize( m_auimgr, searchPane, -1, aui_cfg.search_panel_height );
     }
 
-    else if( aui_cfg.search_panel_width > 0
-            && ( aui_cfg.search_panel_dock_direction == wxAUI_DOCK_LEFT
-                || aui_cfg.search_panel_dock_direction == wxAUI_DOCK_RIGHT ) )
+    else if( aui_cfg.search_panel_width > 0 && (   aui_cfg.search_panel_dock_direction == wxAUI_DOCK_LEFT
+                                                || aui_cfg.search_panel_dock_direction == wxAUI_DOCK_RIGHT ) )
     {
         wxAuiPaneInfo& searchPane = m_auimgr.GetPane( SearchPaneName() );
         searchPane.Direction( aui_cfg.search_panel_dock_direction );
@@ -364,7 +408,9 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
         SetAuiPaneSize( m_auimgr, designBlocksPane, aui_cfg.design_blocks_panel_docked_width, -1 );
 
     if( aui_cfg.remote_symbol_show )
+    {
         SetAuiPaneSize( m_auimgr, remoteSymbolPane, aui_cfg.remote_symbol_panel_docked_width, -1 );
+    }
 
     if( aui_cfg.hierarchy_panel_docked_width > 0 )
     {
@@ -407,6 +453,14 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     {
         m_auimgr.Update();
     }
+
+    CallAfter( [this]()
+            {
+                wxAuiPaneInfo& remotePane = m_auimgr.GetPane( RemoteSymbolPaneName() );
+
+                if( remotePane.IsShown() && m_remoteSymbolPane )
+                    m_remoteSymbolPane->Activate();
+            } );
 
     resolveCanvasType();
     SwitchCanvas( m_canvasType );
@@ -469,6 +523,8 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     wxPoint canvas_pos = GetCanvas()->GetScreenPosition();
     hierarchy_pane.FloatingPosition( canvas_pos.x + 10, canvas_pos.y + 10 );
 
+    Bind( wxEVT_CHOICE, &SCH_EDIT_FRAME::onVariantSelected, this, ID_TOOLBAR_SCH_SELECT_VARAIANT );
+    Bind( wxEVT_CHOICE, &SCH_EDIT_FRAME::onManufacturerSelected, this, ID_TOOLBAR_SCH_SELECT_MANUFACTURER );
     Bind( EDA_EVT_CLOSE_DIALOG_BOOK_REPORTER, &SCH_EDIT_FRAME::onCloseSymbolDiffDialog, this );
     Bind( EDA_EVT_CLOSE_ERC_DIALOG, &SCH_EDIT_FRAME::onCloseErcDialog, this );
     Bind( EDA_EVT_CLOSE_DIALOG_SYMBOL_FIELDS_TABLE, &SCH_EDIT_FRAME::onCloseSymbolFieldsTableDialog, this );
@@ -481,6 +537,7 @@ void SCH_EDIT_FRAME::StartCrossProbeFlash( const std::vector<SCH_ITEM*>& aItems 
         wxLogTrace( traceCrossProbeFlash, "StartCrossProbeFlash: aborted (setting disabled) items=%zu", aItems.size() );
         return;
     }
+
     if( aItems.empty() )
     {
         wxLogTrace( traceCrossProbeFlash, "StartCrossProbeFlash: aborted (no items)" );
@@ -575,6 +632,9 @@ void SCH_EDIT_FRAME::OnCrossProbeFlashTimer( wxTimerEvent& aEvent )
 
 SCH_EDIT_FRAME::~SCH_EDIT_FRAME()
 {
+    // Unbind auth state change handler
+    AUTH_MANAGER::Instance().Unbind( EVT_AUTH_STATE_CHANGED, &SCH_EDIT_FRAME::OnAuthStateChanged, this );
+
     m_hierarchy->Unbind( wxEVT_SIZE, &SCH_EDIT_FRAME::OnResizeHierarchyNavigator, this );
 
     // Ensure m_canvasType is up to date, to save it in config
@@ -693,6 +753,10 @@ void SCH_EDIT_FRAME::setupTools()
     m_toolManager->PostAction( ACTIONS::selectionActivate );
 
     GetCanvas()->SetEventDispatcher( m_toolDispatcher );
+
+    AMPLITUDE_CLIENT::Instance().Track( "schematic_editor_opened", {
+        { "app_type", "eeschema" },
+    } );
 }
 
 
@@ -748,6 +812,12 @@ void SCH_EDIT_FRAME::setupUIConditions()
                 return m_auimgr.GetPane( RemoteSymbolPaneName() ).IsShown();
             };
 
+    auto aiChatCond =
+            [ this ] (const SELECTION& aSel )
+            {
+                return m_auimgr.GetPane( wxS( "AIChat" ) ).IsShown();
+            };
+
     auto undoCond =
             [ this ] (const SELECTION& aSel )
             {
@@ -784,6 +854,7 @@ void SCH_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::showProperties,           CHECK( propertiesCond ) );
     mgr->SetConditions( SCH_ACTIONS::showDesignBlockPanel, CHECK( designBlockCond ) );
     mgr->SetConditions( SCH_ACTIONS::showRemoteSymbolPanel, CHECK( remoteSymbolCond ) );
+    mgr->SetConditions( SCH_ACTIONS::showAIChat,           CHECK( aiChatCond ) );
     mgr->SetConditions( ACTIONS::toggleGrid,               CHECK( cond.GridVisible() ) );
     mgr->SetConditions( ACTIONS::toggleGridOverrides,      CHECK( cond.GridOverrides() ) );
 
@@ -807,7 +878,7 @@ void SCH_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::rotateCCW,       ENABLE( hasElements ) );
     mgr->SetConditions( SCH_ACTIONS::mirrorH,         ENABLE( hasElements ) );
     mgr->SetConditions( SCH_ACTIONS::mirrorV,         ENABLE( hasElements ) );
-    mgr->SetConditions( ACTIONS::group,               ENABLE( SELECTION_CONDITIONS::NotEmpty ) );
+    mgr->SetConditions( ACTIONS::group,               ENABLE( SELECTION_CONDITIONS::MoreThan( 1 ) ) );
     mgr->SetConditions( ACTIONS::ungroup,             ENABLE( SELECTION_CONDITIONS::HasType( SCH_GROUP_T ) ) );
 
     mgr->SetConditions( SCH_ACTIONS::placeLinkedDesignBlock, ENABLE( groupWithDesignBlockLink ) );
@@ -1184,10 +1255,11 @@ bool SCH_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
         if( GetLastUnsavedChangesResponse() == wxID_NO )
         {
             wxString projPath = Prj().GetProjectPath();
+
             if( !projPath.IsEmpty() && Kiway().LocalHistory().HistoryExists( projPath ) )
             {
-                Kiway().LocalHistory().CommitDuplicateOfLastSave( projPath, wxS("Schematic"),
-                        wxS("Discard unsaved schematic changes") );
+                Kiway().LocalHistory().CommitDuplicateOfLastSave( projPath, wxS( "Schematic" ),
+                                                                  wxS( "Discard unsaved schematic changes" ) );
             }
         }
     }
@@ -1198,7 +1270,14 @@ bool SCH_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
 
 void SCH_EDIT_FRAME::doCloseWindow()
 {
+    // Unregister the autosave saver before any cleanup that might invalidate m_schematic
+    if( m_schematic )
+        Kiway().LocalHistory().UnregisterSaver( m_schematic );
+
     SCH_BASE_FRAME::doCloseWindow();
+
+    // Kill all Python processes for this app using the process manager
+    PYTHON_PROCESS_MANAGER::GetInstance().KillProcessesForApp( Pgm().App().GetAppName() );
 
     SCH_SHEET_LIST sheetlist = Schematic().Hierarchy();
 
@@ -1299,7 +1378,7 @@ void SCH_EDIT_FRAME::OnModify()
     if( GetCanvas() )
         GetCanvas()->Refresh();
 
-    if( !GetTitle().StartsWith( wxS( "*" ) ) )
+    if( GetScreen() && !GetTitle().StartsWith( wxS( "*" ) ) )
         updateTitle();
 }
 
@@ -1308,9 +1387,9 @@ void SCH_EDIT_FRAME::OnUpdatePCB()
 {
     if( Kiface().IsSingle() )
     {
-        DisplayError( this,  _( "Cannot update the PCB, because the Schematic Editor is opened"
-                                " in stand-alone mode. In order to create/update PCBs from"
-                                " schematics, launch the KiCad shell and create a project." ) );
+        DisplayError( this,  _( "Cannot update the PCB because the Schematic Editor is opened in stand-alone "
+                                "mode. In order to create/update PCBs from schematics, launch the main KiCad "
+                                "application and create a project." ) );
         return;
     }
 
@@ -1372,10 +1451,10 @@ void SCH_EDIT_FRAME::UpdateHierarchySelection()
 
 void SCH_EDIT_FRAME::OnLoadFile( wxCommandEvent& event )
 {
-    wxString fn = GetFileFromHistory( event.GetId(), _( "Schematic" ) );
+    wxString filename = GetFileFromHistory( event.GetId(), _( "Schematic" ) );
 
-    if( fn.size() )
-        OpenProjectFiles( std::vector<wxString>( 1, fn ) );
+    if( !filename.IsEmpty() )
+        OpenProjectFiles( std::vector<wxString>( 1, filename ) );
 }
 
 
@@ -1393,14 +1472,15 @@ void SCH_EDIT_FRAME::NewProject()
 
     wxString pro_dir = m_mruPath;
 
-    wxFileDialog dlg( this, _( "New Schematic" ), pro_dir, wxEmptyString,
-                      FILEEXT::KiCadSchematicFileWildcard(), wxFD_SAVE );
+    wxFileDialog dlg( this, _( "New Schematic" ), pro_dir, wxEmptyString, FILEEXT::KiCadSchematicFileWildcard(),
+                      wxFD_SAVE );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() != wxID_CANCEL )
     {
         // Enforce the extension, wxFileDialog is inept.
-        wxFileName create_me =
-                EnsureFileExtension( dlg.GetPath(), FILEEXT::KiCadSchematicFileExtension );
+        wxFileName create_me = EnsureFileExtension( dlg.GetPath(), FILEEXT::KiCadSchematicFileExtension );
 
         if( create_me.FileExists() )
         {
@@ -1430,8 +1510,10 @@ void SCH_EDIT_FRAME::LoadProject()
                             + wxS( "|" ) + FILEEXT::KiCadSchematicFileWildcard()
                             + wxS( "|" ) + FILEEXT::LegacySchematicFileWildcard();
 
-    wxFileDialog dlg( this, _( "Open Schematic" ), pro_dir, wxEmptyString,
-                      wildcards, wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+    wxFileDialog dlg( this, _( "Open Schematic" ), pro_dir, wxEmptyString, wildcards,
+                      wxFD_OPEN | wxFD_FILE_MUST_EXIST );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     if( dlg.ShowModal() != wxID_CANCEL )
     {
@@ -1440,13 +1522,14 @@ void SCH_EDIT_FRAME::LoadProject()
     }
 
     // Since we know we're single-top here: trigger library reload
-    CallAfter( [&]()
-        {
-            KIFACE *schface = Kiway().KiFACE( KIWAY::FACE_SCH );
-            schface->PreloadLibraries( &Kiway() );
+    CallAfter(
+            [&]()
+            {
+                KIFACE *schface = Kiway().KiFACE( KIWAY::FACE_SCH );
+                schface->PreloadLibraries( &Kiway() );
 
-            Pgm().PreloadDesignBlockLibraries( &Kiway() );
-        } );
+                Pgm().PreloadDesignBlockLibraries( &Kiway() );
+            } );
 }
 
 
@@ -1456,12 +1539,15 @@ void SCH_EDIT_FRAME::ProjectChanged()
 
     // Register schematic saver for autosave history
     Kiway().LocalHistory().RegisterSaver( m_schematic,
-        [this]( const wxString& aProjectPath, std::vector<wxString>& aFiles )
-        {
-            m_schematic->SaveToHistory( aProjectPath, aFiles );
-        } );
+            [this]( const wxString& aProjectPath, std::vector<HISTORY_FILE_DATA>& aFileData )
+            {
+                m_schematic->SaveToHistory( aProjectPath, aFileData );
+            } );
 
     m_designBlocksPane->ProjectChanged();
+
+    if( m_aiChatPanel )
+        m_aiChatPanel->OnProjectChanged();
 }
 
 
@@ -1569,6 +1655,8 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
     SCHEMATIC_SETTINGS& settings = m_schematic->Settings();
     SIM_LIB_MGR         simLibMgr( &Prj() );
     NULL_REPORTER       devnull;
+    SCH_SHEET_PATH&     sheetPath = GetCurrentSheet();
+    wxString            variant = m_schematic->GetCurrentVariant();
 
     // Patch for bug early in V7.99 dev
     if( settings.m_OPO_VRange.EndsWith( 'A' ) )
@@ -1613,7 +1701,7 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
     //
     for( SCH_ITEM* item : GetScreen()->Items() )
     {
-        if( GetCurrentSheet().GetExcludedFromSim() )
+        if( sheetPath.GetExcludedFromSim( variant ) )
             continue;
 
         if( item->Type() == SCH_LINE_T )
@@ -1630,12 +1718,12 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
         else if( item->Type() == SCH_SYMBOL_T )
         {
             SCH_SYMBOL*           symbol = static_cast<SCH_SYMBOL*>( item );
-            wxString              ref = symbol->GetRef( &GetCurrentSheet() );
-            std::vector<SCH_PIN*> pins = symbol->GetPins( &GetCurrentSheet() );
+            wxString              ref = symbol->GetRef( &sheetPath );
+            std::vector<SCH_PIN*> pins = symbol->GetPins( &sheetPath );
 
             // Power symbols and other symbols which have the reference starting with "#" are
             // not included in simulation
-            if( ref.StartsWith( '#' ) || symbol->ResolveExcludedFromSim() )
+            if( ref.StartsWith( '#' ) || symbol->ResolveExcludedFromSim( &sheetPath, variant ) )
                 continue;
 
             for( SCH_PIN* pin : pins )
@@ -1648,8 +1736,7 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
 
             if( pins.size() == 2 )
             {
-                wxString op = m_schematic->GetOperatingPoint( ref, settings.m_OPO_IPrecision,
-                                                              settings.m_OPO_IRange );
+                wxString op = m_schematic->GetOperatingPoint( ref, settings.m_OPO_IPrecision, settings.m_OPO_IRange );
 
                 if( !op.IsEmpty() && op != wxS( "--" ) && op != wxS( "?" ) )
                 {
@@ -1663,11 +1750,14 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
                 embeddedFilesStack.push_back( m_schematic->GetEmbeddedFiles() );
 
                 if( EMBEDDED_FILES* symbolEmbeddedFiles = symbol->GetEmbeddedFiles() )
+                {
                     embeddedFilesStack.push_back( symbolEmbeddedFiles );
+                    symbol->GetLibSymbolRef()->AppendParentEmbeddedFiles( embeddedFilesStack );
+                }
 
                 simLibMgr.SetFilesStack( std::move( embeddedFilesStack ) );
 
-                SIM_MODEL& model = simLibMgr.CreateModel( &GetCurrentSheet(), *symbol, true, 0, devnull ).model;
+                SIM_MODEL& model = simLibMgr.CreateModel( &sheetPath, *symbol, true, 0, variant, devnull ).model;
 
                 SPICE_ITEM spiceItem;
                 spiceItem.refName = ref;
@@ -1677,8 +1767,7 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
                 {
                     SCH_PIN* symbolPin = symbol->GetPin( modelPin.get().symbolPinNumber );
                     wxString signalName = ref + wxS( ":" ) + modelPin.get().modelPinName;
-                    wxString op = m_schematic->GetOperatingPoint( signalName,
-                                                                  settings.m_OPO_IPrecision,
+                    wxString op = m_schematic->GetOperatingPoint( signalName, settings.m_OPO_IPrecision,
                                                                   settings.m_OPO_IRange );
 
                     if( symbolPin && !op.IsEmpty() && op != wxS( "--" ) && op != wxS( "?" ) )
@@ -1693,8 +1782,7 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
 
     for( const auto& [ key, subgraphList ] : m_schematic->m_connectionGraph->GetNetMap() )
     {
-        wxString op = m_schematic->GetOperatingPoint( key.Name, settings.m_OPO_VPrecision,
-                                                      settings.m_OPO_VRange );
+        wxString op = m_schematic->GetOperatingPoint( key.Name, settings.m_OPO_VPrecision, settings.m_OPO_VRange );
 
         if( !op.IsEmpty() && op != wxS( "--" ) && op != wxS( "?" ) )
         {
@@ -1703,7 +1791,7 @@ void SCH_EDIT_FRAME::RefreshOperatingPointDisplay()
                 SCH_LINE* longestWire = nullptr;
                 double    length = 0.0;
 
-                if( subgraph->GetSheet().GetExcludedFromSim() )
+                if( subgraph->GetSheet().GetExcludedFromSim( variant ) )
                     continue;
 
                 for( SCH_ITEM* item : subgraph->GetItems() )
@@ -1739,8 +1827,7 @@ void SCH_EDIT_FRAME::AutoRotateItem( SCH_SCREEN* aScreen, SCH_ITEM* aItem )
 
         if( label->AutoRotateOnPlacement() )
         {
-            SPIN_STYLE spin = aScreen->GetLabelOrientationForPoint( label->GetPosition(),
-                                                                    label->GetSpinStyle(),
+            SPIN_STYLE spin = aScreen->GetLabelOrientationForPoint( label->GetPosition(), label->GetSpinStyle(),
                                                                     &GetCurrentSheet() );
 
             if( spin != label->GetSpinStyle() )
@@ -1786,7 +1873,7 @@ void SCH_EDIT_FRAME::updateTitle()
 
         wxString sheetPath = GetCurrentSheet().PathHumanReadable( false, true );
 
-        if( sheetPath != title )
+        if( sheetPath != fn.GetName() )
             title += wxString::Format( wxT( " [%s]" ), sheetPath );
 
         if( readOnly )
@@ -1800,7 +1887,7 @@ void SCH_EDIT_FRAME::updateTitle()
         title = _( "[no schematic loaded]" );
     }
 
-    title += wxT( " \u2014 " ) + _( "Schematic Editor" );
+    title += wxT( " \u2014 " ) + _( "Trace Schematic Editor" );
 
     SetTitle( title );
 }
@@ -1818,8 +1905,8 @@ void SCH_EDIT_FRAME::initScreenZoom()
 void SCH_EDIT_FRAME::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS aCleanupFlags,
                                              PROGRESS_REPORTER* aProgressReporter )
 {
-    wxString            highlightedConn = GetHighlightedConnection();
-    bool                hasHighlightedConn = !highlightedConn.IsEmpty();
+    wxString highlightedConn = GetHighlightedConnection();
+    bool     hasHighlightedConn = !highlightedConn.IsEmpty();
 
     std::function<void( SCH_ITEM* )> changeHandler =
             [&]( SCH_ITEM* aChangedItem ) -> void
@@ -1837,9 +1924,8 @@ void SCH_EDIT_FRAME::RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FL
                     // the list of all nets
                     m_highlightedConnChanged = true;
                 }
-                else if( connection
-                         && ( connection->Name() == highlightedConn
-                              || connection->HasDriverChanged() ) )
+                else if( connection && (   connection->Name() == highlightedConn
+                                        || connection->HasDriverChanged() ) )
                 {
                     m_highlightedConnChanged = true;
                 }
@@ -2102,6 +2188,9 @@ const BOX2I SCH_EDIT_FRAME::GetDocumentExtents( bool aIncludeAllVisible ) const
 
 bool SCH_EDIT_FRAME::IsContentModified() const
 {
+    if( !Schematic().HasHierarchy() )
+        return false;
+
     return Schematic().Hierarchy().IsModified();
 }
 
@@ -2156,6 +2245,89 @@ SELECTION& SCH_EDIT_FRAME::GetCurrentSelection()
 {
     return m_toolManager->GetTool<SCH_SELECTION_TOOL>()->GetSelection();
 }
+
+
+SchematicEditState SCH_EDIT_FRAME::CaptureEditState()
+{
+    SchematicEditState state;
+
+    // Capture selected items
+    SELECTION& selection = GetCurrentSelection();
+    for( EDA_ITEM* item : selection )
+    {
+        if( item && item->m_Uuid != niluuid )
+            state.selectedItems.insert( item->m_Uuid );
+    }
+
+    // Capture viewport center and zoom
+    if( GetCanvas() && GetCanvas()->GetView() )
+    {
+        state.viewportCenter = GetCanvas()->GetView()->GetCenter();
+        state.zoomLevel = GetCanvas()->GetView()->GetScale();
+    }
+
+    return state;
+}
+
+
+void SCH_EDIT_FRAME::RestoreEditState( const SchematicEditState& aState )
+{
+    // Restore viewport and zoom first
+    if( GetCanvas() && GetCanvas()->GetView() )
+    {
+        GetCanvas()->GetView()->SetScale( aState.zoomLevel );
+        GetCanvas()->GetView()->SetCenter( aState.viewportCenter );
+    }
+
+    // Restore selection
+    if( !aState.selectedItems.empty() )
+    {
+        SCH_SELECTION_TOOL* selectionTool = m_toolManager->GetTool<SCH_SELECTION_TOOL>();
+        if( selectionTool )
+        {
+            selectionTool->ClearSelection();
+
+            // Find items by UUID and select them
+            SCH_SCREEN* screen = GetScreen();
+            if( screen )
+            {
+                for( SCH_ITEM* item : screen->Items() )
+                {
+                    if( aState.selectedItems.count( item->m_Uuid ) > 0 )
+                        selectionTool->AddItemToSel( item );
+                }
+            }
+        }
+    }
+
+    GetCanvas()->Refresh();
+}
+
+
+bool SCH_EDIT_FRAME::ApplyIncrementalDiff( const DIFF_RESULT& aDiff )
+{
+    // Capture current state before applying diff
+    SchematicEditState savedState = CaptureEditState();
+
+    // Get the current file path
+    wxString currentFile = GetCurrentFileName();
+    if( currentFile.IsEmpty() )
+        return false;
+
+    // For now, we do a silent reload but preserve state
+    // This provides the benefit of state preservation without requiring
+    // true incremental updates to the SCH_SCREEN data structures
+    bool reloadSuccess = ReloadSchematicFromFile( currentFile, /*aSilent=*/true );
+
+    if( reloadSuccess )
+    {
+        // Restore the saved state
+        RestoreEditState( savedState );
+    }
+
+    return reloadSuccess;
+}
+
 
 void SCH_EDIT_FRAME::onSize( wxSizeEvent& aEvent )
 {
@@ -2351,6 +2523,7 @@ DIALOG_BOOK_REPORTER* SCH_EDIT_FRAME::GetSymbolDiffDialog()
                                                        _( "Compare Symbol with Library" ) );
 
         m_diffSymbolDialog->m_sdbSizerApply->SetLabel( _( "Update Symbol from Library..." ) );
+        m_diffSymbolDialog->m_sdbSizerApply->PostSizeEventToParent();
         m_diffSymbolDialog->m_sdbSizerApply->Show();
     }
 
@@ -2415,6 +2588,12 @@ DIALOG_SYMBOL_FIELDS_TABLE* SCH_EDIT_FRAME::GetSymbolFieldsTableDialog()
 }
 
 
+wxGenericTreeCtrl* SCH_EDIT_FRAME::GetNetNavigator()
+{
+    return m_netNavigator;
+}
+
+
 void SCH_EDIT_FRAME::onCloseSymbolFieldsTableDialog( wxCommandEvent& aEvent )
 {
     if( m_symbolFieldsTableDialog )
@@ -2461,19 +2640,18 @@ wxWindow* SCH_EDIT_FRAME::createHighlightedNetNavigator()
 
     m_netNavigatorMenuButton = new BITMAP_BUTTON( panel, wxID_ANY );
     m_netNavigatorMenuButton->SetBitmap( KiBitmapBundle( BITMAPS::config ) );
-    m_netNavigatorMenuButton->SetPadding( FromDIP( 2 ) );
+    m_netNavigatorMenuButton->SetPadding( 2 );
     searchSizer->Add( m_netNavigatorMenuButton, 0, wxALIGN_CENTER_VERTICAL );
 
     sizer->Add( searchSizer, 0, wxEXPAND | wxALL, FromDIP( 2 ) );
 
-    m_netNavigator = new wxTreeCtrl( panel, wxID_ANY, wxPoint( 0, 0 ), FromDIP( wxSize( 160, 250 ) ),
-                                     wxTR_DEFAULT_STYLE | wxNO_BORDER );
+    m_netNavigator = new wxGenericTreeCtrl( panel, wxID_ANY, wxPoint( 0, 0 ), FromDIP( wxSize( 160, 250 ) ),
+                                            wxTR_DEFAULT_STYLE | wxNO_BORDER );
     sizer->Add( m_netNavigator, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP( 2 ) );
 
     panel->SetSizer( sizer );
 
-    m_netNavigatorFilter->Bind( wxEVT_COMMAND_TEXT_UPDATED,
-                                &SCH_EDIT_FRAME::onNetNavigatorFilterChanged, this );
+    m_netNavigatorFilter->Bind( wxEVT_COMMAND_TEXT_UPDATED, &SCH_EDIT_FRAME::onNetNavigatorFilterChanged, this );
     m_netNavigatorFilter->Bind( wxEVT_KEY_DOWN, &SCH_EDIT_FRAME::onNetNavigatorKey, this );
     m_netNavigator->Bind( wxEVT_KEY_DOWN, &SCH_EDIT_FRAME::onNetNavigatorKey, this );
     m_netNavigator->Bind( wxEVT_TREE_ITEM_MENU, &SCH_EDIT_FRAME::onNetNavigatorItemMenu, this );
@@ -2522,16 +2700,18 @@ void SCH_EDIT_FRAME::SetHighlightedConnection( const wxString& aConnection,
 
 void SCH_EDIT_FRAME::unitsChangeRefresh()
 {
+    EDA_DRAW_FRAME::unitsChangeRefresh();
+
     if( m_netNavigator )
     {
         NET_NAVIGATOR_ITEM_DATA itemData;
         wxTreeItemId selection = m_netNavigator->GetSelection();
-        bool refreshSelection = selection.IsOk() && ( selection != m_netNavigator->GetRootItem() );
+        bool refreshSelection = selection.IsOk() && selection != m_netNavigator->GetRootItem();
 
         if( refreshSelection )
         {
             NET_NAVIGATOR_ITEM_DATA* tmp =
-                dynamic_cast<NET_NAVIGATOR_ITEM_DATA*>( m_netNavigator->GetItemData( selection ) );
+                    dynamic_cast<NET_NAVIGATOR_ITEM_DATA*>( m_netNavigator->GetItemData( selection ) );
 
             wxCHECK( tmp, /* void */ );
             itemData = *tmp;
@@ -2540,8 +2720,6 @@ void SCH_EDIT_FRAME::unitsChangeRefresh()
         m_netNavigator->DeleteAllItems();
         RefreshNetNavigator( refreshSelection ? &itemData : nullptr );
     }
-
-    UpdateProperties();
 }
 
 
@@ -2615,8 +2793,8 @@ void SCH_EDIT_FRAME::onNetNavigatorContextMenu( wxContextMenuEvent& aEvent )
     if( screenPos == wxDefaultPosition )
         screenPos = wxGetMousePosition();
 
-    wxPoint clientPos = m_netNavigator->ScreenToClient( screenPos );
-    int     flags = 0;
+    wxPoint      clientPos = m_netNavigator->ScreenToClient( screenPos );
+    int          flags = 0;
     wxTreeItemId item = m_netNavigator->HitTest( clientPos, flags );
 
     showNetNavigatorMenu( item );
@@ -2719,18 +2897,15 @@ void SCH_EDIT_FRAME::onNetNavigatorMenuCommand( wxCommandEvent& aEvent )
 
     case ID_NET_NAVIGATOR_SEARCH_WILDCARD:
     case ID_NET_NAVIGATOR_SEARCH_REGEX:
-    {
-        EESCHEMA_SETTINGS* cfg = eeconfig();
-        if( cfg )
+        if( EESCHEMA_SETTINGS* cfg = eeconfig() )
         {
-            cfg->m_AuiPanels.net_nav_search_mode_wildcard =
-                    ( aEvent.GetId() == ID_NET_NAVIGATOR_SEARCH_WILDCARD );
+            cfg->m_AuiPanels.net_nav_search_mode_wildcard = ( aEvent.GetId() == ID_NET_NAVIGATOR_SEARCH_WILDCARD );
 
             // Refresh the navigator with current filter
             RefreshNetNavigator();
         }
+
         break;
-    }
 
     default:
         aEvent.Skip();
@@ -2826,8 +3001,7 @@ void SCH_EDIT_FRAME::ToggleProperties()
 
     if( show )
     {
-        SetAuiPaneSize( m_auimgr, propertiesPaneInfo,
-                        settings->m_AuiPanels.properties_panel_width, -1 );
+        SetAuiPaneSize( m_auimgr, propertiesPaneInfo, settings->m_AuiPanels.properties_panel_width, -1 );
     }
     else
     {
@@ -2860,8 +3034,7 @@ void SCH_EDIT_FRAME::ToggleSchematicHierarchy()
         else if( cfg->m_AuiPanels.hierarchy_panel_docked_width > 0 )
         {
             // SetAuiPaneSize also updates m_auimgr
-            SetAuiPaneSize( m_auimgr, hierarchy_pane,
-                            cfg->m_AuiPanels.hierarchy_panel_docked_width, -1 );
+            SetAuiPaneSize( m_auimgr, hierarchy_pane, cfg->m_AuiPanels.hierarchy_panel_docked_width, -1 );
         }
     }
     else
@@ -2935,6 +3108,9 @@ void SCH_EDIT_FRAME::ToggleRemoteSymbolPanel()
 
     if( remotePane.IsShown() )
     {
+        if( m_remoteSymbolPane )
+            m_remoteSymbolPane->Activate();
+
         if( remotePane.IsFloating() )
         {
             remotePane.FloatingSize( cfg->m_AuiPanels.remote_symbol_panel_float_width,
@@ -2964,6 +3140,32 @@ void SCH_EDIT_FRAME::ToggleRemoteSymbolPanel()
 }
 
 
+void SCH_EDIT_FRAME::ToggleAIChat()
+{
+    if( !m_aiChatPanel )
+        return;
+
+    wxAuiPaneInfo& aiChatPane = m_auimgr.GetPane( wxS( "AIChat" ) );
+
+    aiChatPane.Show( !aiChatPane.IsShown() );
+    m_auimgr.Update();
+}
+
+
+void SCH_EDIT_FRAME::ShowAIChatPanel()
+{
+    if( !m_aiChatPanel )
+        return;
+
+    wxAuiPaneInfo& aiChatPane = m_auimgr.GetPane( wxS( "AIChat" ) );
+
+    if( aiChatPane.IsShown() )
+        return;
+
+    ToggleAIChat();
+}
+
+
 void SCH_EDIT_FRAME::SetSchematic( SCHEMATIC* aSchematic )
 {
     wxCHECK( aSchematic, /* void */ );
@@ -2989,31 +3191,10 @@ void SCH_EDIT_FRAME::AddVariant()
     if( !m_currentVariantCtrl )
         return;
 
-    wxTextEntryDialog dlg( this, _( "Enter new variant name" ), _( "Variant Name" ) );
+    m_currentVariantCtrl->SetSelection( m_currentVariantCtrl->GetCount() - 1 );
 
-    if( dlg.ShowModal() == wxID_CANCEL )
-        return;
-
-    wxString variantName = dlg.GetValue();
-
-    if( variantName.IsEmpty() || ( m_currentVariantCtrl->FindString( variantName ) != wxNOT_FOUND ) )
-        return;
-
-    Schematic().AddVariant( variantName );
-
-    int selected = m_currentVariantCtrl->GetSelection();
-    wxString tmp;
-
-    if( selected != wxNOT_FOUND )
-        tmp = m_currentVariantCtrl->GetString( selected );
-
-    m_currentVariantCtrl->Set( Schematic().GetVariantNamesForUI() );
-
-    if( selected != wxNOT_FOUND )
-    {
-        selected = m_currentVariantCtrl->FindString( tmp );
-        m_currentVariantCtrl->SetSelection( selected );
-    }
+    wxCommandEvent dummy( wxEVT_CHOICE, ID_TOOLBAR_SCH_SELECT_VARAIANT );
+    onVariantSelected( dummy );
 }
 
 
@@ -3027,39 +3208,35 @@ void SCH_EDIT_FRAME::RemoveVariant()
     // Default variant cannot be removed.
     choices.RemoveAt( 0 );
 
-    wxSingleChoiceDialog dlg( this, _( "Select variant name to remove" ), _( "Variant Name" ), choices );
+    // wxSingleChoiceDialog will ellipsize the title bar if the contents aren't wide enough.  The set
+    // of spaces in the control label are to prevent this.
+    wxSingleChoiceDialog dlg( this, _( "Select variant name to remove:" ) + wxS( "                " ),
+                              _( "Remove Design Variant" ), choices );
+    dlg.Layout();
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
     wxString variantName = dlg.GetStringSelection();
 
-    if( variantName.IsEmpty() || ( m_currentVariantCtrl->FindString( variantName ) != wxNOT_FOUND ) )
+    if( variantName.IsEmpty() )
         return;
 
-    Schematic().DeleteVariant( variantName );
+    SCH_COMMIT commit( this );
+    Schematic().DeleteVariant( variantName, &commit );
 
-    int selected = m_currentVariantCtrl->GetSelection();
-    wxString tmp;
-
-    if( selected != wxNOT_FOUND )
-        tmp = m_currentVariantCtrl->GetString( selected );
-
-    m_currentVariantCtrl->Set( Schematic().GetVariantNamesForUI() );
-
-    if( selected != wxNOT_FOUND )
+    if( !commit.Empty() )
     {
-        if( tmp != variantName )
-        {
-            selected = m_currentVariantCtrl->FindString( tmp );
-            m_currentVariantCtrl->SetSelection( selected );
-        }
-        else
-        {
-            m_currentVariantCtrl->SetSelection( 0 );
-            SetCurrentVariant( wxEmptyString );
-        }
+        commit.Push( wxString::Format( wxS( "Delete variant '%s'" ), variantName ) );
+        OnModify();
     }
+
+    if( Schematic().GetCurrentVariant() == variantName )
+        SetCurrentVariant( wxEmptyString );
+
+    UpdateVariantSelectionCtrl( Schematic().GetVariantNamesForUI() );
+
+    GetCanvas()->Refresh();
 }
 
 
@@ -3068,3 +3245,346 @@ bool SCH_EDIT_FRAME::doAutoSave()
     // Delegate to base auto-save behavior (commits pending local history) for now.
     return EDA_BASE_FRAME::doAutoSave();
 }
+
+
+void SCH_EDIT_FRAME::OnAccountSignIn( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().StartLogin( wxT( "https://buildwithtrace.com/login" ) );
+}
+
+
+void SCH_EDIT_FRAME::OnAccountSignOut( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().SignOut();
+}
+
+
+void SCH_EDIT_FRAME::OnAuthStateChanged( wxCommandEvent& event )
+{
+    // Auth state changed (e.g., user signed in via browser callback)
+    // Use CallAfter to ensure menu bar update happens on the main thread
+    // and after the event has fully propagated
+    CallAfter( [this]() {
+        doReCreateMenuBar();
+        
+        // Force a visual refresh of the menu bar on macOS
+#ifdef __WXMAC__
+        if( wxMenuBar* menuBar = GetMenuBar() )
+        {
+            menuBar->Refresh();
+        }
+#endif
+    } );
+    
+    event.Skip();  // Allow other handlers to process this event
+}
+
+
+nlohmann::json SCH_EDIT_FRAME::serializeErcViolations()
+{
+    nlohmann::json result = nlohmann::json::array();
+    
+    // Safety check: ensure schematic root exists
+    if( !Schematic().IsValid() || !Schematic().RootScreen() )
+    {
+        return result;  // Return empty array for empty/invalid schematic
+    }
+    
+    // Build item lookup map across all sheets
+    std::map<KIID, EDA_ITEM*> itemMap;
+    SCH_SCREENS screens( Schematic().Root() );
+    
+    for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+    {
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            itemMap[item->m_Uuid] = item;
+            
+            // Also add symbol pins to the map
+            if( item->Type() == SCH_SYMBOL_T )
+            {
+                SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+                for( SCH_PIN* pin : symbol->GetPins() )
+                    itemMap[pin->m_Uuid] = pin;
+            }
+        }
+    }
+    
+    // Collect violations from all screens
+    for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+    {
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_MARKER_T ) )
+        {
+            SCH_MARKER* marker = static_cast<SCH_MARKER*>( item );
+            
+            if( marker->GetMarkerType() != MARKER_BASE::MARKER_ERC )
+                continue;
+
+            std::shared_ptr<RC_ITEM> rcItem = marker->GetRCItem();
+            std::shared_ptr<ERC_ITEM> ercItem = 
+                std::static_pointer_cast<ERC_ITEM>( rcItem );
+
+            nlohmann::json violation;
+            
+            // Basic info
+            violation["error_code"] = ercItem->GetErrorCode();
+            violation["error_title"] = ercItem->GetErrorText( false ).ToStdString();
+            violation["error_message"] = ercItem->GetErrorMessage( false ).ToStdString();
+            violation["settings_key"] = ercItem->GetSettingsKey().ToStdString();
+            
+            // Severity
+            SEVERITY severity = Schematic().ErcSettings().GetSeverity( 
+                ercItem->GetErrorCode() );
+            violation["severity"] = static_cast<int>( severity );
+            violation["severity_name"] = severityToString( severity );
+            
+            // Position
+            VECTOR2I pos = marker->GetPosition();
+            violation["position"] = {
+                { "x_mm", schIUScale.IUTomm( pos.x ) },
+                { "y_mm", schIUScale.IUTomm( pos.y ) }
+            };
+            
+            // Sheet path info (if sheet-specific)
+            if( ercItem->IsSheetSpecific() )
+            {
+                violation["sheet_path"] = ercItem->GetSpecificSheetPath().PathAsString().ToStdString();
+            }
+            
+            // Affected items
+            std::vector<KIID> ids = ercItem->GetIDs();
+            nlohmann::json itemIds = nlohmann::json::array();
+            for( const KIID& id : ids )
+            {
+                if( id != niluuid )
+                    itemIds.push_back( id.AsString().ToStdString() );
+            }
+            violation["item_ids"] = itemIds;
+            
+            result.push_back( violation );
+        }
+    }
+
+    return result;
+}
+
+
+std::string SCH_EDIT_FRAME::severityToString( SEVERITY aSeverity )
+{
+    switch( aSeverity )
+    {
+    case RPT_SEVERITY_IGNORE:    return "ignore";
+    case RPT_SEVERITY_WARNING:   return "warning";
+    case RPT_SEVERITY_ERROR:     return "error";
+    case RPT_SEVERITY_INFO:      return "info";
+    case RPT_SEVERITY_ACTION:    return "action";
+    case RPT_SEVERITY_DEBUG:     return "debug";
+    case RPT_SEVERITY_EXCLUSION: return "exclusion";
+    default:                     return "undefined";
+    }
+}
+
+
+nlohmann::json SCH_EDIT_FRAME::runErcAndSerialize()
+{
+    // Safety check: ensure schematic is valid
+    if( !Schematic().IsValid() || !Schematic().RootScreen() )
+    {
+        nlohmann::json error;
+        error["error"] = "No valid schematic loaded";
+        return error;
+    }
+
+    // Safety checks for GUI objects
+    if( !GetCanvas() )
+    {
+        std::cerr << "ERC failed: Canvas not initialized" << std::endl;
+        nlohmann::json error;
+        error["error"] = "Canvas not available";
+        return error;
+    }
+
+    if( !GetCanvas()->GetView() )
+    {
+        std::cerr << "ERC failed: View not initialized" << std::endl;
+        nlohmann::json error;
+        error["error"] = "View not available";
+        return error;
+    }
+
+    DS_PROXY_VIEW_ITEM* drawingSheet = GetCanvas()->GetView()->GetDrawingSheet();
+    if( !drawingSheet )
+    {
+        std::cerr << "ERC failed: DrawingSheet not available" << std::endl;
+        nlohmann::json error;
+        error["error"] = "DrawingSheet not available";
+        return error;
+    }
+
+    // Clear existing markers first
+    SCH_SCREENS screens( Schematic().Root() );
+    for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+    {
+        std::vector<SCH_ITEM*> markersToDelete;
+        for( SCH_ITEM* item : screen->Items().OfType( SCH_MARKER_T ) )
+        {
+            SCH_MARKER* marker = static_cast<SCH_MARKER*>( item );
+            if( marker->GetMarkerType() == MARKER_BASE::MARKER_ERC )
+                markersToDelete.push_back( marker );
+        }
+        
+        for( SCH_ITEM* marker : markersToDelete )
+            screen->Remove( marker );
+    }
+
+    // Run ERC tests
+    ERC_TESTER tester( &Schematic() );
+    
+    try
+    {
+        // Run tests with cached drawingSheet pointer (silent mode)
+        tester.RunTests( drawingSheet, 
+                        this, 
+                        Kiway().KiFACE( KIWAY::FACE_CVPCB ), 
+                        &Prj(), 
+                        nullptr );  // null progress reporter
+        
+    }
+    catch( const std::exception& e )
+    {
+        std::cerr << "ERC failed: " << e.what() << std::endl;
+        nlohmann::json error;
+        error["error"] = e.what();
+        return error;
+    }
+
+    // Serialize the violations
+    return serializeErcViolations();
+}
+
+
+nlohmann::json SCH_EDIT_FRAME::runAnnotateAndSerialize( const nlohmann::json& aOptions,
+                                                        bool aSkipUndo )
+{
+    // Safety checks for GUI and tool system
+    if( !GetToolManager() )
+    {
+        nlohmann::json error;
+        error["error"] = "Tool manager not available";
+        return error;
+    }
+
+    if( !GetCanvas() )
+    {
+        nlohmann::json error;
+        error["error"] = "Canvas not available";
+        return error;
+    }
+
+    // Check if schematic is loaded
+    if( !Schematic().IsValid() )
+    {
+        nlohmann::json error;
+        error["error"] = "No schematic loaded";
+        return error;
+    }
+
+    // Parse options with defaults
+    ANNOTATE_SCOPE_T scope = ANNOTATE_ALL;  // Default: annotate entire schematic
+    ANNOTATE_ORDER_T sortOrder = SORT_BY_X_POSITION;
+    ANNOTATE_ALGO_T algorithm = INCREMENTAL_BY_REF;
+    int startNumber = 1;
+    bool resetAnnotation = false;  // Don't clear existing annotations by default
+    bool recursive = true;
+    
+    // Parse JSON options if provided
+    if( aOptions.contains( "scope" ) && aOptions["scope"].is_string() )
+    {
+        std::string scopeStr = aOptions["scope"].get<std::string>();
+        if( scopeStr == "all" )
+            scope = ANNOTATE_ALL;
+        else if( scopeStr == "current_sheet" )
+            scope = ANNOTATE_CURRENT_SHEET;
+        else if( scopeStr == "selection" )
+            scope = ANNOTATE_SELECTION;
+    }
+    
+    if( aOptions.contains( "sort_order" ) && aOptions["sort_order"].is_string() )
+    {
+        std::string orderStr = aOptions["sort_order"].get<std::string>();
+        if( orderStr == "x_position" )
+            sortOrder = SORT_BY_X_POSITION;
+        else if( orderStr == "y_position" )
+            sortOrder = SORT_BY_Y_POSITION;
+    }
+
+    if( aOptions.contains( "algorithm" ) && aOptions["algorithm"].is_string() )
+    {
+        std::string algoStr = aOptions["algorithm"].get<std::string>();
+        if( algoStr == "use_first_free" )
+            algorithm = INCREMENTAL_BY_REF;
+        else if( algoStr == "sheet_x_100" )
+            algorithm = SHEET_NUMBER_X_100;
+        else if( algoStr == "sheet_x_1000" )
+            algorithm = SHEET_NUMBER_X_1000;
+    }
+
+    if( aOptions.contains( "reset" ) )
+        resetAnnotation = aOptions["reset"].get<bool>();
+    
+    if( aOptions.contains( "start_number" ) )
+        startNumber = aOptions["start_number"].get<int>();
+
+    if( aOptions.contains( "recursive" ) )
+        recursive = aOptions["recursive"].get<bool>();
+
+    // Create a WX_STRING_REPORTER to capture messages
+    WX_STRING_REPORTER reporter;
+    
+    // Create commit for undo/redo
+    SCH_COMMIT commit( GetToolManager() );
+    
+    try
+    {
+        // Run annotation
+        AnnotateSymbols( &commit, scope, sortOrder, algorithm, recursive,
+                        startNumber, resetAnnotation, true, true, reporter );
+        
+        int commitFlags = aSkipUndo ? SKIP_UNDO : 0;
+        commit.Push( _( "Annotate Schematic" ), commitFlags );
+    }
+    catch( const std::exception& e )
+    {
+        nlohmann::json error;
+        error["error"] = std::string( "Annotation failed: " ) + e.what();
+        return error;
+    }
+    catch( ... )
+    {
+        nlohmann::json error;
+        error["error"] = "Annotation failed due to unknown error";
+        return error;
+    }
+
+    // Serialize results
+    nlohmann::json result;
+    
+    // Get messages from reporter
+    wxString messages = reporter.GetMessages();
+    result["messages"] = messages.ToStdString();
+    
+    // Add metadata
+    result["success"] = true;
+    result["scope"] = (scope == ANNOTATE_ALL ? "all" : 
+                      scope == ANNOTATE_CURRENT_SHEET ? "current_sheet" : "selection");
+    result["sort_order"] = (sortOrder == SORT_BY_X_POSITION ? "x_position" : "y_position");
+    result["algorithm"] = (algorithm == INCREMENTAL_BY_REF ? "use_first_free" :
+                          algorithm == SHEET_NUMBER_X_100 ? "sheet_x_100" : "sheet_x_1000");
+    result["start_number"] = startNumber;
+    result["reset_annotation"] = resetAnnotation;
+    result["recursive"] = recursive;
+    result["schematic_file"] = GetCurrentFileName().ToStdString();
+    
+    return result;
+}
+

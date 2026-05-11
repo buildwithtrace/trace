@@ -28,13 +28,18 @@
 #include <algorithm>
 #include <future>
 #include <mutex>
+#include <ranges>
 
 #include <connectivity/connectivity_algo.h>
 #include <progress_reporter.h>
 #include <geometry/geometry_utils.h>
+#include <board.h>
 #include <board_commit.h>
 #include <thread_pool.h>
+#include <footprint.h>
+#include <pad.h>
 #include <pcb_shape.h>
+#include <pcb_track.h>
 
 #include <wx/log.h>
 
@@ -206,8 +211,9 @@ bool CN_CONNECTIVITY_ALGO::Add( BOARD_ITEM* aItem )
                     for( CN_ITEM* zitem : m_itemList.Add( zone, layer ) )
                         m_itemMap[zone].Link( zitem );
                 } );
-    }
+
         break;
+    }
 
     default:
         return false;
@@ -270,15 +276,21 @@ void CN_CONNECTIVITY_ALGO::searchConnections()
     {
         std::vector<std::future<size_t>> returns( dirtyItems.size() );
 
+        // Collect deferred net code changes to avoid data races in parallel search.
+        // Free vias connected to zones have their net codes updated after all parallel
+        // work completes.
+        std::vector<std::pair<BOARD_CONNECTED_ITEM*, int>> deferredNetCodes;
+        std::mutex deferredNetCodesMutex;
+
         for( size_t ii = 0; ii < dirtyItems.size(); ++ii )
         {
             returns[ii] = tp.submit_task(
-                    [&dirtyItems, ii, this] () ->size_t
+                    [&dirtyItems, ii, this, &deferredNetCodes, &deferredNetCodesMutex] () ->size_t
                     {
                         if( m_progressReporter && m_progressReporter->IsCancelled() )
                             return 0;
 
-                        CN_VISITOR visitor( dirtyItems[ii] );
+                        CN_VISITOR visitor( dirtyItems[ii], &deferredNetCodes, &deferredNetCodesMutex );
                         m_itemList.FindNearby( dirtyItems[ii], visitor );
 
                         if( m_progressReporter )
@@ -301,6 +313,10 @@ void CN_CONNECTIVITY_ALGO::searchConnections()
                 status = ret.wait_for( std::chrono::milliseconds( 250 ) );
             }
         }
+
+        // Apply deferred net code changes now that parallel search is complete
+        for( const auto& [item, netCode] : deferredNetCodes )
+            item->SetNetCode( netCode );
 
         if( m_progressReporter )
             m_progressReporter->KeepRefreshing();
@@ -679,6 +695,8 @@ void CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap( std::map<ZONE*, std::map<PCB_
             if( zone->GetFilledPolysList( layer )->IsEmpty() )
                 continue;
 
+            bool notInConnectivity = true;
+
             for( const std::shared_ptr<CN_CLUSTER>& cluster : m_connClusters )
             {
                 for( CN_ITEM* item : *cluster )
@@ -686,6 +704,7 @@ void CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap( std::map<ZONE*, std::map<PCB_
                     if( item->Parent() == zone && item->GetBoardLayer() == layer )
                     {
                         CN_ZONE_LAYER* z = static_cast<CN_ZONE_LAYER*>( item );
+                        notInConnectivity = false;
 
                         if( cluster->IsOrphaned() )
                             layerIslands.m_IsolatedOutlines.push_back( z->SubpolyIndex() );
@@ -694,6 +713,9 @@ void CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap( std::map<ZONE*, std::map<PCB_
                     }
                 }
             }
+
+            if( notInConnectivity )
+                layerIslands.m_IsolatedOutlines.push_back( 0 );
         }
     }
 }
@@ -740,8 +762,12 @@ void CN_VISITOR::checkZoneItemConnection( CN_ZONE_LAYER* aZoneLayer, CN_ITEM* aI
             [&]()
             {
                 // We don't propagate nets from zones, so any free-via net changes need to happen now.
+                // Defer the SetNetCode call to avoid data races during parallel connectivity search.
                 if( aItem->Parent()->Type() == PCB_VIA_T && aItem->CanChangeNet() )
-                    aItem->Parent()->SetNetCode( aZoneLayer->Net() );
+                {
+                    std::lock_guard<std::mutex> lock( *m_deferredNetCodesMutex );
+                    m_deferredNetCodes->emplace_back( aItem->Parent(), aZoneLayer->Net() );
+                }
 
                 aZoneLayer->Connect( aItem );
                 aItem->Connect( aZoneLayer );
@@ -802,8 +828,9 @@ void CN_VISITOR::checkZoneItemConnection( CN_ZONE_LAYER* aZoneLayer, CN_ITEM* aI
 
 void CN_VISITOR::checkZoneZoneConnection( CN_ZONE_LAYER* aZoneLayerA, CN_ZONE_LAYER* aZoneLayerB )
 {
-    const ZONE* zoneA = static_cast<const ZONE*>( aZoneLayerA->Parent() );
-    const ZONE* zoneB = static_cast<const ZONE*>( aZoneLayerB->Parent() );
+    // CN_ZONE_LAYER now caches its own copy of the outline, so we just check if it's non-empty.
+    if( !aZoneLayerA->HasValidOutline() || !aZoneLayerB->HasValidOutline() )
+        return;
 
     const BOX2I& boxA = aZoneLayerA->BBox();
     const BOX2I& boxB = aZoneLayerB->BBox();
@@ -816,14 +843,16 @@ void CN_VISITOR::checkZoneZoneConnection( CN_ZONE_LAYER* aZoneLayerA, CN_ZONE_LA
     if( !boxA.Intersects( boxB ) )
         return;
 
-    const SHAPE_LINE_CHAIN& outline = zoneA->GetFilledPolysList( layer )->COutline( aZoneLayerA->SubpolyIndex() );
+    const SHAPE_LINE_CHAIN& outlineA = aZoneLayerA->GetOutline();
 
-    for( int i = 0; i < outline.PointCount(); i++ )
+    for( int i = 0; i < outlineA.PointCount(); i++ )
     {
-        if( !boxB.Contains( outline.CPoint( i ) ) )
+        const VECTOR2I& pt = outlineA.CPoint( i );
+
+        if( !boxB.Contains( pt ) )
             continue;
 
-        if( aZoneLayerB->ContainsPoint( outline.CPoint( i ) ) )
+        if( aZoneLayerB->ContainsPoint( pt ) )
         {
             aZoneLayerA->Connect( aZoneLayerB );
             aZoneLayerB->Connect( aZoneLayerA );
@@ -831,14 +860,16 @@ void CN_VISITOR::checkZoneZoneConnection( CN_ZONE_LAYER* aZoneLayerA, CN_ZONE_LA
         }
     }
 
-    const SHAPE_LINE_CHAIN& outline2 = zoneB->GetFilledPolysList( layer )->COutline( aZoneLayerB->SubpolyIndex() );
+    const SHAPE_LINE_CHAIN& outlineB = aZoneLayerB->GetOutline();
 
-    for( int i = 0; i < outline2.PointCount(); i++ )
+    for( int i = 0; i < outlineB.PointCount(); i++ )
     {
-        if( !boxA.Contains( outline2.CPoint( i ) ) )
+        const VECTOR2I& pt = outlineB.CPoint( i );
+
+        if( !boxA.Contains( pt ) )
             continue;
 
-        if( aZoneLayerA->ContainsPoint( outline2.CPoint( i ) ) )
+        if( aZoneLayerA->ContainsPoint( pt ) )
         {
             aZoneLayerA->Connect( aZoneLayerB );
             aZoneLayerB->Connect( aZoneLayerA );

@@ -1,0 +1,12 @@
+version: "1.2.0"
+summary: "Short one-line summary of the release"
+changes:
+  - category: "New Features"
+    items:
+      - "Feature description"
+  - category: "Bug Fixes"
+    items:
+      - "Fix description"
+  - category: "Improvements"
+    items:
+      - "Improvement description"

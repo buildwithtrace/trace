@@ -24,7 +24,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <board.h>
-#include <pcbnew/exporters/gendrill_Excellon_writer.h>
+#include <pcbnew/exporters/gendrill_excellon_writer.h>
 #include <pcbnew/exporters/gendrill_gerber_writer.h>
 #include <pcbnew/pcb_io/odbpp/pcb_io_odbpp.h>
 #include <pcbnew/pcb_track.h>
@@ -177,5 +177,75 @@ BOOST_AUTO_TEST_CASE( BackdrillCamOutputs )
     pthStream.Close();
 
     wxFileName::Rmdir( odbRoot.GetFullPath(), wxPATH_RMDIR_RECURSIVE );
+    wxFileName::Rmdir( tempDir.GetFullPath(), wxPATH_RMDIR_RECURSIVE );
+}
+
+
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23005
+// GenDrillReportFile crashed when aReporter was null (the default)
+BOOST_AUTO_TEST_CASE( DrillReportNullReporter )
+{
+    wxFileName tempDir = MakeTempDir();
+    wxFileName boardFile( tempDir.GetFullPath(), wxT( "test_board.kicad_pcb" ) );
+
+    BOARD board;
+    board.SetCopperLayerCount( 2 );
+    board.SetFileName( boardFile.GetFullPath() );
+
+    wxFileName reportFile( tempDir.GetFullPath(), wxT( "test_board-drl.rpt" ) );
+
+    // Valid path with null reporter should succeed without crashing
+    EXCELLON_WRITER excellon( &board );
+    BOOST_CHECK( excellon.GenDrillReportFile( reportFile.GetFullPath() ) );
+    BOOST_CHECK( reportFile.FileExists() );
+
+    GERBER_WRITER gerber( &board );
+    BOOST_CHECK( gerber.GenDrillReportFile( reportFile.GetFullPath() ) );
+
+    // Invalid path with null reporter should return false without crashing
+    EXCELLON_WRITER excellon2( &board );
+    BOOST_CHECK( !excellon2.GenDrillReportFile( wxT( "/nonexistent/path/report.rpt" ) ) );
+
+    GERBER_WRITER gerber2( &board );
+    BOOST_CHECK( !gerber2.GenDrillReportFile( wxT( "/nonexistent/path/report.rpt" ) ) );
+
+    wxFileName::Rmdir( tempDir.GetFullPath(), wxPATH_RMDIR_RECURSIVE );
+}
+
+
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23289
+// GenDrillReportFile crashed with SIGSEGV when the board had drills because
+// printToolSummary() passed integer literal 0 instead of the FILE* to fmt::print()
+BOOST_AUTO_TEST_CASE( DrillReportWithTools )
+{
+    wxFileName tempDir = MakeTempDir();
+    wxFileName boardFile( tempDir.GetFullPath(), wxT( "test_board_with_drills.kicad_pcb" ) );
+
+    BOARD board;
+    board.SetCopperLayerCount( 2 );
+    board.SetFileName( boardFile.GetFullPath() );
+
+    auto via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 0, 0 ) );
+    via->SetLayerPair( F_Cu, B_Cu );
+    via->SetDrill( pcbIUScale.mmToIU( 0.30 ) );
+    via->SetWidth( pcbIUScale.mmToIU( 0.60 ) );
+    board.Add( via );
+
+    wxFileName reportFile( tempDir.GetFullPath(), wxT( "test_board_with_drills-drl.rpt" ) );
+
+    EXCELLON_WRITER excellon( &board );
+    excellon.SetOptions( false, false, VECTOR2I( 0, 0 ), false );
+    excellon.SetFormat( true );
+    BOOST_CHECK_NO_THROW( excellon.GenDrillReportFile( reportFile.GetFullPath() ) );
+    BOOST_CHECK( reportFile.FileExists() );
+
+    wxFFile reportStream( reportFile.GetFullPath(), wxT( "rb" ) );
+    wxString reportContents;
+    BOOST_REQUIRE( reportStream.ReadAll( &reportContents ) );
+    BOOST_CHECK( reportContents.Contains( wxT( "T1" ) ) );
+    BOOST_CHECK( reportContents.Contains( wxT( "0.300mm" ) ) );
+    reportStream.Close();
+
     wxFileName::Rmdir( tempDir.GetFullPath(), wxPATH_RMDIR_RECURSIVE );
 }

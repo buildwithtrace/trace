@@ -101,6 +101,11 @@ void DIALOG_MOVE_EXACT::buildRotationAnchorMenu()
     }
 
     m_anchorOptions->Set( menuItems );
+
+    // This can be -1 if uninitialized
+    const int currSelection = m_anchorOptions->GetSelection();
+    if( currSelection < 0 || currSelection >= static_cast<int>( m_menuIDs.size() ) )
+        m_anchorOptions->SetSelection( 0 );
 }
 
 
@@ -246,7 +251,12 @@ bool DIALOG_MOVE_EXACT::TransferDataFromWindow()
     m_translation.x = KiROUND(translation.x);
     m_translation.y = KiROUND(translation.y);
     m_rotation = m_rotate.GetAngleValue();
-    m_rotationAnchor = m_menuIDs[ m_anchorOptions->GetSelection() ];
+
+    const int anchorSelection = m_anchorOptions->GetSelection();
+    wxCHECK_MSG( anchorSelection >= 0 && anchorSelection < static_cast<int>( m_menuIDs.size() ), false,
+                 wxString::Format( "Invalid rotation anchor selection: %d", anchorSelection ) );
+
+    m_rotationAnchor = m_menuIDs[anchorSelection];
 
     return ok;
 }

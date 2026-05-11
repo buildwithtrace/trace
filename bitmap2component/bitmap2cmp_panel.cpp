@@ -24,6 +24,7 @@
 
 #include <bitmap2cmp_frame.h>
 #include <bitmap2component.h>
+#include <reporter.h>
 #include <bitmap2cmp_panel.h>
 #include <bitmap2cmp_settings.h>
 #include <bitmap_io.h>
@@ -39,6 +40,7 @@
 #include <wx/dcclient.h>
 #include <wx/log.h>
 #include <wx/string.h>
+#include <confirm.h>
 
 #define DEFAULT_DPI 300     // the image DPI used in formats that do not define a DPI
 
@@ -586,7 +588,7 @@ bool DROP_FILE::OnDropFiles( wxCoord x, wxCoord y, const wxArrayString& filename
     {
         wxString        cap = _( "Replace Loaded File?" );
         wxString        msg = _( "There is already a file loaded. Do you want to replace it?" );
-        wxMessageDialog acceptFileDlg( m_panel, msg, cap, wxYES_NO | wxICON_QUESTION | wxYES_DEFAULT );
+        KICAD_MESSAGE_DIALOG acceptFileDlg( m_panel, msg, cap, wxYES_NO | wxICON_QUESTION | wxYES_DEFAULT );
         int             replace = acceptFileDlg.ShowModal();
 
         if( replace == wxID_NO )

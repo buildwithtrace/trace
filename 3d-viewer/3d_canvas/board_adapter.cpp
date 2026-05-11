@@ -23,22 +23,27 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <gal/3d/camera.h>
 #include "board_adapter.h"
+
+#include <wx/log.h>
+
+#include <gal/3d/camera.h>
 #include <board_design_settings.h>
 #include <board_stackup_manager/board_stackup.h>
 #include <board_stackup_manager/stackup_predefined_prms.h>
 #include <3d_rendering/raytracing/shapes2D/polygon_2d.h>
 #include <board.h>
 #include <dialogs/dialog_color_picker.h>
+#include <footprint.h>
 #include <layer_range.h>
 #include <3d_math.h>
 #include "3d_fastmath.h"
 #include <geometry/geometry_utils.h>
 #include <lset.h>
 #include <pgm_base.h>
+#include <settings/color_settings.h>
 #include <settings/settings_manager.h>
-#include <wx/log.h>
+#include <pcb_track.h>
 #include <pcbnew_settings.h>
 #include <advanced_config.h>
 
@@ -272,27 +277,35 @@ bool BOARD_ADAPTER::Is3dLayerEnabled( PCB_LAYER_ID aLayer,
 }
 
 
-bool BOARD_ADAPTER::IsFootprintShown( FOOTPRINT_ATTR_T aFPAttributes ) const
+bool BOARD_ADAPTER::IsFootprintShown( const FOOTPRINT* aFootprint ) const
 {
     if( m_IsPreviewer )     // In panel Preview, footprints are always shown, of course
         return true;
 
-    if( aFPAttributes & FP_EXCLUDE_FROM_POS_FILES )
+    if( !aFootprint )
+        return false;
+
+    const wxString variantName = m_board ? m_board->GetCurrentVariant() : wxString();
+    const bool     excludedFromPos = aFootprint->GetExcludedFromPosFilesForVariant( variantName );
+    const bool     dnp = aFootprint->GetDNPForVariant( variantName );
+    const auto     attributes = static_cast<FOOTPRINT_ATTR_T>( aFootprint->GetAttributes() );
+
+    if( excludedFromPos )
     {
         if( !m_Cfg->m_Render.show_footprints_not_in_posfile )
             return false;
     }
 
-    if( aFPAttributes & FP_DNP )
+    if( dnp )
     {
         if( !m_Cfg->m_Render.show_footprints_dnp )
             return false;
     }
 
-    if( aFPAttributes & FP_SMD )
+    if( attributes & FP_SMD )
         return m_Cfg->m_Render.show_footprints_insert;
 
-    if( aFPAttributes & FP_THROUGH_HOLE )
+    if( attributes & FP_THROUGH_HOLE )
         return m_Cfg->m_Render.show_footprints_normal;
 
     return m_Cfg->m_Render.show_footprints_virtual;
@@ -344,7 +357,7 @@ void BOARD_ADAPTER::InitSettings( REPORTER* aStatusReporter, REPORTER* aWarningR
     BOX2I bbbox;
 
     if( m_board )
-        bbbox = m_board->ComputeBoundingBox( !m_board->IsFootprintHolder() && haveOutline );
+        bbbox = m_board->ComputeBoundingBox( !m_board->IsFootprintHolder() && haveOutline, true );
 
     // Gives a non null size to avoid issues in zoom / scale calculations
     if( ( bbbox.GetWidth() == 0 ) && ( bbbox.GetHeight() == 0 ) )
@@ -1013,7 +1026,7 @@ bool BOARD_ADAPTER::createBoardPolygon( wxString* aErrorMsg )
     }
     else
     {
-        success = m_board->GetBoardPolygonOutlines( m_board_poly, nullptr, false, true );
+        success = m_board->GetBoardPolygonOutlines( m_board_poly, true, nullptr, false, true );
 
         if( !success && aErrorMsg )
             *aErrorMsg = _( "Board outline is missing or malformed. Run DRC for a full analysis." );

@@ -309,6 +309,8 @@ public:
 
     ROW_ICON_PROVIDER* GetRowIconProvider() const { return m_rowIconProvider; }
 
+    void RecomputeGridWidths();
+
 protected:
     /**
      * A re-implementation of wxGrid::DrawColLabel which left-aligns the first column and draws
@@ -347,8 +349,6 @@ protected:
     std::pair<EDA_UNITS, EDA_DATA_TYPE> getColumnUnits( int aCol ) const;
 
 private:
-    void recomputeGridWidths();
-
     void onSizeEvent( wxSizeEvent& aEvent );
 
 protected:
@@ -367,6 +367,10 @@ protected:
 
     bool                       m_gridWidthsDirty = true;
     int                        m_gridWidth = 0;
+
+#ifdef __WXMSW__
+    bool                       m_firstSelectionRefreshDone = false;
+#endif
 
     ROW_ICON_PROVIDER*         m_rowIconProvider;
 };

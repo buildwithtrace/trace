@@ -167,7 +167,7 @@ private:
 };
 
 
-SCENEGRAPH* LoadVRML( const wxString& aFileName, bool useInline )
+SCENEGRAPH* LoadVRML( const wxString& aFileName, bool useInline, bool applyUnitConversion )
 {
     FILE_LINE_READER* modelFile = nullptr;
     SCENEGRAPH* scene = nullptr;
@@ -274,8 +274,14 @@ SCENEGRAPH* LoadVRML( const wxString& aFileName, bool useInline )
 
         WRL2BASE* bp = new WRL2BASE;
 
-        // allow Inline{} files to be included
-        bp->SetEnableInline( true );
+        // allow Inline{} files to be included (controlled by the useInline parameter
+        // to prevent infinite recursion when loading referenced VRML files)
+        bp->SetEnableInline( useInline );
+
+        // Set unit conversion mode. For top-level files, this defaults to true (legacy mode)
+        // and will be disabled if a top-level scale transform is detected. For inline submodels,
+        // this inherits the parent's setting.
+        bp->SetApplyUnitConversion( applyUnitConversion );
 
         if( !bp->Read( proc ) )
         {
@@ -346,7 +352,7 @@ SCENEGRAPH* Load( char const* aFileName )
     if( ext == wxT( "x3d" ) || ext == wxT( "X3D" ) )
         scene = LoadX3D( fname );
     else
-        scene = LoadVRML( fname, true );
+        scene = LoadVRML( fname, true, true );
 
     return scene;
 }

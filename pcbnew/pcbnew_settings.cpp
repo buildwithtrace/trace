@@ -2,6 +2,7 @@
 * This program source code file is part of KiCad, a free EDA CAD application.
 *
 * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
 *
 * This program is free software; you can redistribute it and/or
 * modify it under the terms of the GNU General Public License
@@ -24,6 +25,7 @@
 #include <pybind11/pybind11.h>
 
 #include <common.h>
+#include <settings/color_settings.h>
 #include <footprint_editor_settings.h>
 #include <layer_ids.h>
 #include <lset.h>
@@ -36,6 +38,7 @@
 #include <settings/settings_manager.h>
 #include <wx/config.h>
 #include <wx/tokenzr.h>
+#include <wx/aui/aui.h>
 #include <base_units.h>
 
 #include "../3d-viewer/3d_viewer/eda_3d_viewer_settings.h"
@@ -116,6 +119,10 @@ PCBNEW_SETTINGS::PCBNEW_SETTINGS()
             &m_AuiPanels.show_net_inspector, false ) );
 
     m_params.emplace_back( new PARAM<bool>( "aui.design_blocks_show", &m_AuiPanels.design_blocks_show, false ) );
+
+    m_params.emplace_back( new PARAM<bool>( "aui.ai_chat_show", &m_AuiPanels.ai_chat_show, true ) );
+
+    m_params.emplace_back( new PARAM<int>( "aui.ai_chat_width", &m_AuiPanels.ai_chat_width, -1 ) );
 
     m_params.emplace_back( new PARAM<int>( "aui.design_blocks_panel_docked_width",
                                            &m_AuiPanels.design_blocks_panel_docked_width, -1 ) );
@@ -350,6 +357,34 @@ PCBNEW_SETTINGS::PCBNEW_SETTINGS()
 
     m_params.emplace_back( new PARAM<bool>( "DRC.scroll_on_crossprobe",
             &m_DRCDialog.scroll_on_crossprobe, true ) );
+
+    // Manufacturer shipping info persistence
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_name",
+            &m_ManufacturerShipping.name, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_email",
+            &m_ManufacturerShipping.email, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_phone",
+            &m_ManufacturerShipping.phone, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_company",
+            &m_ManufacturerShipping.company, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_street",
+            &m_ManufacturerShipping.street, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_city",
+            &m_ManufacturerShipping.city, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_state",
+            &m_ManufacturerShipping.state, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_zip",
+            &m_ManufacturerShipping.zip, "" ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "manufacturer.shipping_country",
+            &m_ManufacturerShipping.country, "" ) );
 
     registerMigration( 0, 1,
             [&]()
@@ -624,6 +659,28 @@ bool PCBNEW_SETTINGS::MigrateFromLegacy( wxConfigBase* aCfg )
 
     return ret;
 }
+
+const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow )
+{
+    static wxAuiPaneInfo paneInfo;
+
+    paneInfo.Name( wxS( "AIChat" ) )
+            .Caption( _( "AI Agent" ) )
+            .CaptionVisible( false )
+            .PaneBorder( true )
+            .Right().Layer( 5 ).Position( 0 )
+            .TopDockable( false )
+            .BottomDockable( false )
+            .CloseButton( false )
+            .MinSize( aWindow->FromDIP( wxSize( 300, 200 ) ) )
+            .BestSize( aWindow->FromDIP( wxSize( 350, 500 ) ) )
+            .FloatingSize( aWindow->FromDIP( wxSize( 400, 600 ) ) )
+            .FloatingPosition( aWindow->FromDIP( wxPoint( 100, 100 ) ) )
+            .Show( true );
+
+    return paneInfo;
+}
+
 
 //namespace py = pybind11;
 //

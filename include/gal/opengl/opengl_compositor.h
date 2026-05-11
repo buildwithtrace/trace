@@ -33,7 +33,7 @@
 #ifndef OPENGL_COMPOSITOR_H_
 #define OPENGL_COMPOSITOR_H_
 
-#include <gal/opengl/kiglew.h>    // Must be included first
+#include <kicad_gl/kiglad.h>    // Must be included first
 
 #include <gal/compositor.h>
 #include <gal/opengl/antialiasing.h>
@@ -88,6 +88,17 @@ public:
     VECTOR2I GetScreenSize() const;
     GLenum   GetBufferTexture( unsigned int aBufferHandle );
     void     DrawBuffer( unsigned int aSourceHandle, unsigned int aDestHandle );
+
+    /**
+     * Draw buffer with difference blending (XOR-style for gerbview).
+     * Computes |src - dst| for each color channel, showing differences and
+     * canceling out identical overlapping content.
+     *
+     * @param aSourceHandle Source buffer (new layer)
+     * @param aDestHandle Destination buffer (existing content)
+     */
+    void     DrawBufferDifference( unsigned int aSourceHandle, unsigned int aDestHandle );
+
     unsigned int CreateBuffer( VECTOR2I aDimensions );
 
     void SetAntialiasingMode( GAL_ANTIALIASING_MODE aMode ); // clears all buffers
@@ -133,6 +144,23 @@ protected:
 
     GAL_ANTIALIASING_MODE m_currentAntialiasingMode;
     std::unique_ptr<OPENGL_PRESENTOR> m_antialiasing;
+
+    // Difference shader for XOR-style compositing
+    GLuint          m_differenceShader;        ///< Difference shader program
+    GLint           m_diffSrcTexUniform;       ///< Source texture uniform location
+    GLint           m_diffDstTexUniform;       ///< Destination texture uniform location
+    bool            m_differenceShaderInitialized;
+
+    /**
+     * Initialize the difference shader program.
+     * @return true if shader compiled and linked successfully
+     */
+    bool initDifferenceShader();
+
+    /**
+     * Draw a fullscreen quad for compositing.
+     */
+    void drawFullScreenQuad();
 };
 } // namespace KIGFX
 

@@ -30,6 +30,11 @@
 #include <connectivity/connectivity_items.h>
 #include <trigo.h>
 
+#include <footprint.h>
+#include <pad.h>
+#include <pcb_shape.h>
+#include <pcb_track.h>
+
 #include <wx/log.h>
 
 int CN_ITEM::AnchorCount() const
@@ -84,35 +89,31 @@ const VECTOR2I CN_ITEM::GetAnchor( int n ) const
 
 void CN_ITEM::Dump()
 {
-    wxLogDebug( "    valid: %d, connected: \n", !!Valid() );
+    wxLogTrace( wxT( "CN" ), wxT( "    valid: %d, connected: \n" ), !!Valid() );
 
     for( CN_ITEM* i : m_connected )
     {
         PCB_TRACK* t = static_cast<PCB_TRACK*>( i->Parent() );
-        wxLogDebug( wxT( "    - %p %d\n" ), t, t->Type() );
+        wxLogTrace( wxT( "CN" ), wxT( "    - %p %d\n" ), t, t->Type() );
     }
 }
 
 
 int CN_ZONE_LAYER::AnchorCount() const
 {
-    if( !Valid() )
+    if( !Valid() || !HasValidOutline() )
         return 0;
 
-    const ZONE* zone = static_cast<const ZONE*>( Parent() );
-
-    return zone->GetFilledPolysList( m_layer )->COutline( m_subpolyIndex ).PointCount() ? 1 : 0;
+    return GetOutline().PointCount() ? 1 : 0;
 }
 
 
 const VECTOR2I CN_ZONE_LAYER::GetAnchor( int n ) const
 {
-    if( !Valid() )
+    if( !Valid() || !HasValidOutline() )
         return VECTOR2I();
 
-    const ZONE* zone = static_cast<const ZONE*>( Parent() );
-
-    return zone->GetFilledPolysList( m_layer )->COutline( m_subpolyIndex ).CPoint( 0 );
+    return GetOutline().CPoint( 0 );
 }
 
 
@@ -177,12 +178,16 @@ CN_ITEM* CN_LIST::Add( PAD* pad )
 
          break;
      }
+
      default:
          break;
      }
 
      addItemtoTree( item );
      m_items.push_back( item );
+
+     // Re-mark dirty after tree insertion since BBox() clears the dirty flag
+     item->SetDirty( true );
      SetDirty();
      return item;
 }
@@ -196,6 +201,9 @@ CN_ITEM* CN_LIST::Add( PCB_TRACK* track )
     item->AddAnchor( track->GetEnd() );
     item->SetLayer( track->GetLayer() );
     addItemtoTree( item );
+
+    // Re-mark dirty after tree insertion since BBox() clears the dirty flag
+    item->SetDirty( true );
     SetDirty();
     return item;
 }
@@ -209,6 +217,9 @@ CN_ITEM* CN_LIST::Add( PCB_ARC* aArc )
     item->AddAnchor( aArc->GetEnd() );
     item->SetLayer( aArc->GetLayer() );
     addItemtoTree( item );
+
+    // Re-mark dirty after tree insertion since BBox() clears the dirty flag
+    item->SetDirty( true );
     SetDirty();
     return item;
 }
@@ -223,6 +234,9 @@ CN_ITEM* CN_LIST::Add( PCB_VIA* via )
 
     item->SetLayers( via->TopLayer(), via->BottomLayer() );
     addItemtoTree( item );
+
+    // Re-mark dirty after tree insertion since BBox() clears the dirty flag
+    item->SetDirty( true );
     SetDirty();
     return item;
 }
@@ -254,6 +268,9 @@ CN_ITEM* CN_LIST::Add( CN_ZONE_LAYER* zitem )
 {
     m_items.push_back( zitem );
     addItemtoTree( zitem );
+
+    // Re-mark dirty after tree insertion since BBox() clears the dirty flag
+    zitem->SetDirty( true );
     SetDirty();
     return zitem;
 }
@@ -269,6 +286,9 @@ CN_ITEM* CN_LIST::Add( PCB_SHAPE* shape )
 
     item->SetLayer( shape->GetLayer() );
     addItemtoTree( item );
+
+    // Re-mark dirty after tree insertion since BBox() clears the dirty flag
+    item->SetDirty( true );
     SetDirty();
     return item;
 }

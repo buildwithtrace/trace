@@ -4,6 +4,7 @@
  * Copyright (C) 2018 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,16 +24,18 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
+#include <wx/tokenzr.h>
 #include <bitmaps.h>
 #include <symbol_library_common.h>
 #include <confirm.h>
 #include <dialogs/html_message_box.h>
 #include <eeschema_id.h>
 #include <eeschema_settings.h>
+#include <settings/color_settings.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <kiface_base.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <locale_io.h>
 #include <symbol_viewer_frame.h>
 #include <widgets/msgpanel.h>
@@ -83,10 +86,10 @@ BEGIN_EVENT_TABLE( SYMBOL_VIEWER_FRAME, SCH_BASE_FRAME )
     EVT_ACTIVATE( SYMBOL_VIEWER_FRAME::OnActivate )
 
     // Toolbar events
-    EVT_TOOL( ID_LIBVIEW_NEXT, SYMBOL_VIEWER_FRAME::onSelectNextSymbol )
-    EVT_TOOL( ID_LIBVIEW_PREVIOUS, SYMBOL_VIEWER_FRAME::onSelectPreviousSymbol )
     EVT_CHOICE( ID_LIBVIEW_SELECT_UNIT_NUMBER, SYMBOL_VIEWER_FRAME::onSelectSymbolUnit )
     EVT_CHOICE( ID_LIBVIEW_SELECT_BODY_STYLE, SYMBOL_VIEWER_FRAME::onSelectSymbolBodyStyle )
+    EVT_CHOICE( ID_ON_ZOOM_SELECT, SYMBOL_VIEWER_FRAME::OnSelectZoom )
+    EVT_CHOICE( ID_ON_GRID_SELECT, SYMBOL_VIEWER_FRAME::OnSelectGrid )
 
     // listbox events
     EVT_TEXT( ID_LIBVIEW_LIB_FILTER, SYMBOL_VIEWER_FRAME::OnLibFilter )
@@ -102,15 +105,14 @@ END_EVENT_TABLE()
 
 
 SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
-        SCH_BASE_FRAME( aKiway, aParent, FRAME_SCH_VIEWER, _( "Symbol Library Browser" ),
-                        wxDefaultPosition, wxDefaultSize, KICAD_DEFAULT_DRAWFRAME_STYLE,
-                        LIB_VIEW_FRAME_NAME ),
+        SCH_BASE_FRAME( aKiway, aParent, FRAME_SCH_VIEWER, _( "Symbol Library Browser" ), wxDefaultPosition,
+                        wxDefaultSize, KICAD_DEFAULT_DRAWFRAME_STYLE, LIB_VIEW_FRAME_NAME ),
         m_unitChoice( nullptr ),
         m_bodyStyleChoice( nullptr ),
         m_libList( nullptr ),
         m_symbolList( nullptr )
 {
-    m_aboutTitle = _HKI( "KiCad Symbol Library Browser" );
+    m_aboutTitle = _HKI( "Trace Symbol Library Browser" );
 
     // Force the frame name used in config. the lib viewer frame has a name
     // depending on aFrameType (needed to identify the frame by wxWidgets),
@@ -153,13 +155,13 @@ SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     wxPanel* libPanel = new wxPanel( this );
     wxSizer* libSizer = new wxBoxSizer( wxVERTICAL );
 
-    m_libFilter = new wxSearchCtrl( libPanel, ID_LIBVIEW_LIB_FILTER, wxEmptyString,
-                                    wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER );
+    m_libFilter = new wxSearchCtrl( libPanel, ID_LIBVIEW_LIB_FILTER, wxEmptyString, wxDefaultPosition,
+                                    wxDefaultSize, wxTE_PROCESS_ENTER );
     m_libFilter->SetDescriptiveText( _( "Filter" ) );
     libSizer->Add( m_libFilter, 0, wxEXPAND, 5 );
 
-    m_libList = new WX_LISTBOX( libPanel, ID_LIBVIEW_LIB_LIST, wxDefaultPosition, wxDefaultSize,
-                                0, nullptr, wxLB_HSCROLL | wxNO_BORDER );
+    m_libList = new WX_LISTBOX( libPanel, ID_LIBVIEW_LIB_LIST, wxDefaultPosition, wxDefaultSize, 0, nullptr,
+                                wxLB_HSCROLL | wxNO_BORDER );
     libSizer->Add( m_libList, 1, wxEXPAND, 5 );
 
     libPanel->SetSizer( libSizer );
@@ -168,13 +170,12 @@ SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     wxPanel* symbolPanel = new wxPanel( this );
     wxSizer* symbolSizer = new wxBoxSizer( wxVERTICAL );
 
-    m_symbolFilter = new wxSearchCtrl( symbolPanel, ID_LIBVIEW_SYM_FILTER, wxEmptyString,
-                                       wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER );
+    m_symbolFilter = new wxSearchCtrl( symbolPanel, ID_LIBVIEW_SYM_FILTER, wxEmptyString, wxDefaultPosition,
+                                       wxDefaultSize, wxTE_PROCESS_ENTER );
     m_symbolFilter->SetDescriptiveText( _( "Filter" ) );
-    m_symbolFilter->SetToolTip(
-            _( "Filter on symbol name, keywords, description and pin count.\n"
-               "Search terms are separated by spaces.  All search terms must match.\n"
-               "A term which is a number will also match against the pin count." ) );
+    m_symbolFilter->SetToolTip( _( "Filter on symbol name, keywords, description and pin count.\n"
+                                   "Search terms are separated by spaces.  All search terms must match.\n"
+                                   "A term which is a number will also match against the pin count." ) );
     symbolSizer->Add( m_symbolFilter, 0, wxEXPAND, 5 );
 
 #ifdef __WXGTK__
@@ -184,8 +185,8 @@ SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_symbolFilter->SetMinSize( wxSize( -1, GetTextExtent( wxT( "qb" ) ).y + 10 ) );
 #endif
 
-    m_symbolList = new WX_LISTBOX( symbolPanel, ID_LIBVIEW_SYM_LIST, wxDefaultPosition,
-                                   wxDefaultSize, 0, nullptr, wxLB_HSCROLL | wxNO_BORDER );
+    m_symbolList = new WX_LISTBOX( symbolPanel, ID_LIBVIEW_SYM_LIST, wxDefaultPosition, wxDefaultSize, 0, nullptr,
+                                   wxLB_HSCROLL | wxNO_BORDER );
     symbolSizer->Add( m_symbolList, 1, wxEXPAND, 5 );
 
     symbolPanel->SetSizer( symbolSizer );
@@ -204,7 +205,7 @@ SYMBOL_VIEWER_FRAME::SYMBOL_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     // Manage main toolbar
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( "TopMainToolbar" ).Top().Layer(6) );
-    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ) .Bottom().Layer(6) );
+    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(1) );
 
     m_auimgr.AddPane( libPanel, EDA_PANE().Palette().Name( "Libraries" ).Left().Layer(2)
                       .CaptionVisible( false ).MinSize( 100, -1 ).BestSize( 200, -1 ) );
@@ -271,8 +272,8 @@ void SYMBOL_VIEWER_FRAME::setupTools()
 {
     // Create the manager and dispatcher & route draw panel events to the dispatcher
     m_toolManager = new TOOL_MANAGER;
-    m_toolManager->SetEnvironment( GetScreen(), GetCanvas()->GetView(),
-                                   GetCanvas()->GetViewControls(), config(), this );
+    m_toolManager->SetEnvironment( GetScreen(), GetCanvas()->GetView(), GetCanvas()->GetViewControls(), config(),
+                                   this );
     m_actions = new SCH_ACTIONS();
     m_toolDispatcher = new TOOL_DISPATCHER( m_toolManager );
 
@@ -282,7 +283,7 @@ void SYMBOL_VIEWER_FRAME::setupTools()
     m_toolManager->RegisterTool( new ZOOM_TOOL );
     m_toolManager->RegisterTool( new SCH_INSPECTION_TOOL );     // manage show datasheet
     m_toolManager->RegisterTool( new SCH_SELECTION_TOOL );      // manage context menu
-    m_toolManager->RegisterTool( new SYMBOL_EDITOR_CONTROL );  // manage render settings
+    m_toolManager->RegisterTool( new SYMBOL_EDITOR_CONTROL );   // manage render settings
 
     m_toolManager->InitTools();
 
@@ -306,7 +307,7 @@ void SYMBOL_VIEWER_FRAME::setupUIConditions()
 #define ENABLE( x ) ACTION_CONDITIONS().Enable( x )
 #define CHECK( x )  ACTION_CONDITIONS().Check( x )
 
-    mgr->SetConditions( ACTIONS::toggleGrid,          CHECK( cond.GridVisible() ) );
+    mgr->SetConditions( ACTIONS::toggleGrid, CHECK( cond.GridVisible() ) );
 
     auto electricalTypesShownCondition =
             [this]( const SELECTION& aSel )
@@ -482,12 +483,12 @@ bool SYMBOL_VIEWER_FRAME::ReCreateLibList()
 
     m_libList->Clear();
 
-    COMMON_SETTINGS*      cfg = Pgm().GetCommonSettings();
-    PROJECT_FILE&         project = Kiway().Prj().GetProjectFile();
+    COMMON_SETTINGS*        cfg = Pgm().GetCommonSettings();
+    PROJECT_FILE&           project = Kiway().Prj().GetProjectFile();
     SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-    std::vector<wxString> libNicknames = adapter->GetLibraryNames();
-    std::vector<wxString> pinnedMatches;
-    std::vector<wxString> otherMatches;
+    std::vector<wxString>   libNicknames = adapter->GetLibraryNames();
+    std::vector<wxString>   pinnedMatches;
+    std::vector<wxString>   otherMatches;
 
     auto doAddLib =
             [&]( const wxString& aLib )
@@ -533,9 +534,8 @@ bool SYMBOL_VIEWER_FRAME::ReCreateLibList()
                 {
                     for( const auto& [nickname, description] : adapter->GetSubLibraries( aLib ) )
                     {
-                        wxString suffix = nickname.IsEmpty()
-                                              ? wxString( wxT( "" ) )
-                                              : wxString::Format( wxT( " - %s" ), nickname );
+                        wxString suffix = nickname.IsEmpty() ? wxString( wxT( "" ) )
+                                                             : wxString::Format( wxT( " - %s" ), nickname );
                         wxString name = wxString::Format( wxT( "%s%s" ), aLib, suffix );
 
                         doAddLib( name );
@@ -579,8 +579,7 @@ bool SYMBOL_VIEWER_FRAME::ReCreateLibList()
         m_libList->Append( UnescapeString( name ) );
 
     // Search for a previous selection:
-    int index =
-            m_libList->FindString( UnescapeString( m_currentSymbol.GetUniStringLibNickname() ) );
+    int index = m_libList->FindString( UnescapeString( m_currentSymbol.GetUniStringLibNickname() ) );
 
     if( index != wxNOT_FOUND )
     {
@@ -633,8 +632,7 @@ bool SYMBOL_VIEWER_FRAME::ReCreateSymbolList()
 
             for( LIB_SYMBOL* symbol : symbols )
             {
-                std::vector<SEARCH_TERM> searchTerms = symbol->GetSearchTerms();
-                int                      matched = matcher.ScoreTerms( searchTerms );
+                int matched = matcher.ScoreTerms( symbol->GetSearchTerms() );
 
                 if( filterTerm.IsNumber() && wxAtoi( filterTerm ) == (int)symbol->GetPinCount() )
                     matched++;
@@ -667,8 +665,7 @@ bool SYMBOL_VIEWER_FRAME::ReCreateSymbolList()
         return true;
     }
 
-    int index =
-            m_symbolList->FindString( UnescapeString( m_currentSymbol.GetUniStringLibItemName() ) );
+    int index = m_symbolList->FindString( UnescapeString( m_currentSymbol.GetUniStringLibItemName() ) );
     bool changed = false;
 
     if( index == wxNOT_FOUND )
@@ -716,12 +713,13 @@ void SYMBOL_VIEWER_FRAME::ClickOnLibList( wxCommandEvent& event )
 }
 
 
-void SYMBOL_VIEWER_FRAME::SetSelectedLibrary( const wxString& aLibraryName,
-                                              const wxString& aSubLibName )
+void SYMBOL_VIEWER_FRAME::SetSelectedLibrary( const wxString& aLibraryName, const wxString& aSubLibName )
 {
     if( m_currentSymbol.GetUniStringLibNickname() == aLibraryName
         && wxString( m_currentSymbol.GetSubLibraryName().wx_str() ) == aSubLibName )
+    {
         return;
+    }
 
     m_currentSymbol.SetLibNickname( aLibraryName );
     m_currentSymbol.SetSubLibraryName( aSubLibName );
@@ -939,8 +937,7 @@ void SYMBOL_VIEWER_FRAME::OnCharHook( wxKeyEvent& aEvent )
         }
         else
         {
-            wxCommandEvent dummy;
-            onSelectPreviousSymbol( dummy );
+            SelectPreviousSymbol();
         }
     }
     else if( aEvent.GetKeyCode() == WXK_DOWN )
@@ -960,8 +957,7 @@ void SYMBOL_VIEWER_FRAME::OnCharHook( wxKeyEvent& aEvent )
         }
         else
         {
-            wxCommandEvent dummy;
-            onSelectNextSymbol( dummy );
+            SelectNextSymbol();
         }
     }
     else if( aEvent.GetKeyCode() == WXK_TAB && m_libFilter->HasFocus() )
@@ -991,7 +987,7 @@ void SYMBOL_VIEWER_FRAME::OnCharHook( wxKeyEvent& aEvent )
 }
 
 
-void SYMBOL_VIEWER_FRAME::onSelectNextSymbol( wxCommandEvent& aEvent )
+void SYMBOL_VIEWER_FRAME::SelectNextSymbol()
 {
     wxCommandEvent evt( wxEVT_COMMAND_LISTBOX_SELECTED, ID_LIBVIEW_SYM_LIST );
     int            ii = m_symbolList->GetSelection();
@@ -1005,7 +1001,7 @@ void SYMBOL_VIEWER_FRAME::onSelectNextSymbol( wxCommandEvent& aEvent )
 }
 
 
-void SYMBOL_VIEWER_FRAME::onSelectPreviousSymbol( wxCommandEvent& aEvent )
+void SYMBOL_VIEWER_FRAME::SelectPreviousSymbol()
 {
     wxCommandEvent evt( wxEVT_COMMAND_LISTBOX_SELECTED, ID_LIBVIEW_SYM_LIST );
     int            ii = m_symbolList->GetSelection();
@@ -1054,8 +1050,7 @@ void SYMBOL_VIEWER_FRAME::DisplayLibInfos()
         SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
         LIBRARY_TABLE_ROW* row = adapter->GetRow( libName ).value_or( nullptr );
 
-        wxString title = row
-                             ? LIBRARY_MANAGER::GetFullURI( row, true )
+        wxString title = row ? LIBRARY_MANAGER::GetFullURI( row, true )
                              : _( "[no library selected]" );
 
         title += wxT( " \u2014 " ) + _( "Symbol Library Browser" );
@@ -1070,24 +1065,22 @@ SELECTION& SYMBOL_VIEWER_FRAME::GetCurrentSelection()
 }
 
 
-void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
 
     switch( mail.Command() )
     {
     case MAIL_RELOAD_LIB:
-    {
         ReCreateLibList();
         break;
-    }
+
     case MAIL_REFRESH_SYMBOL:
     {
         LIB_SYMBOL* symbol = GetSelectedSymbol();
         wxCHECK2( symbol, break );
 
         SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-        LIBRARY_TABLE_ROW* row =
-                adapter->GetRow( symbol->GetLibId().GetLibNickname() ).value_or( nullptr );
+        LIBRARY_TABLE_ROW*      row = adapter->GetRow( symbol->GetLibId().GetLibNickname() ).value_or( nullptr );
 
         if( !row )
             return;
@@ -1095,8 +1088,7 @@ void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
         wxString libfullname = LIBRARY_MANAGER::GetFullURI( row, true );
 
         wxString lib( mail.GetPayload() );
-    wxLogTrace( traceLibWatch, "Received refresh symbol request for %s, current symbols "
-            "is %s", lib, libfullname );
+        wxLogTrace( traceLibWatch, "Received refresh symbol request for %s, current symbols is %s", lib, libfullname );
 
         if( lib == libfullname )
         {
@@ -1104,6 +1096,7 @@ void SYMBOL_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
             updatePreviewSymbol();
             GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
         }
+
         break;
     }
     default:;

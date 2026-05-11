@@ -1,0 +1,45 @@
+(version 1)
+# Pikkolo Assembly Standard DRC Rules
+
+(rule "Minimum Trace Width and Spacing"
+(constraint track_width (min 0.127mm))
+(constraint clearance (min 0.127mm)))
+
+(rule "Minimum Via Hole and Diameter"
+(constraint hole_size (min 0.254mm))
+(constraint via_diameter (min 0.508mm))
+(condition "A.Type == 'via'"))
+
+(rule "Component Annular Ring"
+(constraint annular_width (min 0.178mm))
+(condition "A.Type == 'Pad' && A.isPlated()"))
+
+(rule "Via Annular Ring"
+(constraint annular_width (min 0.127mm))
+(condition "A.Type == 'via'"))
+
+(rule "Drill to Copper Clearance"
+(constraint hole_clearance (min 0.254mm)))
+
+(rule "Trace to Board Edge (Outer)"
+(constraint edge_clearance (min 0.254mm))
+(layer outer)
+(condition "A.Type == 'track'"))
+
+(rule "Trace to Board Edge (Inner)"
+(constraint edge_clearance (min 0.381mm))
+(layer inner)
+(condition "A.Type == 'track'"))
+
+(rule "No Plated Slots"
+(constraint disallow hole)
+(condition "(A.Hole_Size_X != A.Hole_Size_Y) && A.isPlated()"))
+
+(rule "No Blind or Buried Vias"
+(constraint disallow blind_buried_via))
+
+(rule "No Microvias"
+(constraint disallow micro_via))
+
+(rule "Minimum Drill Size"
+(constraint hole_size (min 0.254mm)))

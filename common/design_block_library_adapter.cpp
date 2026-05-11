@@ -21,22 +21,19 @@
 
 #include "design_block.h"
 
-
 #include <design_block_library_adapter.h>
 #include <design_block_io.h>
 #include <env_vars.h>
 #include <ki_exception.h>
-#include <thread_pool.h>
 #include <trace_helpers.h>
 
-#include <set>
 #include <magic_enum.hpp>
 #include <wx/log.h>
 
 
-std::map<wxString, LIB_DATA> DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraries;
+LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraries;
 
-std::mutex DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraryMutex;
+std::shared_mutex DESIGN_BLOCK_LIBRARY_ADAPTER::GlobalLibraryMutex;
 
 
 DESIGN_BLOCK_LIBRARY_ADAPTER::DESIGN_BLOCK_LIBRARY_ADAPTER( LIBRARY_MANAGER& aManager ) :
@@ -64,7 +61,19 @@ LIBRARY_RESULT<IO_BASE*> DESIGN_BLOCK_LIBRARY_ADAPTER::createPlugin( const LIBRA
     // TODO(JE) do we maintain a precondition that URIs are absolute paths after expansion?
     DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_T type = DESIGN_BLOCK_IO_MGR::EnumFromStr( row->Type() );
 
-    if( type == DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_UNKNOWN )
+    if( type == DESIGN_BLOCK_IO_MGR::NESTED_TABLE )
+    {
+        wxString   msg;
+        wxFileName fileName( row->URI() );
+
+        if( fileName.FileExists() )
+            return tl::unexpected( LIBRARY_TABLE_OK() );
+        else
+            msg = wxString::Format( _( "Nested table '%s' not found." ), row->URI() );
+
+        return tl::unexpected( LIBRARY_ERROR( msg ) );
+    }
+    else if( type == DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_UNKNOWN )
     {
         wxLogTrace( traceLibraries, "Sym: Plugin type %s is unknown!", row->Type() );
         wxString msg = wxString::Format( _( "Unknown library type %s " ), row->Type() );
@@ -84,17 +93,23 @@ IO_BASE* DESIGN_BLOCK_LIBRARY_ADAPTER::plugin( const LIB_DATA* aRow )
 }
 
 
-/// Loads or reloads the given library, if it exists
-std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( LIB_DATA* aLib )
+void DESIGN_BLOCK_LIBRARY_ADAPTER::enumerateLibrary( LIB_DATA* aLib, const wxString& aUri )
 {
     wxArrayString dummyList;
-    std::lock_guard lock ( aLib->mutex );
+    std::map<std::string, UTF8> options = aLib->row->GetOptionsMap();
+    dbplugin( aLib )->DesignBlockEnumerate( dummyList, aUri, false, &options );
+}
+
+
+std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( LIB_DATA* aLib )
+{
     aLib->status.load_status = LOAD_STATUS::LOADING;
 
     std::map<std::string, UTF8> options = aLib->row->GetOptionsMap();
 
     try
     {
+        wxArrayString dummyList;
         dbplugin( aLib )->DesignBlockEnumerate( dummyList, getUri( aLib->row ), false, &options );
         wxLogTrace( traceLibraries, "DB: %s: library enumerated %zu items", aLib->row->Nickname(), dummyList.size() );
         aLib->status.load_status = LOAD_STATUS::LOADED;
@@ -110,162 +125,17 @@ std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( LIB_DATA* aLib 
 }
 
 
-void DESIGN_BLOCK_LIBRARY_ADAPTER::AsyncLoad()
+std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( const wxString& nickname )
 {
-    // TODO(JE) library tables - how much of this can be shared with other library types?
-    // TODO(JE) any reason to clean these up earlier?
-    std::erase_if( m_futures,
-                   []( const std::future<void>& aFuture ) { return aFuture.valid(); } );
+    LIBRARY_RESULT<LIB_DATA*> result = loadIfNeeded( nickname );
 
-    if( !m_futures.empty() )
-    {
-        wxLogTrace( traceLibraries, "DB: Cannot AsyncLoad, futures from a previous call remain!" );
-        return;
-    }
+    if( result.has_value() )
+        return LoadOne( *result );
 
-    std::vector<LIBRARY_TABLE_ROW*> rows = m_manager.Rows( LIBRARY_TABLE_TYPE::DESIGN_BLOCK );
-
-    m_loadTotal = rows.size();
-    m_loadCount.store( 0 );
-
-    if( m_loadTotal == 0 )
-    {
-        wxLogTrace( traceLibraries, "DB: AsyncLoad: no libraries left to load; exiting" );
-        return;
-    }
-
-    thread_pool& tp = GetKiCadThreadPool();
-
-    auto check =
-            []( const wxString& aLib, std::map<wxString, LIB_DATA>& aMap, std::mutex& aMutex )
-            {
-                std::lock_guard lock( aMutex );
-
-                if( aMap.contains( aLib ) )
-                {
-                    if( aMap[aLib].status.load_status == LOAD_STATUS::LOADED )
-                        return true;
-
-                    aMap.erase( aLib );
-                }
-
-                return false;
-            };
-
-    std::set<wxString> libNamesCurrentlyValid;
-
-    for( const LIBRARY_TABLE_ROW* row : rows )
-    {
-        LIBRARY_TABLE_SCOPE scope = row->Scope();
-        const wxString& nickname = row->Nickname();
-
-        libNamesCurrentlyValid.insert( nickname );
-
-        // TODO(JE) library tables -- check for modified global files
-        if( check( nickname, m_libraries, m_libraries_mutex ) )
-        {
-            --m_loadTotal;
-            continue;
-        }
-
-        if( check( nickname, GlobalLibraries, GlobalLibraryMutex ) )
-        {
-            --m_loadTotal;
-            continue;
-        }
-
-        m_futures.emplace_back( tp.submit_task(
-                [this, nickname, scope]()
-                {
-                    if( m_abort.load() )
-                        return;
-
-                    LIBRARY_RESULT<LIB_DATA*> result = loadIfNeeded( nickname );
-
-                    if( result.has_value() )
-                    {
-                        std::optional<LIB_STATUS> loadResult = LoadOne( *result );
-
-                        // for design blocks, LoadOne should always return something
-                        wxCHECK2( loadResult, ++m_loadCount; return );
-
-                        switch( scope )
-                        {
-                        case LIBRARY_TABLE_SCOPE::GLOBAL:
-                        {
-                            std::lock_guard lock( GlobalLibraryMutex );
-                            GlobalLibraries[nickname].status = *loadResult;
-                            break;
-                        }
-
-                        case LIBRARY_TABLE_SCOPE::PROJECT:
-                        {
-                            std::lock_guard lock( m_libraries_mutex );
-                            m_libraries[nickname].status = *loadResult;
-                            break;
-                        }
-
-                        default:
-                            wxFAIL_MSG( "Unexpected library table scope" );
-                        }
-                    }
-                    else
-                    {
-                        switch( scope )
-                        {
-                        case LIBRARY_TABLE_SCOPE::GLOBAL:
-                        {
-                            std::lock_guard lock( GlobalLibraryMutex );
-
-                            GlobalLibraries[nickname].status = LIB_STATUS( {
-                                .load_status = LOAD_STATUS::LOAD_ERROR,
-                                .error = result.error()
-                            } );
-
-                            break;
-                        }
-
-                        case LIBRARY_TABLE_SCOPE::PROJECT:
-                        {
-                            wxLogTrace( traceLibraries, "DB: project library error: %s: %s", nickname, result.error().message );
-                            std::lock_guard lock( m_libraries_mutex );
-
-                            m_libraries[nickname].status = LIB_STATUS( {
-                                .load_status = LOAD_STATUS::LOAD_ERROR,
-                                .error = result.error()
-                            } );
-
-                            break;
-                        }
-
-                        default:
-                            wxFAIL_MSG( "Unexpected library table scope" );
-                        }
-                    }
-
-                    ++m_loadCount;
-                }, BS::pr::lowest ) );
-    }
-
-    // Cleanup libraries that were removed from the table
-    {
-        std::lock_guard lock( GlobalLibraryMutex );
-        std::erase_if( GlobalLibraries, [&]( const auto& pair )
-                {
-                    return !libNamesCurrentlyValid.contains( pair.first );
-                } );
-    }
-
-    {
-        std::lock_guard lock( m_libraries_mutex );
-        std::erase_if( m_libraries, [&]( const auto& pair )
-                {
-                    return !libNamesCurrentlyValid.contains( pair.first );
-                } );
-    }
-
-    if( m_loadTotal > 0 )
-        wxLogTrace( traceLibraries, "DB: Started async load of %zu libraries", m_loadTotal );
+    return LIB_STATUS{
+        .load_status = LOAD_STATUS::LOAD_ERROR,
+        .error = LIBRARY_ERROR( { result.error() } )
+    };
 }
 
 
@@ -336,9 +206,24 @@ DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::LoadDesignBlock( const wxString& aNi
         const LIB_DATA* lib = *maybeLib;
         std::map<std::string, UTF8> options = lib->row->GetOptionsMap();
 
-        DESIGN_BLOCK* db = dbplugin( lib )->DesignBlockLoad( getUri( lib->row ), aDesignBlockName, aKeepUUID, &options );
-        db->GetLibId().SetLibNickname( aNickname );
-        return db;
+        try
+        {
+            if( DESIGN_BLOCK* db =
+                        dbplugin( lib )->DesignBlockLoad( getUri( lib->row ), aDesignBlockName, aKeepUUID, &options ) )
+            {
+                db->GetLibId().SetLibNickname( aNickname );
+                return db;
+            }
+        }
+        catch( const IO_ERROR& ioe )
+        {
+            wxLogTrace( traceLibraries, "LoadDesignBlock: error loading %s:%s: %s", aNickname, aDesignBlockName,
+                        ioe.What() );
+        }
+    }
+    else
+    {
+        wxLogTrace( traceLibraries, "LoadDesignBlock: requested library %s not loaded", aNickname );
     }
 
     return nullptr;
@@ -437,4 +322,3 @@ DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::DesignBlockLoadWithOptionalNickname(
 
     return nullptr;
 }
-

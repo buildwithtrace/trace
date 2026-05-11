@@ -40,48 +40,11 @@
 
 
 SCH_EDIT_FRAME*   EESCHEMA_HELPERS::s_SchEditFrame = nullptr;
-SETTINGS_MANAGER* EESCHEMA_HELPERS::s_SettingsManager = nullptr;
 
 
 void EESCHEMA_HELPERS::SetSchEditFrame( SCH_EDIT_FRAME* aSchEditFrame )
 {
     s_SchEditFrame = aSchEditFrame;
-}
-
-
-SETTINGS_MANAGER* EESCHEMA_HELPERS::GetSettingsManager()
-{
-    if( !s_SettingsManager )
-    {
-        if( s_SchEditFrame )
-        {
-            s_SettingsManager = s_SchEditFrame->GetSettingsManager();
-        }
-        else
-        {
-            s_SettingsManager = new SETTINGS_MANAGER();
-        }
-    }
-
-    return s_SettingsManager;
-}
-
-
-PROJECT* EESCHEMA_HELPERS::GetDefaultProject( bool aSetActive )
-{
-    // For some reasons, LoadProject() needs a C locale, so ensure we have the right locale
-    // This is mainly when running QA Python tests
-    LOCALE_IO dummy;
-
-    PROJECT* project = GetSettingsManager()->GetProject( "" );
-
-    if( !project )
-    {
-        GetSettingsManager()->LoadProject( "", aSetActive );
-        project = GetSettingsManager()->GetProject( "" );
-    }
-
-    return project;
 }
 
 
@@ -118,10 +81,11 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
     LOCALE_IO dummy;
 
     PROJECT* project = aProject;
+    SETTINGS_MANAGER& mgr = Pgm().GetSettingsManager();
 
     if( !project )
     {
-        project = GetSettingsManager()->GetProject( projectPath );
+        project = mgr.GetProject( projectPath );
     }
 
     if( !aForceDefaultProject )
@@ -130,11 +94,11 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
         {
             if( wxFileExists( projectPath ) )
             {
-                GetSettingsManager()->LoadProject( projectPath, aSetActive );
-                project = GetSettingsManager()->GetProject( projectPath );
+                mgr.LoadProject( projectPath, aSetActive );
+                project = mgr.GetProject( projectPath );
             }
         }
-        else if( s_SchEditFrame && project == &GetSettingsManager()->Prj() )
+        else if( s_SchEditFrame && project == &mgr.Prj() )
         {
             // Project is already loaded?  Then so is the board
             return &s_SchEditFrame->Schematic();
@@ -143,7 +107,7 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
 
     // Board cannot be loaded without a project, so create the default project
     if( !project || aForceDefaultProject )
-        project = GetDefaultProject( aSetActive );
+        project = &mgr.Prj();
 
     IO_RELEASER<SCH_IO> pi( SCH_IO_MGR::FindPlugin( aFormat ) );
 
@@ -155,7 +119,12 @@ SCHEMATIC* EESCHEMA_HELPERS::LoadSchematic( const wxString& aFileName,
 
     try
     {
-        schematic->SetRoot( pi->LoadSchematicFile( schFile.GetFullPath(), schematic ) );
+        SCH_SHEET* rootSheet = pi->LoadSchematicFile( schFile.GetFullPath(), schematic );
+
+        if( rootSheet )
+            schematic->SetTopLevelSheets( { rootSheet } );
+        else
+            return nullptr;
     }
     catch( ... )
     {

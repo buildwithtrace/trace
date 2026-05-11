@@ -26,7 +26,6 @@
 #define DRC_RTREE_H_
 
 #include <board_item.h>
-#include <pad.h>
 #include <pcb_field.h>
 #include <memory>
 #include <unordered_set>
@@ -170,7 +169,12 @@ public:
     void clear()
     {
         for( auto& [_, tree] : m_tree )
+        {
+            for( ITEM_WITH_SHAPE* el : *tree )
+                delete el;
+
             tree->RemoveAll();
+        }
 
         m_count = 0;
     }

@@ -26,6 +26,7 @@
 #include <pcb_board_outline.h>
 #include <board_design_settings.h>
 #include <footprint.h>
+#include <pad.h>
 #include <pcb_track.h>
 #include <geometry/seg.h>
 #include <geometry/shape_segment.h>
@@ -33,7 +34,7 @@
 #include <drc/drc_item.h>
 #include <drc/drc_rule.h>
 #include <drc/drc_test_provider.h>
-#include "drc_rtree.h"
+#include <drc/drc_rtree.h>
 
 /*
     Board edge clearance test. Checks all items for their mechanical clearances against the board
@@ -56,7 +57,8 @@ class DRC_TEST_PROVIDER_EDGE_CLEARANCE : public DRC_TEST_PROVIDER
 public:
     DRC_TEST_PROVIDER_EDGE_CLEARANCE () :
             DRC_TEST_PROVIDER(),
-            m_largestEdgeClearance( 0 )
+            m_largestEdgeClearance( 0 ),
+            m_epsilon( 0 )
     {}
 
     virtual ~DRC_TEST_PROVIDER_EDGE_CLEARANCE() = default;
@@ -191,12 +193,8 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::testAgainstEdge( BOARD_ITEM* item, SHAPE*
 
     if( constraint.GetSeverity() != RPT_SEVERITY_IGNORE && minClearance >= 0 )
     {
-        if( itemShape->Collide( shape.get(), minClearance, &actual, &pos ) )
+        if( itemShape->Collide( shape.get(), std::max( 0, minClearance - m_epsilon ), &actual, &pos ) )
         {
-            // Exact clearance is allowed
-            if( minClearance > 0 && actual == minClearance )
-                return true;
-
             if( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T )
             {
                 // Edge collisions are allowed inside the holes of castellated pads
@@ -284,15 +282,30 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
                     // A single rectangle for the board would defeat the RTree, so convert to edges
                     if( shape->GetCornerRadius() > 0 )
                     {
-                        for( SHAPE* seg : shape->MakeEffectiveShapes( true ) )
+                        for( SHAPE* subshape : shape->MakeEffectiveShapes( true ) )
                         {
-                            wxCHECK2( dynamic_cast<SHAPE_SEGMENT*>( seg ), continue );
-
-                            edges.emplace_back( static_cast<PCB_SHAPE*>( shape->Clone() ) );
-                            edges.back()->SetShape( SHAPE_T::SEGMENT );
-                            edges.back()->SetStart( seg->GetStart() );
-                            edges.back()->SetEnd( seg->GetEnd() );
-                            edges.back()->SetStroke( stroke );
+                            if( SHAPE_SEGMENT* segment = dynamic_cast<SHAPE_SEGMENT*>( subshape ) )
+                            {
+                                edges.emplace_back( static_cast<PCB_SHAPE*>( shape->Clone() ) );
+                                edges.back()->SetShape( SHAPE_T::SEGMENT );
+                                edges.back()->SetStart( segment->GetStart() );
+                                edges.back()->SetEnd( segment->GetEnd() );
+                                edges.back()->SetStroke( stroke );
+                            }
+                            else if( SHAPE_ARC* arc = dynamic_cast<SHAPE_ARC*>( subshape ) )
+                            {
+                                edges.emplace_back( static_cast<PCB_SHAPE*>( shape->Clone() ) );
+                                edges.back()->SetShape( SHAPE_T::ARC );
+                                edges.back()->SetArcGeometry( arc->GetP0(), arc->GetArcMid(), arc->GetP1() );
+                                edges.back()->SetStroke( stroke );
+                            }
+                            else
+                            {
+                                wxFAIL_MSG(
+                                        wxString::Format( "Unexpected effective shape type %d for rounded rectangle",
+                                                          (int) subshape->Type() ) );
+                                continue;
+                            }
                         }
                     }
                     else
@@ -372,14 +385,14 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
     int       count = 0;
     int       ii = 0;
 
-    forEachGeometryItem( s_allBasicItemsButZones, LSET::AllLayersMask(),
+    forEachGeometryItem( s_allBasicItems, LSET::AllLayersMask(),
             [&]( BOARD_ITEM *item ) -> bool
             {
                 count++;
                 return true;
             } );
 
-    forEachGeometryItem( s_allBasicItemsButZones, LSET::AllLayersMask(),
+    forEachGeometryItem( s_allBasicItems, LSET::AllLayersMask(),
             [&]( BOARD_ITEM *item ) -> bool
             {
                 bool testCopper = !m_drcEngine->IsErrorLimitExceeded( DRCE_EDGE_CLEARANCE );
@@ -412,6 +425,12 @@ bool DRC_TEST_PROVIDER_EDGE_CLEARANCE::Run()
 
                 case PCB_VIA_T:
                     layersToTest = static_cast<PCB_VIA*>( item )->Padstack().UniqueLayers();
+                    break;
+
+                case PCB_ZONE_T:
+                    for( PCB_LAYER_ID layer : item->GetLayerSet() )
+                        layersToTest.push_back( layer );
+
                     break;
 
                 default:

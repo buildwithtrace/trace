@@ -110,6 +110,7 @@ public:
     static TOOL_ACTION mergeCells;
     static TOOL_ACTION unmergeCells;
     static TOOL_ACTION editTable;
+    static TOOL_ACTION exportTableCSV;
 
     // Find and Replace
     static TOOL_ACTION showSearch;
@@ -278,6 +279,7 @@ public:
     // Suite
     static TOOL_ACTION openPreferences;
     static TOOL_ACTION configurePaths;
+    static TOOL_ACTION setBackendUrl;
     static TOOL_ACTION showSymbolLibTable;
     static TOOL_ACTION showFootprintLibTable;
     static TOOL_ACTION showDesignBlockLibTable;

@@ -561,12 +561,10 @@ SHAPE_LINE_CHAIN MEANDER_SHAPE::genMeanderShape( const VECTOR2D& aP, const VECTO
     switch( aType )
     {
     case MT_EMPTY:
-    {
         lc.Append( aP + dir_v_b + aDir );
         break;
-    }
+
     case MT_START:
-    {
         if( targetBaseLen )
             top = std::max( top, targetBaseLen - sCorner - uCorner * 2 + offset );
 
@@ -575,10 +573,8 @@ SHAPE_LINE_CHAIN MEANDER_SHAPE::genMeanderShape( const VECTOR2D& aP, const VECTO
         forward( std::min( sCorner, uCorner ) );
         forward( std::abs( offset ) );
         break;
-    }
 
     case MT_FINISH:
-    {
         if( targetBaseLen )
             top = std::max( top, targetBaseLen - cr - spc );
 
@@ -595,10 +591,8 @@ SHAPE_LINE_CHAIN MEANDER_SHAPE::genMeanderShape( const VECTOR2D& aP, const VECTO
             lc.Append( aP + dir_v_b + aDir.Resize( 2 * spc - cr ) );
 
         break;
-    }
 
     case MT_TURN:
-    {
         if( targetBaseLen )
             top = std::max( top, targetBaseLen - uCorner * 2 + offset * 2 );
 
@@ -608,10 +602,8 @@ SHAPE_LINE_CHAIN MEANDER_SHAPE::genMeanderShape( const VECTOR2D& aP, const VECTO
         uShape( turnSide, uCorner, top );
         forward( std::abs( offset ) );
         break;
-    }
 
     case MT_SINGLE:
-    {
         if( targetBaseLen )
             top = std::max( top, ( targetBaseLen - sCorner * 2 - uCorner * 2 ) / 2 );
 
@@ -620,7 +612,6 @@ SHAPE_LINE_CHAIN MEANDER_SHAPE::genMeanderShape( const VECTOR2D& aP, const VECTO
         miter( sCorner, false );
         lc.Append( aP + dir_v_b + aDir.Resize( 2 * spc ) );
         break;
-    }
 
     default:
         break;
@@ -728,6 +719,12 @@ bool MEANDER_SHAPE::Fit( MEANDER_TYPE aType, const SEG& aSeg, const VECTOR2I& aP
     int minAmpl = MinAmplitude();
     int maxAmpl = std::max( st.m_maxAmplitude, minAmpl );
 
+    // Calculate minimum acceptable corner radius for visible rounding.
+    // Use at least half the track width to ensure curves are noticeably rounded.
+    // Smaller values lead to corners that appear nearly square, which is problematic
+    // for high-speed signals (e.g., DDR4) where 90-degree corners cause reflections.
+    int minCornerRadius = m_width / 2;
+
     for( int ampl = maxAmpl; ampl >= minAmpl; ampl -= st.m_step )
     {
         m_amplitude = ampl;
@@ -748,6 +745,11 @@ bool MEANDER_SHAPE::Fit( MEANDER_TYPE aType, const SEG& aSeg, const VECTOR2I& aP
         m_side = aSide;
 
         updateBaseSegment();
+
+        // Reject configurations that would result in nearly-square corners (issue #8629).
+        // m_meanCornerRadius is set by genMeanderShape() to the actual corner radius used.
+        if( m_meanCornerRadius < minCornerRadius )
+            continue;
 
         if( m_placer->CheckFit( this ) )
             return true;
@@ -775,7 +777,10 @@ void MEANDER_SHAPE::Resize( int aAmpl )
     if( aAmpl < 0 )
         return;
 
-    m_amplitude = aAmpl;
+    // Ensure amplitude doesn't go below minimum needed for proper corner radii (issue #8629)
+    int minAmpl = MinAmplitude();
+
+    m_amplitude = std::max( aAmpl, minAmpl );
 
     Recalculate();
 }

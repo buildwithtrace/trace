@@ -23,61 +23,94 @@
 
 /**
  * @file
- * Test suite for general string functions
+ * Test suite for RICHIO and related formatting utilities
  */
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
-// Code under test
 #include <richio.h>
+#include <io/kicad/kicad_io_utils.h>
 
-/**
- * Declare the test suite
- */
+#define wxUSE_BASE64 1
+#include <wx/base64.h>
+#include <wx/mstream.h>
+
+
 BOOST_AUTO_TEST_SUITE( RichIO )
 
+
 /**
- * Test the #vprint method.
+ * Verify that Prettify produces well-formed output for large (data ...) blocks such as
+ * base64-encoded images, and that STRING_LINE_READER can read the result.
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23162
  */
-BOOST_AUTO_TEST_CASE( VPrint )
+BOOST_AUTO_TEST_CASE( PrettifyLargeImageData )
 {
-    std::string output;
+    STRING_FORMATTER fmt;
 
-    // Test 1: Basic strings and numbers
-    StrPrintf( &output, "Hello %s! ", "World" );
-    StrPrintf( &output, "Number: %d, ", 42 );
-    StrPrintf( &output, "Float: %.2f, ", 3.14 );
-    StrPrintf( &output, "Char: %c. ", 'A' );
-    BOOST_CHECK_EQUAL( output, std::string( "Hello World! Number: 42, Float: 3.14, Char: A. " ) );
-    output.clear();
+    fmt.Print( "(kicad_sch (version 20231120) (generator \"eeschema\")" );
+    fmt.Print( "(image (at 0 0)" );
 
-    // Test 2: Large string
-    std::string longString( 500, 'A' );
-    StrPrintf( &output, "%s", longString.c_str() );
-    BOOST_CHECK_EQUAL( output, longString );
-    output.clear();
+    const size_t imageSize = 2 * 1024 * 1024;
+    std::vector<uint8_t> fakeImage( imageSize, 0x42 );
 
-    // Test 3: Edge case with zero characters
-    #ifdef __GNUC__
-    #pragma GCC diagnostic ignored "-Wformat-zero-length"
-    #endif
-    StrPrintf( &output, "" );
-    #ifdef __GNUC__
-    #pragma GCC diagnostic warning "-Wformat-zero-length"
-    #endif
-    BOOST_ASSERT( output.empty() );
+    wxMemoryOutputStream stream;
+    stream.Write( fakeImage.data(), fakeImage.size() );
 
-    // Test 4: Mixing small and large strings
-    StrPrintf( &output, "Small, " );
-    StrPrintf( &output, "%s, ", longString.c_str() );
-    StrPrintf( &output, "End." );
-    BOOST_CHECK_EQUAL( output, std::string( "Small, " + longString + ", End." ) );
-    output.clear();
+    KICAD_FORMAT::FormatStreamData( fmt, *stream.GetOutputStreamBuffer() );
 
-    // Test 5: Formatting with various data types
-    StrPrintf( &output, "%d %s %c %.2f", 123, "Hello", 'X', 9.876 );
-    BOOST_CHECK_EQUAL( output, std::string( "123 Hello X 9.88" ) );
-    output.clear();
+    fmt.Print( ")" );  // close image
+    fmt.Print( ")" );  // close kicad_sch
+
+    std::string buf = fmt.GetString();
+
+    KICAD_FORMAT::Prettify( buf );
+
+    BOOST_CHECK_NO_THROW(
+    {
+        STRING_LINE_READER reader( buf, "test" );
+
+        while( reader.ReadLine() )
+        {
+            // just consume
+        }
+    } );
 }
+
+
+/**
+ * Verify that STRING_LINE_READER can handle prettified output containing a very long
+ * quoted string (e.g. a property value that exceeds the old 1 MB limit).
+ *
+ * Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23162
+ */
+BOOST_AUTO_TEST_CASE( PrettifyLongQuotedString )
+{
+    const size_t longLen = 1100000;
+    std::string longValue( longLen, 'A' );
+
+    STRING_FORMATTER fmt;
+
+    fmt.Print( "(kicad_sch (version 20231120)" );
+    fmt.Print( "(property \"Description\" %s (at 0 0 0))",
+               fmt.Quotes( longValue ).c_str() );
+    fmt.Print( ")" );
+
+    std::string buf = fmt.GetString();
+
+    KICAD_FORMAT::Prettify( buf );
+
+    BOOST_CHECK_NO_THROW(
+    {
+        STRING_LINE_READER reader( buf, "test" );
+
+        while( reader.ReadLine() )
+        {
+            // just consume
+        }
+    } );
+}
+
 
 BOOST_AUTO_TEST_SUITE_END()

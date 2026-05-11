@@ -26,7 +26,7 @@
 #include <jobs/job_special_copyfiles.h>
 #include <jobs/job_special_execute.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <reporter.h>
 #include <optional>
 #include <wx/process.h>
@@ -68,8 +68,23 @@ int JOBS_RUNNER::runSpecialExecute( const JOBSET_JOB* aJob, REPORTER* aReporter,
     wxProcess process;
     process.Redirect();
 
+    // wxExecute with a string argument calls execvp() directly on Unix, bypassing the shell.
+    // This means glob expansion, pipes, and other shell features don't work for direct binaries.
+    // Use the array form of wxExecute to invoke a shell, passing the command as a single argument
+    // to avoid any quoting issues with shell metacharacters in the command string.
+#ifdef __WXMSW__
+    const wxString shell = wxS( "cmd.exe" );
+    const wxString shellFlag = wxS( "/c" );
+#else
+    const wxString shell = wxS( "/bin/sh" );
+    const wxString shellFlag = wxS( "-c" );
+#endif
+
+    const wchar_t* argv[] = { shell.wc_str(), shellFlag.wc_str(), cmd.wc_str(), nullptr };
+
     // static cast required because wx uses `long` which is 64-bit on Linux but 32-bit on Windows
-    int result = static_cast<int>( wxExecute( cmd, wxEXEC_SYNC, &process ) );
+    int result = static_cast<int>(
+            wxExecute( argv, wxEXEC_SYNC, &process ) );
 
     wxInputStream* inputStream = process.GetInputStream();
     wxInputStream* errorStream = process.GetErrorStream();
@@ -111,11 +126,10 @@ int JOBS_RUNNER::runSpecialExecute( const JOBSET_JOB* aJob, REPORTER* aReporter,
 }
 
 
-int JOBS_RUNNER::runSpecialCopyFiles( const JOBSET_JOB* aJob, PROJECT* aProject )
+int JOBS_RUNNER::runSpecialCopyFiles( const JOB_SPECIAL_COPYFILES* aJob, PROJECT* aProject,
+                                      std::vector<wxString>& aPathsWritten )
 {
-    JOB_SPECIAL_COPYFILES* job = static_cast<JOB_SPECIAL_COPYFILES*>( aJob->m_job.get() );
-
-    wxString source = ExpandEnvVarSubstitutions( job->m_source, aProject );
+    wxString source = ExpandEnvVarSubstitutions( aJob->m_source, aProject );
 
     if( source.IsEmpty() )
         return CLI::EXIT_CODES::ERR_ARGS;
@@ -124,25 +138,19 @@ int JOBS_RUNNER::runSpecialCopyFiles( const JOBSET_JOB* aJob, PROJECT* aProject 
     wxFileName sourceFn( source );
     sourceFn.MakeAbsolute( projectPath );
 
-    wxFileName destFn( job->GetFullOutputPath( aProject ) );
+    wxFileName destFn( aJob->GetFullOutputPath( aProject ) );
 
-    if( !job->m_dest.IsEmpty() )
-        destFn.AppendDir( job->m_dest );
-
-    std::vector<wxString> exclusions;
-
-    for( const JOBSET_DESTINATION& destination : m_jobsFile->GetDestinations() )
-        exclusions.push_back( projectPath + destination.m_outputHandler->GetOutputPath() );
+    if( !aJob->m_dest.IsEmpty() )
+        destFn.AppendDir( aJob->m_dest );
 
     wxString errors;
-    int      copyCount = 0;
-    bool     success = CopyFilesOrDirectory( sourceFn.GetFullPath(), destFn.GetFullPath(),
-                                             errors, copyCount, exclusions );
+    bool     success = CopyFilesOrDirectory( sourceFn.GetFullPath(), destFn.GetFullPath(), aJob->m_overwriteDest,
+                                             errors, aPathsWritten );
 
     if( !success )
         return CLI::EXIT_CODES::ERR_UNKNOWN;
 
-    if( job->m_generateErrorOnNoCopy && copyCount == 0 )
+    if( aJob->m_generateErrorOnNoCopy && aPathsWritten.empty() )
         return CLI::EXIT_CODES::ERR_UNKNOWN;
 
     return CLI::EXIT_CODES::OK;
@@ -210,6 +218,7 @@ bool JOBS_RUNNER::RunJobsForDestination( JOBSET_DESTINATION* aDestination, bool 
 
     m_reporter.Report( msg, RPT_SEVERITY_INFO );
 
+    std::vector<wxString>   pathsWithOverwriteDisallowed;
     std::vector<JOB_OUTPUT> outputs;
 
     jobNum = 1;
@@ -258,8 +267,7 @@ bool JOBS_RUNNER::RunJobsForDestination( JOBSET_DESTINATION* aDestination, bool 
 
         if( iface < KIWAY::KIWAY_FACE_COUNT )
         {
-            result = m_kiway->ProcessJob( iface, job.m_job.get(), &isolatedReporter,
-                                          m_progressReporter );
+            result = m_kiway->ProcessJob( iface, job.m_job.get(), &isolatedReporter, m_progressReporter );
         }
         else
         {
@@ -270,7 +278,16 @@ bool JOBS_RUNNER::RunJobsForDestination( JOBSET_DESTINATION* aDestination, bool 
             }
             else if( job.m_job->GetType() == "special_copyfiles" )
             {
-                result = runSpecialCopyFiles( &job, m_project );
+                JOB_SPECIAL_COPYFILES* copyJob = static_cast<JOB_SPECIAL_COPYFILES*>( job.m_job.get() );
+                std::vector<wxString>  pathsWritten;
+
+                result = runSpecialCopyFiles( copyJob, m_project, pathsWritten );
+
+                if( !copyJob->m_overwriteDest )
+                {
+                    pathsWithOverwriteDisallowed.insert( pathsWithOverwriteDisallowed.end(), pathsWritten.begin(),
+                                                         pathsWritten.end() );
+                }
             }
         }
 
@@ -314,9 +331,10 @@ bool JOBS_RUNNER::RunJobsForDestination( JOBSET_DESTINATION* aDestination, bool 
     wxUnsetEnv( OUTPUT_TMP_PATH_VAR_NAME );
 
     if( genOutputs )
-        success &= aDestination->m_outputHandler->HandleOutputs( tempDirPath, m_project, outputs,
-                                                                 aDestination->m_lastResolvedOutputPath );
-
+    {
+        success &= aDestination->m_outputHandler->HandleOutputs( tempDirPath, m_project, pathsWithOverwriteDisallowed,
+                                                                 outputs, aDestination->m_lastResolvedOutputPath );
+    }
 
     aDestination->m_lastRunSuccess = success;
 

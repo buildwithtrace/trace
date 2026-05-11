@@ -31,7 +31,7 @@
 #include <dialog_exchange_footprints.h>
 #include <string_utils.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <macros.h>
 #include <pcb_edit_frame.h>
 #include <widgets/wx_html_report_panel.h>
@@ -102,14 +102,14 @@ DIALOG_EXCHANGE_FOOTPRINTS::DIALOG_EXCHANGE_FOOTPRINTS( PCB_EDIT_FRAME* aParent,
     m_upperSizer->Layout();
 
     // initialize controls based on update mode in case there is no saved state yet
-    m_removeExtraBox->SetValue(          m_updateMode ? false : false );
+    m_removeExtraBox->SetValue(          false );
     m_resetTextItemLayers->SetValue(     m_updateMode ? false : true  );
     m_resetTextItemEffects->SetValue(    m_updateMode ? false : true  );
     m_resetTextItemPositions->SetValue(  m_updateMode ? false : true  );
     m_resetTextItemContent->SetValue(    m_updateMode ? false : true  );
     m_resetFabricationAttrs->SetValue(   m_updateMode ? false : true  );
-    m_resetClearanceOverrides->SetValue( m_updateMode ? true  : true  );
-    m_reset3DModels->SetValue(           m_updateMode ? true  : true  );
+    m_resetClearanceOverrides->SetValue( true );
+    m_reset3DModels->SetValue(           true );
 
     // initialize match-mode
     if( m_updateMode )
@@ -437,7 +437,7 @@ void DIALOG_EXCHANGE_FOOTPRINTS::ViewAndSelectFootprint( wxCommandEvent& event )
             netlist << EscapeString( m_currentFootprint->GetFilters(), CTX_LINE ) << wxS( "\r" );
 
             std::string payload( netlist.ToStdString() );
-            KIWAY_EXPRESS mail( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST, payload );
+            KIWAY_MAIL_EVENT mail( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST, payload );
             frame->KiwayMailIn( mail );
         }
 

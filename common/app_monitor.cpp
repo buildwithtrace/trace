@@ -250,7 +250,7 @@ void SENTRY::LogAssert( const ASSERT_CACHE_KEY& aKey, const wxString& aAssertMsg
 }
 
 
-void SENTRY::LogException( const wxString& aMsg )
+void SENTRY::LogException( const wxString& aMsg, bool aUnhandled )
 {
 #ifdef KICAD_USE_SENTRY
     if( !APP_MONITOR::SENTRY::Instance()->IsOptedIn() )
@@ -258,12 +258,15 @@ void SENTRY::LogException( const wxString& aMsg )
         return;
     }
 
+    sentry_scope_t* local_scope = sentry_local_scope_new();
+    sentry_scope_set_tag( local_scope, "unhandled", aUnhandled ? "true" : "false" );
+
     sentry_value_t exc = sentry_value_new_exception( "exception", aMsg.c_str() );
     sentry_value_set_stacktrace( exc, NULL, 0 );
 
     sentry_value_t sentryEvent = sentry_value_new_event();
     sentry_event_add_exception( sentryEvent, exc );
-    sentry_capture_event( sentryEvent );
+    sentry_capture_event_with_scope( sentryEvent, local_scope );
 #endif
 }
 
@@ -317,7 +320,16 @@ SENTRY* SENTRY::m_instance = nullptr;
 
 bool operator<( const ASSERT_CACHE_KEY& aKey1, const ASSERT_CACHE_KEY& aKey2 )
 {
-    return aKey1.file < aKey2.file || aKey1.line < aKey2.line || aKey1.func < aKey2.func || aKey1.cond < aKey2.cond;
+    if( aKey1.file != aKey2.file )
+        return aKey1.file < aKey2.file;
+
+    if( aKey1.line != aKey2.line )
+        return aKey1.line < aKey2.line;
+
+    if( aKey1.func != aKey2.func )
+        return aKey1.func < aKey2.func;
+
+    return aKey1.cond < aKey2.cond;
 }
 
 

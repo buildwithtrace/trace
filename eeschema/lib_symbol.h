@@ -82,10 +82,9 @@ struct LIB_SYMBOL_UNIT
 class LIB_SYMBOL : public SYMBOL, public LIB_TREE_ITEM, public EMBEDDED_FILES
 {
 public:
-    LIB_SYMBOL( const wxString& aName, LIB_SYMBOL* aParent = nullptr,
-                LEGACY_SYMBOL_LIB* aLibrary = nullptr );
+    LIB_SYMBOL( const wxString& aName, LIB_SYMBOL* aParent = nullptr, LEGACY_SYMBOL_LIB* aLibrary = nullptr );
 
-    LIB_SYMBOL( const LIB_SYMBOL& aSymbol, LEGACY_SYMBOL_LIB* aLibrary = nullptr );
+    LIB_SYMBOL( const LIB_SYMBOL& aSymbol, LEGACY_SYMBOL_LIB* aLibrary = nullptr, bool aCopyEmbeddedFiles = true );
 
     virtual ~LIB_SYMBOL() = default;
 
@@ -147,11 +146,11 @@ public:
 
     LIB_ID GetLIB_ID() const override { return m_libId; }
     wxString GetDesc() override { return GetShownDescription(); }
-    wxString GetFootprint() override { return GetFootprintField().GetShownText( false ); }
+    wxString GetFootprint() override;
     int GetSubUnitCount() const override { return GetUnitCount(); }
 
     const LIB_ID& GetLibId() const override { return m_libId; }
-    void SetLibId( const LIB_ID& aLibId ) { m_libId = aLibId; }
+    void SetLibId( const LIB_ID& aLibId );
 
     LIB_ID GetSourceLibId() const { return m_sourceLibId; }
     void SetSourceLibId( const LIB_ID& aLibId ) { m_sourceLibId = aLibId; }
@@ -159,10 +158,7 @@ public:
     wxString GetLibNickname() const override { return GetLibraryName(); }
 
     ///< Sets the Description field text value
-    void SetDescription( const wxString& aDescription )
-    {
-        GetDescriptionField().SetText( aDescription );
-    }
+    void SetDescription( const wxString& aDescription );
 
     ///< Gets the Description field text value */
     wxString GetDescription() const override
@@ -178,7 +174,7 @@ public:
 
     wxString GetShownDescription( int aDepth = 0 ) const override;
 
-    void SetKeyWords( const wxString& aKeyWords ) { m_keyWords = aKeyWords; }
+    void SetKeyWords( const wxString& aKeyWords );
 
     wxString GetKeyWords() const override
     {
@@ -193,7 +189,7 @@ public:
 
     wxString GetShownKeyWords( int aDepth = 0 ) const override;
 
-    std::vector<SEARCH_TERM> GetSearchTerms() override;
+    std::vector<SEARCH_TERM>& GetSearchTerms() override { return m_searchTermsCache; }
 
     void GetChooserFields( std::map<wxString , wxString>& aColumnMap ) override;
 
@@ -206,7 +202,7 @@ public:
     const wxString GetLibraryName() const;
 
     LEGACY_SYMBOL_LIB* GetLib() const          { return m_library; }
-    void SetLib( LEGACY_SYMBOL_LIB* aLibrary ) { m_library = aLibrary; }
+    void SetLib( LEGACY_SYMBOL_LIB* aLibrary );
 
     timestamp_t GetLastModDate() const { return m_lastModDate; }
 
@@ -270,6 +266,9 @@ public:
     bool IsLocalPower() const override;
     bool IsPower() const override;
     bool IsNormal() const override;
+
+    // LIB_TREE_ITEM interface
+    bool IsPowerSymbol() const override { return IsPower(); }
 
     void SetGlobalPower();
     void SetLocalPower();
@@ -356,7 +355,8 @@ public:
         return GetReferenceField().GetText();
     }
 
-    const wxString GetValue( bool aResolve, const SCH_SHEET_PATH* aPath, bool aAllowExtraText ) const override
+    const wxString GetValue( bool aResolve, const SCH_SHEET_PATH* aPath, bool aAllowExtraText,
+                             const wxString& aVariantName = wxEmptyString ) const override
     {
         return GetValueField().GetText();
     }
@@ -506,10 +506,24 @@ public:
         SetExcludedFromBOM( aExclude );
     }
 
+    bool GetExcludedFromBoardProp() const
+    {
+        return GetExcludedFromBoard();
+    }
+
+    void SetExcludedFromBoardProp( bool aExclude )
+    {
+        SetExcludedFromBoard( aExclude );
+    }
+
+    bool GetExcludedFromPosFilesProp() const { return GetExcludedFromPosFiles(); }
+    void SetExcludedFromPosFilesProp( bool aExclude ) { SetExcludedFromPosFiles( aExclude ); }
+
     std::set<KIFONT::OUTLINE_FONT*> GetFonts() const override;
 
     EMBEDDED_FILES* GetEmbeddedFiles() override;
     const EMBEDDED_FILES* GetEmbeddedFiles() const;
+    void AppendParentEmbeddedFiles( std::vector<EMBEDDED_FILES*>& aStack ) const;
 
     void EmbedFonts() override;
 
@@ -564,7 +578,8 @@ public:
      * @param aUnit Unit number to collect; 0 = all units
      * @param aBodyStyle Alternate body style to collect; 0 = all body styles
      */
-    std::vector<SCH_PIN*> GetGraphicalPins( int aUnit = 0, int aBodyStyle = 0 ) const;
+    std::vector<const SCH_PIN*> GetGraphicalPins( int aUnit = 0, int aBodyStyle = 0 ) const;
+    std::vector<SCH_PIN*> GetGraphicalPins( int aUnit = 0, int aBodyStyle = 0 );
 
     /**
      * Logical pins: Return expanded logical pins based on stacked-pin notation.
@@ -572,8 +587,8 @@ public:
      */
     struct LOGICAL_PIN
     {
-        SCH_PIN*   pin;        ///< pointer to the base graphical pin
-        wxString   number;     ///< expanded logical pin number
+        const SCH_PIN* pin;        ///< pointer to the base graphical pin
+        wxString       number;     ///< expanded logical pin number
     };
 
     /**
@@ -609,7 +624,20 @@ public:
      * @param aBodyStyle - Body style filter.  Set to 0 if no specific body style is not required.
      * @return The pin object if found.  Otherwise NULL.
      */
-    SCH_PIN* GetPin( const wxString& aNumber, int aUnit = 0, int aBodyStyle = 0 ) const;
+    const SCH_PIN* GetPin( const wxString& aNumber, int aUnit = 0, int aBodyStyle = 0 ) const;
+
+    /**
+     * Return all pin objects with the requested pin \a aNumber.
+     *
+     * This is useful for symbols that intentionally have multiple pins with the same number,
+     * such as jumper symbols where duplicate pin numbers are internally connected.
+     *
+     * @param aNumber - Number of the pins to find.
+     * @param aUnit - Unit filter.  Set to 0 if a specific unit number is not required.
+     * @param aBodyStyle - Body style filter.  Set to 0 if no specific body style is not required.
+     * @return Vector of matching pin objects, empty if none found.
+     */
+    std::vector<SCH_PIN*> GetPinsByNumber( const wxString& aNumber, int aUnit = 0, int aBodyStyle = 0 );
 
     /**
      * Return true if this symbol's pins do not match another symbol's pins. This is used to
@@ -822,6 +850,8 @@ public:
     */
     double Similarity( const SCH_ITEM& aSymbol ) const override;
 
+    void RefreshLibraryTreeCaches();
+
     void SetParentName( const wxString& aParentName ) { m_parentName = aParentName; }
     const wxString& GetParentName() const { return m_parentName; }
 
@@ -841,6 +871,11 @@ private:
     int compare( const SCH_ITEM& aOther, int aCompareFlags = SCH_ITEM::COMPARE_FLAGS::EQUALITY ) const override;
 
     void deleteAllFields();
+
+    void cacheSearchTerms();
+    void cachePinCount();
+    void cacheShownDescription();
+    void cacheChooserFields();
 
 private:
     std::shared_ptr<LIB_SYMBOL> m_me;
@@ -880,4 +915,12 @@ private:
 
     std::map<int, wxString> m_unitDisplayNames;
     std::vector<wxString>   m_bodyStyleNames;
+
+    // Caches for things that are expensive to compute but required every time
+    // the symbol chooser or other library list is created
+
+    std::vector<SEARCH_TERM> m_searchTermsCache;
+    int m_pinCountCache;
+    wxString m_shownDescriptionCache;
+    std::map<wxString, wxString> m_chooserFieldsCache;
 };

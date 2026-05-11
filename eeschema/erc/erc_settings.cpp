@@ -121,6 +121,7 @@ ERC_SETTINGS::ERC_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath ) :
     m_ERCSeverities[ERCE_LABEL_MULTIPLE_WIRES]    = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_UNCONNECTED_WIRE_ENDPOINT] = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_STACKED_PIN_SYNTAX]      = RPT_SEVERITY_WARNING;
+    m_ERCSeverities[ERCE_FIELD_NAME_WHITESPACE]   = RPT_SEVERITY_WARNING;
 
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "rule_severities",
             [&]() -> nlohmann::json
@@ -267,8 +268,8 @@ ERC_SETTINGS::~ERC_SETTINGS()
 
 SEVERITY ERC_SETTINGS::GetSeverity( int aErrorCode ) const
 {
-    // Special-case duplicate pin error.  Unique pin names are required by KiCad, so this
-    // is always an error.
+    // Special-case duplicate pin error. Multiple pins with the same number are allowed
+    // if they share the same net, but having them on different nets is always an error.
     if( aErrorCode == ERCE_DUPLICATE_PIN_ERROR )
     {
         return RPT_SEVERITY_ERROR;
@@ -468,5 +469,4 @@ void SHEETLIST_ERC_ITEMS_PROVIDER::DeleteItem( int aIndex, bool aDeep )
         screens.DeleteMarker( marker );
     }
 }
-
 

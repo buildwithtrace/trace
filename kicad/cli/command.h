@@ -35,7 +35,7 @@
 #define ARG_DRAWING_SHEET "--drawing-sheet"
 #define ARG_DEFINE_VAR_SHORT "-D"
 #define ARG_DEFINE_VAR_LONG "--define-var"
-#define ARG_VARIANTS "--variants"
+#define ARG_VARIANT "--variant"
 
 namespace CLI
 {
@@ -62,18 +62,25 @@ public:
 
     void PrintHelp();
 
+    enum class IO_TYPE
+    {
+        FILE,
+        DIRECTORY,
+        FILE_OR_DIRECTORY
+    };
+
 protected:
     /**
      * Set up the most common of args used across cli
      *
      * @param aInput Configures the input arg
      * @param aOutput Configures the output arg
-     * @param aInputCanBeDir Configures whether the input arg description will be for either a
-     *                       file or directory
-     * @param aOutputIsDir Configures whether the output arg description will be for a file or
-     *                     directory
+     * @param aInputType Configures whether the input arg description will be for either a
+     *                       file, a directory or either
+     * @param aOutputType Configures whether the output arg description will be for a file, a
+     *                     directory or either
      */
-    void addCommonArgs( bool aInput, bool aOutput, bool aInputCanBeDir, bool aOutputIsDir );
+    void addCommonArgs( bool aInput, bool aOutput, IO_TYPE aInputType, IO_TYPE aOutputType );
 
     /**
      * Set up the drawing sheet arg used by many of the export commands
@@ -151,16 +158,16 @@ protected:
     std::map<wxString, wxString>    m_argDefineVars;
 
     /**
-     * Whether or not the input arguement for variant names was added for parsing.
+     * Whether or not the input argument for variant names was added for parsing.
      */
-    bool                     m_hasVariantsArg;
+    bool                     m_hasVariantArg;
 
     /**
-     * A set of variant names to output.
+     * The list of variant names to output.
      *
-     * An empty set indicates the default variant only.
+     * An empty vector indicates the default variant.
      */
-    std::set<wxString>       m_argVariantNames;
+    std::vector<wxString>    m_argVariantNames;
 };
 
 }

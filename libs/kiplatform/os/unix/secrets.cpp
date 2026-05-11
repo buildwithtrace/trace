@@ -75,8 +75,31 @@ namespace KIPLATFORM
                 return false;
             }
 
+            if( !secret )
+                return false;
+
             aSecret = secret;
-            g_free( secret );
+            secret_password_free( secret );
+
+            return true;
+        }
+
+        bool DeleteSecret( const wxString& aService, const wxString& aKey )
+        {
+            GError* error = nullptr;
+
+            secret_password_clear_sync( &schema,
+                                        nullptr,
+                                        &error,
+                                        "service", aService.ToStdString().c_str(),
+                                        "key", aKey.ToStdString().c_str(),
+                                        nullptr );
+
+            if( error )
+            {
+                g_error_free( error );
+                return false;
+            }
 
             return true;
         }

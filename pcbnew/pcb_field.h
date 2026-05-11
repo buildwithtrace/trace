@@ -72,7 +72,7 @@ public:
 
     bool IsMandatory() const;
 
-    bool IsHypertext() const;
+    bool HasHypertext() const;
 
     wxString GetTextTypeDescription() const override;
 
@@ -104,6 +104,8 @@ public:
      * look-up, etc.
      */
     wxString GetCanonicalName() const;
+
+    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
 
     void SetName( const wxString& aName ) { m_name = aName; }
 

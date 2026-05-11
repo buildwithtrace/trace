@@ -34,6 +34,8 @@
 #include <view/view.h>
 
 #include <wx/debug.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 SCH_GROUP::SCH_GROUP() : SCH_ITEM( nullptr, SCH_GROUP_T )
 {
@@ -181,6 +183,25 @@ void SCH_GROUP::swapData( SCH_ITEM* aImage )
     std::swap( m_items, image->m_items );
     std::swap( m_name, image->m_name );
     std::swap( m_designBlockLibId, image->m_designBlockLibId );
+
+    // A group doesn't own its children (they're owned by the schematic), so undo doesn't do a
+    // deep clone when making an image.  However, it's still safest to update the parentGroup
+    // pointers of the group's children. We must do it in the right order in case any of the
+    // children are shared (ie: image first, "this" second so that any shared children end up
+    // with "this").
+    image->RunOnChildren(
+            [&]( SCH_ITEM* child )
+            {
+                child->SetParentGroup( image );
+            },
+            RECURSE_MODE::NO_RECURSE );
+
+    RunOnChildren(
+            [&]( SCH_ITEM* child )
+            {
+                child->SetParentGroup( this );
+            },
+            RECURSE_MODE::NO_RECURSE );
 }
 
 
@@ -314,7 +335,6 @@ void SCH_GROUP::MirrorVertically( int aCenter )
 void SCH_GROUP::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aPlotOpts,
                       int aUnit, int aBodyStyle, const VECTOR2I& aOffset, bool aDimmed )
 {
-    // TODO: should we plot the name & border of named groups?
 }
 
 

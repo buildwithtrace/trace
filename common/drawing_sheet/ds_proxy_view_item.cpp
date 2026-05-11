@@ -80,6 +80,8 @@ void DS_PROXY_VIEW_ITEM::buildDrawList( VIEW* aView,
     wxString         fileName( m_fileName.c_str(), wxConvUTF8 );
     wxString         sheetName( m_sheetName.c_str(), wxConvUTF8 );
     wxString         sheetPath( m_sheetPath.c_str(), wxConvUTF8 );
+    wxString         variantName( m_variantName.c_str(), wxConvUTF8 );
+    wxString         variantDesc( m_variantDesc.c_str(), wxConvUTF8 );
 
     aDrawList->SetDefaultPenSize( (int) settings->GetDrawingSheetLineWidth() );
     aDrawList->SetIsFirstPage( m_isFirstPage );
@@ -89,6 +91,8 @@ void DS_PROXY_VIEW_ITEM::buildDrawList( VIEW* aView,
     aDrawList->SetSheetName( sheetName );
     aDrawList->SetSheetPath( sheetPath );
     aDrawList->SetSheetLayer( settings->GetLayerName() );
+    aDrawList->SetVariantName( variantName );
+    aDrawList->SetVariantDesc( variantDesc );
     aDrawList->SetProject( m_project );
     aDrawList->SetProperties( aProperties );
 

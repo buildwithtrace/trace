@@ -37,7 +37,10 @@ using namespace std::placeholders;
 #include <lib_id.h>
 #include <footprint_library_adapter.h>
 #include <board.h>
+#include <component_classes/component_class_manager.h>
 #include <footprint.h>
+#include <pad.h>
+#include <pcb_track.h>
 #include <spread_footprints.h>
 #include <ratsnest/ratsnest_data.h>
 #include <pcb_io/pcb_io_mgr.h>
@@ -157,6 +160,8 @@ void PCB_EDIT_FRAME::OnNetlistChanged( BOARD_NETLIST_UPDATER& aUpdater, bool* aR
 
     Compile_Ratsnest( true );
 
+    UpdateVariantSelectionCtrl();
+
     GetCanvas()->Refresh();
 }
 
@@ -204,7 +209,22 @@ void PCB_EDIT_FRAME::LoadFootprints( NETLIST& aNetlist, REPORTER& aReporter )
         else
             fpOnBoard = m_pcb->FindFootprintByReference( component->GetReference() );
 
-        bool footprintMisMatch = fpOnBoard && fpOnBoard->GetFPID() != component->GetFPID();
+        // When the schematic-side FPID has no library nickname (legacy format), match
+        // only by item name so we don't flag a mismatch against a fully qualified board FPID.
+        bool footprintMisMatch = false;
+
+        if( fpOnBoard )
+        {
+            if( component->GetFPID().IsLegacy() )
+            {
+                footprintMisMatch =
+                        fpOnBoard->GetFPID().GetLibItemName() != component->GetFPID().GetLibItemName();
+            }
+            else
+            {
+                footprintMisMatch = fpOnBoard->GetFPID() != component->GetFPID();
+            }
+        }
 
         if( footprintMisMatch && !aNetlist.GetReplaceFootprints() )
         {

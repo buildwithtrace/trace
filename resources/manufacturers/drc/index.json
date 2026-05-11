@@ -1,0 +1,34 @@
+{
+  "presets": [
+    {
+      "manufacturer": "pcbway",
+      "id": "pcbway_2layer_1oz",
+      "display_name": "PCBWay - 2 Layer, 1oz Cu",
+      "file": "pcbway_2layer_1oz.kicad_dru"
+    },
+    {
+      "manufacturer": "pcbway",
+      "id": "pcbway_2layer_2oz",
+      "display_name": "PCBWay - 2 Layer, 2oz Cu",
+      "file": "pcbway_2layer_2oz.kicad_dru"
+    },
+    {
+      "manufacturer": "pcbway",
+      "id": "pcbway_4layer_1oz",
+      "display_name": "PCBWay - 4 Layer, 1oz Cu",
+      "file": "pcbway_4layer_1oz.kicad_dru"
+    },
+    {
+      "manufacturer": "pcbway",
+      "id": "pcbway_6plus_layer_1oz",
+      "display_name": "PCBWay - 6+ Layer, 1oz Cu",
+      "file": "pcbway_6plus_layer_1oz.kicad_dru"
+    },
+    {
+      "manufacturer": "pikkolo",
+      "id": "pikkolo_standard",
+      "display_name": "Pikkolo Assembly - Standard",
+      "file": "pikkolo_standard.kicad_dru"
+    }
+  ]
+}

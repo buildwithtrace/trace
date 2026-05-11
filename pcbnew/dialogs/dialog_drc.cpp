@@ -24,6 +24,7 @@
  */
 
 #include <confirm.h>
+#include <core/throttle.h>
 #include <dialog_drc.h>
 #include <board_design_settings.h>
 #include <kiface_base.h>
@@ -39,6 +40,7 @@
 #include <tools/pcb_actions.h>
 #include <wildcards_and_files_ext.h>
 #include <pcb_marker.h>
+#include <pcb_track.h>
 #include <pgm_base.h>
 #include <wx/app.h>
 #include <wx/filedlg.h>
@@ -81,7 +83,8 @@ DIALOG_DRC::DIALOG_DRC( PCB_EDIT_FRAME* aEditorFrame, wxWindow* aParent ) :
         m_markersTreeModel( nullptr ),
         m_unconnectedTreeModel( nullptr ),
         m_fpWarningsTreeModel( nullptr ),
-        m_lastUpdateUi( std::chrono::steady_clock::now() )
+        m_updateThrottle( std::chrono::milliseconds( 100 ) ),
+        m_yieldThrottle( std::chrono::milliseconds( 2000 ) )
 {
     SetName( DIALOG_DRC_WINDOW_NAME ); // Set a window name to be able to find it
     KIPLATFORM::UI::SetFloatLevel( this );
@@ -119,6 +122,12 @@ DIALOG_DRC::DIALOG_DRC( PCB_EDIT_FRAME* aEditorFrame, wxWindow* aParent ) :
     m_fpWarningsTreeModel = new RC_TREE_MODEL( m_frame, m_footprintsDataView );
     m_footprintsDataView->AssociateModel( m_fpWarningsTreeModel );
 
+    // Prevent RTL locales from mirroring the text in the data views
+    m_markerDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_unconnectedDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_footprintsDataView->SetLayoutDirection( wxLayout_LeftToRight );
+    m_ignoredList->SetLayoutDirection( wxLayout_LeftToRight );
+
     m_ignoredList->InsertColumn( 0, wxEmptyString, wxLIST_FORMAT_LEFT, DEFAULT_SINGLE_COL_WIDTH );
 
     if( m_currentBoard == g_lastDRCBoard )
@@ -149,6 +158,9 @@ DIALOG_DRC::DIALOG_DRC( PCB_EDIT_FRAME* aEditorFrame, wxWindow* aParent ) :
     m_unconnectedTitleTemplate = m_Notebook->GetPageText( 1 );
     m_footprintsTitleTemplate  = m_Notebook->GetPageText( 2 );
     m_ignoredTitleTemplate     = m_Notebook->GetPageText( 3 );
+
+    // DPI fix
+    bSizerViolationsBox->SetMinSize( FromDIP( bSizerViolationsBox->GetMinSize() ) );
 
     Layout(); // adding the units above expanded Clearance text, now resize.
 
@@ -218,17 +230,17 @@ bool DIALOG_DRC::updateUI()
         m_gauge->SetValue( newValue );
     }
 
-    // There is significant overhead on at least Windows when updateUi is called constantly thousands of times
-    // in the drc process and safeyieldfor is called each time.
-    // Gate the yield to a limited rate which still allows the UI to function without slowing down the main thread
-    // which is also running DRC
-    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-    if( std::chrono::duration_cast<std::chrono::milliseconds>( now - m_lastUpdateUi ).count()
-        > 100 )
-    {
+    // Repaint the dialog at ~10Hz using Update() which processes only pending expose/
+    // draw events without entering the full platform event loop.
+    if( m_updateThrottle.Ready() )
+        Update();
+
+    // Yield to the event loop infrequently so the cancel button remains functional.
+    // On some Linux systems with glycin-enabled gdk-pixbuf (2.44+), entering the GTK event
+    // loop triggers heavyweight sandbox process spawning that can add hundreds of milliseconds
+    // per call, so we keep this interval long.
+    if( m_yieldThrottle.Ready() )
         Pgm().App().SafeYieldFor( this, wxEVT_CATEGORY_NATIVE_EVENTS );
-        m_lastUpdateUi = now;
-    }
 
     return !m_cancelled;
 }
@@ -1069,6 +1081,8 @@ void DIALOG_DRC::OnSaveReport( wxCommandEvent& aEvent )
                       FILEEXT::ReportFileWildcard() + wxS( "|" ) + FILEEXT::JsonFileWildcard(),
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() != wxID_OK )
         return;
 
@@ -1372,7 +1386,8 @@ void DIALOG_DRC::updateDisplayedCounts()
                      || ii == DRCE_EXTRA_FOOTPRINT
                      || ii == DRCE_NET_CONFLICT
                      || ii == DRCE_SCHEMATIC_PARITY
-                     || ii == DRCE_FOOTPRINT_FILTERS )
+                     || ii == DRCE_FOOTPRINT_FILTERS
+                     || ii == DRCE_SCHEMATIC_FIELDS_PARITY )
             {
                 if( m_showWarnings->GetValue() && severity == RPT_SEVERITY_WARNING )
                     footprintsOverflowed = true;

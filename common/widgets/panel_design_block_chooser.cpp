@@ -318,6 +318,9 @@ void PANEL_DESIGN_BLOCK_CHOOSER::onOpenLibsTimer( wxTimerEvent& aEvent )
 
 void PANEL_DESIGN_BLOCK_CHOOSER::onDesignBlockSelected( wxCommandEvent& aEvent )
 {
+    if( !m_preview || !m_preview->IsInitialized() )
+        return;
+
     if( GetSelectedLibId().IsValid() )
     {
         std::unique_ptr<DESIGN_BLOCK> designBlock( m_parent->GetDesignBlock( GetSelectedLibId(), true, true ) );

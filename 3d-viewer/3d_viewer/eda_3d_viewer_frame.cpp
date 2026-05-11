@@ -4,6 +4,7 @@
  * Copyright (C) 2015-2016 Mario Luzeiro <mrluzeiro@ua.pt>
  * Copyright (C) 2023 CERN
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -58,10 +59,11 @@
 #include <widgets/wx_infobar.h>
 #include <widgets/wx_aui_utils.h>
 #include <wildcards_and_files_ext.h>
+#include <kiplatform/ui.h>
 #include <project_pcb.h>
 #include <toolbars_3d.h>
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__)
 #include <spacenav/libspnav_driver.h>
 #include <3d_spacenav/spnav_viewer_plugin.h>
 #else
@@ -104,7 +106,7 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     wxLogTrace( m_logTrace, wxT( "EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME %s" ), aTitle );
 
     m_disable_ray_tracing = false;
-    m_aboutTitle = _HKI( "KiCad 3D Viewer" );
+    m_aboutTitle = _HKI( "Trace 3D Viewer" );
 
     // Give it an icon
     wxIcon icon;
@@ -172,7 +174,7 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     m_auimgr.AddPane( m_appearancePanel, EDA_PANE().Name( "LayersManager" )
                       .Right().Layer( 3 )
                       .Caption( _( "Appearance" ) ).PaneBorder( false )
-                      .MinSize( 180, -1 ).BestSize( 190, -1 ) );
+                      .MinSize( FromDIP( 180 ), -1 ).BestSize( FromDIP( 190 ), -1 ) );
     m_auimgr.AddPane( m_canvas, EDA_PANE().Canvas().Name( wxS( "DrawFrame" ) )
                       .Center() );
 
@@ -197,7 +199,7 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
 
     try
     {
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__)
         m_spaceMouse = std::make_unique<SPNAV_VIEWER_PLUGIN>( m_canvas );
 #else
         m_spaceMouse = std::make_unique<NL_3D_VIEWER_PLUGIN>( m_canvas );
@@ -217,6 +219,10 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
 
 EDA_3D_VIEWER_FRAME::~EDA_3D_VIEWER_FRAME()
 {
+    // Shutdown all running tools
+    if( m_toolManager )
+        m_toolManager->ShutdownAllTools();
+
     Prj().GetProjectFile().m_Viewports3D = m_appearancePanel->GetUserViewports();
 
     m_canvas->SetEventDispatcher( nullptr );
@@ -746,6 +752,8 @@ bool EDA_3D_VIEWER_FRAME::getExportFileName( EDA_3D_VIEWER_EXPORT_FORMAT& aForma
                       m_defaultSaveScreenshotFileName.GetPath(),
                       m_defaultSaveScreenshotFileName.GetFullName(), wildcard,
                       wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
     // Set initial filter index based on current format
     dlg.SetFilterIndex( ( aFormat == EDA_3D_VIEWER_EXPORT_FORMAT::JPEG ) ? 0 : 1 );

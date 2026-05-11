@@ -39,6 +39,8 @@
 #include <locale_io.h>
 #include <confirm.h>
 #include <string_utils.h>
+#include <wildcards_and_files_ext.h>
+#include <kiplatform/io.h>
 #include <libraries/library_manager.h>
 #include <libraries/symbol_library_adapter.h>
 
@@ -86,7 +88,23 @@ int SYMBOL_LIBRARY_MANAGER::GetLibraryHash( const wxString& aLibrary ) const
 
     if( auto uri = manager.GetFullURI( LIBRARY_TABLE_TYPE::SYMBOL, aLibrary, true ); uri )
     {
-        return std::hash<std::string>{}( aLibrary.ToStdString() + uri->ToStdString() );
+        // Mix a file modification timestamp into the hash so that external changes (e.g. a git
+        // branch switch) are detected by the library tree synchronizer without a restart.
+        wxFileName fn( *uri );
+        long long  mtime = 0;
+
+        wxLogNull silence;
+
+        fn.Normalize( FN_NORMALIZE_FLAGS );
+
+        if( fn.DirExists() )
+            mtime = KIPLATFORM::IO::TimestampDir( fn.GetFullPath(),
+                        wxS( "*." ) + wxString( FILEEXT::KiCadSymbolLibFileExtension ) );
+        else if( fn.IsFileReadable() )
+            mtime = fn.GetModificationTime().GetValue().GetValue();
+
+        size_t base = std::hash<std::string>{}( aLibrary.ToStdString() + uri->ToStdString() );
+        return static_cast<int>( base ^ static_cast<size_t>( mtime ) );
     }
 
     return -1;
@@ -161,7 +179,29 @@ bool SYMBOL_LIBRARY_MANAGER::SaveLibrary( const wxString& aLibrary, const wxStri
         destination.Normalize( FN_NORMALIZE_FLAGS | wxPATH_NORM_ENV_VARS );
 
         if( res && original == destination )
+        {
+            // Delete symbols that were removed from the buffer before clearing the deleted list
+            for( const std::shared_ptr<SYMBOL_BUFFER>& deletedBuf : libBuf.GetDeletedBuffers() )
+            {
+                wxCHECK2( deletedBuf, continue );
+
+                const wxString& originalName = deletedBuf->GetOriginal().GetName();
+
+                try
+                {
+                    if( pi->LoadSymbol( aFileName, originalName ) )
+                        pi->DeleteSymbol( aFileName, originalName, &properties );
+                }
+                catch( const IO_ERROR& ioe )
+                {
+                    wxLogError( _( "Error deleting symbol %s from library '%s'." ) + wxS( "\n%s" ),
+                                UnescapeString( originalName ), aFileName, ioe.What() );
+                    res = false;
+                }
+            }
+
             libBuf.ClearDeletedBuffer();
+        }
     }
     else
     {
@@ -180,21 +220,38 @@ bool SYMBOL_LIBRARY_MANAGER::SaveLibrary( const wxString& aLibrary, const wxStri
                                  wxString::Format( wxT( "Derived symbol '%s' found with undefined parent." ),
                                                    symbol->GetName() ) );
 
-                    LIB_SYMBOL* libParent = pi->LoadSymbol( aLibrary, oldParent->GetName(), &properties );
+                    LIB_SYMBOL* libParent = pi->LoadSymbol( aFileName, oldParent->GetName(), &properties );
 
                     if( !libParent )
                     {
                         libParent = new LIB_SYMBOL( *oldParent );
-                        pi->SaveSymbol( aLibrary, libParent, &properties );
+                        pi->SaveSymbol( aFileName, libParent, &properties );
+                    }
+                    else
+                    {
+                        // Copy embedded files from the in-memory parent to the loaded parent
+                        // This ensures that any embedded files added to the parent are preserved
+                        //
+                        // We do this manually rather than using the assignment operator to avoid
+                        // potential ABI issues where the size of EMBEDDED_FILES differs between
+                        // compilation units, potentially causing the assignment to overwrite
+                        // members of LIB_SYMBOL (like m_me) that follow the EMBEDDED_FILES base.
+                        libParent->ClearEmbeddedFiles();
+
+                        for( const auto& [name, file] : oldParent->EmbeddedFileMap() )
+                            libParent->AddFile( new EMBEDDED_FILES::EMBEDDED_FILE( *file ) );
+
+                        libParent->SetAreFontsEmbedded( oldParent->GetAreFontsEmbedded() );
+                        libParent->SetFileAddedCallback( oldParent->GetFileAddedCallback() );
                     }
 
                     newSymbol = new LIB_SYMBOL( *symbol );
                     newSymbol->SetParent( libParent );
-                    pi->SaveSymbol( aLibrary, newSymbol, &properties );
+                    pi->SaveSymbol( aFileName, newSymbol, &properties );
                 }
-                else if( !pi->LoadSymbol( aLibrary, symbol->GetName(), &properties ) )
+                else if( !pi->LoadSymbol( aFileName, symbol->GetName(), &properties ) )
                 {
-                    pi->SaveSymbol( aLibrary, new LIB_SYMBOL( *symbol ), &properties );
+                    pi->SaveSymbol( aFileName, new LIB_SYMBOL( *symbol ), &properties );
                 }
             }
             catch( ... )
@@ -673,8 +730,7 @@ wxString SYMBOL_LIBRARY_MANAGER::getLibraryName( const wxString& aFilePath )
 }
 
 
-bool SYMBOL_LIBRARY_MANAGER::addLibrary( const wxString& aFilePath, bool aCreate,
-                                         LIBRARY_TABLE_SCOPE aScope )
+bool SYMBOL_LIBRARY_MANAGER::addLibrary( const wxString& aFilePath, bool aCreate, LIBRARY_TABLE_SCOPE aScope )
 {
     wxString libName = getLibraryName( aFilePath );
     wxCHECK( !LibraryExists( libName ), false );  // either create or add an existing one
@@ -682,39 +738,66 @@ bool SYMBOL_LIBRARY_MANAGER::addLibrary( const wxString& aFilePath, bool aCreate
     // try to use path normalized to an environmental variable or project path
     wxString relPath = NormalizePath( aFilePath, &Pgm().GetLocalEnvVariables(), &m_frame.Prj() );
 
-    SCH_IO_MGR::SCH_FILE_T schFileType = SCH_IO_MGR::GuessPluginTypeFromLibPath( aFilePath,
-                    aCreate ? KICTL_CREATE : 0 );
+    SCH_IO_MGR::SCH_FILE_T schFileType = SCH_IO_MGR::GuessPluginTypeFromLibPath( aFilePath, aCreate ? KICTL_CREATE
+                                                                                                    : 0 );
 
     if( schFileType == SCH_IO_MGR::SCH_FILE_UNKNOWN )
         schFileType = SCH_IO_MGR::SCH_LEGACY;
 
-    std::optional<LIBRARY_TABLE*> optTable =
-                Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::SYMBOL, aScope );
+    SYMBOL_LIBRARY_ADAPTER*       adapter = PROJECT_SCH::SymbolLibAdapter( &m_frame.Prj() );
+    LIBRARY_MANAGER&              manager = Pgm().GetLibraryManager();
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, aScope );
     wxCHECK( optTable, false );
-    LIBRARY_TABLE* table = *optTable;
+    LIBRARY_TABLE* table = optTable.value();
+    bool           success = true;
 
-    LIBRARY_TABLE_ROW& row = table->InsertRow();
-
-    row.SetNickname( libName );
-    row.SetURI( relPath );
-    row.SetType( SCH_IO_MGR::ShowType( schFileType ) );
-
-    if( aCreate )
+    try
     {
-        wxCHECK( schFileType != SCH_IO_MGR::SCH_FILE_T::SCH_LEGACY, false );
+        LIBRARY_TABLE_ROW& row = table->InsertRow();
 
-        SYMBOL_LIBRARY_ADAPTER* adapter = PROJECT_SCH::SymbolLibAdapter( &m_frame.Prj() );
+        row.SetNickname( libName );
+        row.SetURI( relPath );
+        row.SetType( SCH_IO_MGR::ShowType( schFileType ) );
 
-        if( !adapter->CreateLibrary( libName ) )
-        {
-            table->Rows().erase( table->Rows().end() - 1 );
-            return false;
-        }
+        table->Save().map_error(
+                [&]( const LIBRARY_ERROR& aError )
+                {
+                    wxMessageBox( _( "Error saving library table:\n\n" ) + aError.message,
+                                  _( "File Save Error" ), wxOK | wxICON_ERROR );
+                    success = false;
+                } );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        DisplayError( nullptr, ioe.What() );
+        return false;
     }
 
-    OnDataChanged();
+    if( success )
+    {
+        manager.ReloadTables( aScope, { LIBRARY_TABLE_TYPE::SYMBOL } );
 
-    return true;
+        // Tables are reinitialized. So reinit table reference.
+        optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL, aScope );
+        wxCHECK( optTable, false );
+        table = optTable.value();
+
+        if( aCreate )
+        {
+            wxCHECK( schFileType != SCH_IO_MGR::SCH_FILE_T::SCH_LEGACY, false );
+
+            if( !adapter->CreateLibrary( libName ) )
+            {
+                table->Rows().erase( table->Rows().end() - 1 );
+                return false;
+            }
+        }
+
+        adapter->LoadOne( libName );
+        OnDataChanged();
+    }
+
+    return success;
 }
 
 
@@ -782,14 +865,9 @@ bool SYMBOL_LIBRARY_MANAGER::UpdateLibraryBuffer( const wxString& aLibrary )
         m_libs.erase( aLibrary );
         getLibraryBuffer( aLibrary );
     }
-    catch(const std::exception& e)
+    catch( const std::exception& e )
     {
         wxLogError( _( "Error updating library buffer: %s" ), e.what() );
-        return false;
-    }
-    catch( const IO_ERROR& e )
-    {
-        wxLogError( _( "Error updating library buffer: %s" ), e.What() );
         return false;
     }
     catch(...)
@@ -1018,6 +1096,21 @@ bool LIB_BUFFER::SaveBuffer( SYMBOL_BUFFER& aSymbolBuf, const wxString& aFileNam
         }
         else
         {
+            // Copy embedded files from the buffered parent to the cached parent
+            // This ensures that any embedded files added to the parent are preserved
+            //
+            // We do this manually rather than using the assignment operator to avoid
+            // potential ABI issues where the size of EMBEDDED_FILES differs between
+            // compilation units, potentially causing the assignment to overwrite
+            // members of LIB_SYMBOL (like m_me) that follow the EMBEDDED_FILES base.
+            cachedParent->ClearEmbeddedFiles();
+
+            for( const auto& [name, file] : bufferedParent->EmbeddedFileMap() )
+                cachedParent->AddFile( new EMBEDDED_FILES::EMBEDDED_FILE( *file ) );
+
+            cachedParent->SetAreFontsEmbedded( bufferedParent->GetAreFontsEmbedded() );
+            cachedParent->SetFileAddedCallback( bufferedParent->GetFileAddedCallback() );
+
             newCachedSymbol->SetParent( cachedParent );
 
             try

@@ -133,6 +133,7 @@ PCB_TABLE* Build_Board_Stackup_Table( BOARD* aBoard, EDA_UNITS aDisplayUnits )
     }
 
     table->Autosize();
+    table->SetPosition( VECTOR2I( 0, 0 ) );
 
     return table;
 }

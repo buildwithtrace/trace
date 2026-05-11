@@ -26,6 +26,7 @@
 
 #include "dialog_gencad_export_options.h"
 
+#include <common.h>
 #include <wx/anybutton.h>
 #include <wx/filedlg.h>
 #include <wx/checkbox.h>
@@ -38,6 +39,7 @@
 
 #include <pcb_edit_frame.h>
 #include <kidialog.h>
+#include <kiplatform/ui.h>
 #include <wildcards_and_files_ext.h>
 #include <widgets/std_bitmap_button.h>
 #include <string_utils.h>
@@ -120,6 +122,9 @@ void DIALOG_GENCAD_EXPORT_OPTIONS::onBrowseClicked( wxCommandEvent& aEvent )
 
     wxFileDialog dlg( this, _( "Export GenCAD File" ), fn.GetPath(), fileDialogName,
                       FILEEXT::GencadFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
+
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_OK )
         m_outputFileName->SetValue( dlg.GetPath() );
 }

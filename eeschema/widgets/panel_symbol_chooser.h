@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2014 Henner Zeller <h.zeller@acm.org>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,9 +30,9 @@
 #include <symbol_tree_model_adapter.h>
 #include <footprint_info.h>
 #include <widgets/html_window.h>
+#include <wx/timer.h>
 
 class wxPanel;
-class wxTimer;
 class wxSplitterWindow;
 
 class SYMBOL_LIBRARY_FILTER;

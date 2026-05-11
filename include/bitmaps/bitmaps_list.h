@@ -208,6 +208,7 @@ enum class BITMAPS : unsigned int
     fabrication,
     file_bom,
     file_cir,
+    file_csv,
     file_drl,
     file_dsn,
     file_gbr,
@@ -262,6 +263,8 @@ enum class BITMAPS : unsigned int
     hotkeys,
     hv45mode,
     icon_3d,
+    icon_ai_eeschema,
+    icon_ai_pcbnew,
     icon_bitmap2component,
     icon_bitmap2component_16,
     icon_bitmap2component_24,
@@ -307,6 +310,8 @@ enum class BITMAPS : unsigned int
     icon_pcbnew_32,
     icon_pcm,
     icon_pcm_24,
+    icon_send,
+    icon_stop,
     image,
     import,
     import3d,
@@ -572,6 +577,7 @@ enum class BITMAPS : unsigned int
     sim_tune,
     simulator,
     slice_line,
+    small_bottom,
     small_down,
     small_edit,
     small_folder,
@@ -580,6 +586,7 @@ enum class BITMAPS : unsigned int
     small_plus,
     small_refresh,
     small_sort_desc,
+    small_top,
     small_trash,
     small_up,
     small_warning,
@@ -690,9 +697,50 @@ enum class BITMAPS : unsigned int
     zoom_out_vertically,
     zoom_page,
     zoom_selection,
+
+    constraint_basic_clearance,
+    constraint_board_outline_clearance,
+    constraint_minimum_clearance,
+    constraint_creepage_distance,
+    constraint_minimum_connection_width,
+    constraint_silk_to_silk_clearance,
+    constraint_courtyard_clearance,
+    constraint_minimum_track_width,
+    constraint_copper_to_hole_clearance,
+    constraint_minimum_thermal_relief_spoke_count,
+    constraint_minimum_annular_width,
+    constraint_copper_to_edge_clearance,
+    constraint_minimum_drill_size,
+    constraint_hole_size,
+    constraint_hole_to_hole_clearance,
+    constraint_hole_to_hole_distance,
+    constraint_minimum_via_diameter,
+    constraint_via_style,
+    constraint_minimum_text_height_and_thickness,
+    constraint_silk_to_soldermask_clearance,
+    constraint_minimum_soldermask_sliver,
+    constraint_soldermask_expansion,
+    constraint_solderpaste_expansion,
+    constraint_maximum_allowed_deviation,
+    constraint_minimum_angular_ring,
+    constraint_matched_length_diff_pair,
+    constraint_matched_length_diff_pair_v2,
+    constraint_routing_diff_pair,
+    constraint_routing_width,
+    constraint_clearance,
+    constraint_length,
+    constraint_maximum_via_count,
+    constraint_silk_clearance,
+    constraint_absolute_length_2,
+    constraint_permitted_layers,
+    constraint_allowed_orientation,
+    constraint_vias_under_smd
 };
 
 
-inline bool operator!( const BITMAPS& aBitmap ) { return aBitmap == BITMAPS::INVALID_BITMAP; }
+inline bool operator!( const BITMAPS& aBitmap )
+{
+    return aBitmap == BITMAPS::INVALID_BITMAP;
+}
 
 #endif // BITMAPS_PNG_BITMAPS_LIST__H

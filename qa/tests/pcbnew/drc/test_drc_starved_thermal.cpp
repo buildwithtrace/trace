@@ -25,10 +25,12 @@
 #include <pcbnew_utils/board_test_utils.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <drc/drc_engine.h>
 #include <pad.h>
 #include <pcb_track.h>
 #include <pcb_marker.h>
 #include <footprint.h>
+#include <drc/drc_engine.h>
 #include <drc/drc_item.h>
 #include <settings/settings_manager.h>
 
@@ -51,6 +53,7 @@ BOOST_FIXTURE_TEST_CASE( DRCStarvedThermal, DRC_REGRESSION_TEST_FIXTURE )
     // clang-format off : suggestions look worse.
     std::vector<std::pair<wxString, int>> tests = {
         { "test_starved_thermal", 2 },
+        { "issue19090/issue19090", 0 }, // Copper graphic shapes count as thermal connections
     };
     // clang-format on
 

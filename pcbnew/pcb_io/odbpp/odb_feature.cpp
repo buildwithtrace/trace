@@ -25,10 +25,13 @@
 
 #include <wx/log.h>
 
+#include "footprint.h"
+#include "pad.h"
 #include "pcb_shape.h"
 #include "odb_defines.h"
 #include "pcb_track.h"
 #include "pcb_textbox.h"
+#include "pcb_table.h"
 #include "zone.h"
 #include "board.h"
 #include "board_design_settings.h"
@@ -487,8 +490,8 @@ void FEATURES_MANAGER::InitFeatureList( PCB_LAYER_ID aLayer, std::vector<BOARD_I
 
         if( PCB_TEXT* tmp_text = dynamic_cast<PCB_TEXT*>( item ) )
             text_item = static_cast<EDA_TEXT*>( tmp_text );
-        else if( PCB_TEXTBOX* tmp_text = dynamic_cast<PCB_TEXTBOX*>( item ) )
-            text_item = static_cast<EDA_TEXT*>( tmp_text );
+        else if( PCB_TEXTBOX* tmp_textbox = dynamic_cast<PCB_TEXTBOX*>( item ) )
+            text_item = static_cast<EDA_TEXT*>( tmp_textbox );
 
         if( !text_item || !text_item->IsVisible() || text_item->GetShownText( false ).empty() )
             return;
@@ -776,6 +779,25 @@ void FEATURES_MANAGER::InitFeatureList( PCB_LAYER_ID aLayer, std::vector<BOARD_I
                 add_shape( static_cast<PCB_TEXTBOX*>( item ) );
 
             break;
+
+        case PCB_TABLE_T:
+        {
+            PCB_TABLE* table = static_cast<PCB_TABLE*>( item );
+
+            for( PCB_TABLECELL* cell : table->GetCells() )
+                add_text( cell );
+
+            table->DrawBorders(
+                    [&]( const VECTOR2I& aPt1, const VECTOR2I& aPt2, const STROKE_PARAMS& aStroke )
+                    {
+                        int lineWidth = aStroke.GetWidth();
+
+                        if( lineWidth > 0 )
+                            AddFeatureLine( aPt1, aPt2, lineWidth );
+                    } );
+
+            break;
+        }
 
         case PCB_DIMENSION_T:
         case PCB_TARGET_T:

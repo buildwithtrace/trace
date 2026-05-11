@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2020 Jon Evans <jon@craftyjon.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -28,7 +29,9 @@
 #include <search_stack.h>
 #include <settings/settings_manager.h>
 #include <settings/common_settings.h>
+#include <settings/common_settings_internals.h>
 #include <settings/json_settings.h>
+#include <settings/json_settings_internals.h>
 #include <settings/parameters.h>
 #include <systemdirsappend.h>
 #include <trace_helpers.h>
@@ -36,13 +39,17 @@
 #include <wx/log.h>
 #include <wx/regex.h>
 #include <wx/tokenzr.h>
+#include <wx/window.h>
 
 
 ///! The following environment variables will never be migrated from a previous version
-const wxRegEx versionedEnvVarRegex( wxS( "KICAD[0-9]+_[A-Z0-9_]+(_DIR)?" ) );
+///! Matches both TRACEn_* and KICADn_* versioned environment variables
+const wxRegEx versionedEnvVarRegex( wxS( "(TRACE|KICAD)[0-9]+_[A-Z0-9_]+(_DIR)?" ) );
 
 ///! Update the schema version whenever a migration is required
-const int commonSchemaVersion = 4;
+const int commonSchemaVersion = 5;
+
+COMMON_SETTINGS::~COMMON_SETTINGS() = default;
 
 COMMON_SETTINGS::COMMON_SETTINGS() :
         JSON_SETTINGS( "kicad_common", SETTINGS_LOC::USER, commonSchemaVersion ),
@@ -56,7 +63,8 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
         m_System(),
         m_DoNotShowAgain(),
         m_PackageManager(),
-        m_Api()
+        m_Api(),
+        m_csInternals( std::make_unique<COMMON_SETTINGS_INTERNALS>() )
 {
     /*
      * Automatic dark mode detection works fine on Mac.
@@ -348,6 +356,9 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     m_params.emplace_back( new PARAM<int>( "system.clear_3d_cache_interval",
             &m_System.clear_3d_cache_interval, 30 ) );
 
+    m_params.emplace_back( new PARAM<wxString>( "system.backend_url",
+            &m_System.backend_url, wxS( "" ) ) );
+
     m_params.emplace_back( new PARAM<bool>( "do_not_show_again.zone_fill_warning",
             &m_DoNotShowAgain.zone_fill_warning, false ) );
 
@@ -449,14 +460,14 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
             {
                 nlohmann::json ret = nlohmann::json::object();
 
-                for( const auto& dlg : m_dialogControlValues )
+                for( const auto& dlg : m_csInternals->m_dialogControlValues )
                     ret[ dlg.first ] = dlg.second;
 
                 return ret;
             },
             [&]( const nlohmann::json& aVal )
             {
-                m_dialogControlValues.clear();
+                m_csInternals->m_dialogControlValues.clear();
 
                 if( !aVal.is_object() )
                     return;
@@ -467,7 +478,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
                         continue;
 
                     for( auto& [ctrlKey, ctrlVal] : dlgVal.items() )
-                        m_dialogControlValues[ dlgKey ][ ctrlKey ] = ctrlVal;
+                        m_csInternals->m_dialogControlValues[ dlgKey ][ ctrlKey ] = ctrlVal;
                 }
             },
             nlohmann::json::object() ) );
@@ -477,6 +488,7 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
     registerMigration( 1, 2, std::bind( &COMMON_SETTINGS::migrateSchema1to2, this ) );
     registerMigration( 2, 3, std::bind( &COMMON_SETTINGS::migrateSchema2to3, this ) );
     registerMigration( 3, 4, std::bind( &COMMON_SETTINGS::migrateSchema3to4, this ) );
+    registerMigration( 4, 5, std::bind( &COMMON_SETTINGS::migrateSchema4to5, this ) );
 }
 
 
@@ -656,6 +668,46 @@ bool COMMON_SETTINGS::migrateSchema3to4()
 }
 
 
+bool COMMON_SETTINGS::migrateSchema4to5()
+{
+    try
+    {
+        nlohmann::json& controls = m_internals->At( "dialog" ).at( "controls" );
+
+        for( auto& [dlgKey, dlgVal] : controls.items() )
+        {
+            if( !dlgVal.is_object() )
+                continue;
+
+            auto geoIt = dlgVal.find( "__geometry" );
+
+            if( geoIt == dlgVal.end() || !geoIt->is_object() )
+                continue;
+
+            nlohmann::json& geom = *geoIt;
+
+            // Legacy values were stored in logical pixels. Convert to DIP using the
+            // primary display's scale factor (best approximation without window context).
+            int w = geom.value( "w", 0 );
+            int h = geom.value( "h", 0 );
+
+            wxSize dipSize = wxWindow::ToDIP( wxSize( w, h ), nullptr );
+            geom[ "w" ] = dipSize.x;
+            geom[ "h" ] = dipSize.y;
+
+            geom.erase( "dip" );
+        }
+    }
+    catch( ... )
+    {
+        wxLogTrace( traceSettings,
+                    wxT( "COMMON_SETTINGS::Migrate 4->5: dialog.controls not found" ) );
+    }
+
+    return true;
+}
+
+
 bool COMMON_SETTINGS::MigrateFromLegacy( wxConfigBase* aCfg )
 {
     bool ret = true;
@@ -763,31 +815,27 @@ void COMMON_SETTINGS::InitializeEnvironment()
             }
         };
 
-    wxFileName basePath( PATHS::GetStockEDALibraryPath(), wxEmptyString );
+    // Helper to add both TRACE and KICAD versions of a variable with the same value
+    auto addVersionedVar =
+        [&]( const wxString& aBaseName, const wxString& aDefault )
+        {
+            // Add TRACE version (primary)
+            addVar( ENV_VAR::GetTraceVersionedEnvVarName( aBaseName ), aDefault );
+            // Add KICAD version (for backwards compatibility)
+            addVar( ENV_VAR::GetKicadVersionedEnvVarName( aBaseName ), aDefault );
+        };
 
-    wxFileName path( basePath );
-    path.AppendDir( wxT( "footprints" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ), path.GetFullPath() );
+    addVersionedVar( wxS( "FOOTPRINT_DIR" ), PATHS::GetStockFootprintsPath() );
+    addVersionedVar( wxS( "3DMODEL_DIR" ), PATHS::GetStock3dmodelsPath() );
+    addVersionedVar( wxS( "TEMPLATE_DIR" ), PATHS::GetStockTemplatesPath() );
 
-    path = basePath;
-    path.AppendDir( wxT( "3dmodels" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ), path.GetFullPath() );
-
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "TEMPLATE_DIR" ) ),
-            PATHS::GetStockTemplatesPath() );
-
+    // Add both TRACE and KICAD versions of user template dir for compatibility
+    addVar( wxT( "TRACE_USER_TEMPLATE_DIR" ), PATHS::GetUserTemplatesPath() );
     addVar( wxT( "KICAD_USER_TEMPLATE_DIR" ), PATHS::GetUserTemplatesPath() );
 
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "3RD_PARTY" ) ),
-            PATHS::GetDefault3rdPartyPath() );
-
-    path = basePath;
-    path.AppendDir( wxT( "symbols" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "SYMBOL_DIR" ) ), path.GetFullPath() );
-
-    path = basePath;
-    path.AppendDir( wxT( "blocks" ) );
-    addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "DESIGN_BLOCK_DIR" ) ), path.GetFullPath() );
+    addVersionedVar( wxS( "3RD_PARTY" ), PATHS::GetDefault3rdPartyPath() );
+    addVersionedVar( wxS( "SYMBOL_DIR" ), PATHS::GetStockSymbolsPath() );
+    addVersionedVar( wxS( "DESIGN_BLOCK_DIR" ), PATHS::GetStockDesignBlocksPath() );
 }
 
 

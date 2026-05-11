@@ -30,9 +30,10 @@
 
 #include <bitmaps.h>
 #include <embedded_files.h>
+#include <kiplatform/ui.h>
 #include <kiway.h>
 #include <kiway_player.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <string_utils.h>
 #include <dialog_shim.h>
 #include <common.h>
@@ -156,7 +157,7 @@ protected:
         {
             if( !m_symbolNetlist.empty() )
             {
-                KIWAY_EXPRESS event( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST,
+                KIWAY_MAIL_EVENT event( FRAME_FOOTPRINT_CHOOSER, MAIL_SYMBOL_NETLIST,
                                      m_symbolNetlist );
                 frame->KiwayMailIn( event );
             }
@@ -255,6 +256,8 @@ protected:
                                          wxFD_OPEN | wxFD_FILE_MUST_EXIST );
 
             openFileDialog.SetCustomizeHook( customize );
+
+            KIPLATFORM::UI::AllowNetworkFileSystems( &openFileDialog );
 
             if( openFileDialog.ShowModal() == wxID_OK )
             {
@@ -391,6 +394,8 @@ protected:
 
             if( m_embedCallback )
                 dlg.SetCustomizeHook( customize );
+
+            KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
 
             if( dlg.ShowModal() == wxID_OK )
             {

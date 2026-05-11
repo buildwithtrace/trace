@@ -27,6 +27,7 @@
 
 #include <map>
 
+#include <remote_provider_settings.h>
 #include <settings/app_settings.h>
 #include <sim/sim_preferences.h>
 
@@ -38,6 +39,7 @@ extern const wxAuiPaneInfo& defaultPropertiesPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultSchSelectionFilterPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultDesignBlocksPaneInfo( wxWindow* aWindow );
 extern const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow );
+extern const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow );
 
 
 
@@ -111,23 +113,7 @@ public:
         int  remote_symbol_panel_docked_width;
         int  remote_symbol_panel_float_width;
         int  remote_symbol_panel_float_height;
-    };
-
-    struct REMOTE_SYMBOL_CONFIG
-    {
-        REMOTE_SYMBOL_CONFIG()
-        {
-            ResetToDefaults();
-        }
-
-        wxString destination_dir;
-        wxString library_prefix;
-        bool     add_to_global_table;
-        std::map<wxString, wxString> user_ids;
-
-        void ResetToDefaults();
-        static wxString DefaultDestinationDir();
-        static wxString DefaultLibraryPrefix();
+        bool ai_chat_show;
     };
 
     struct AUTOPLACE_FIELDS
@@ -237,6 +223,7 @@ public:
     {
         bool automatic;
         bool recursive;
+        bool regroup_units;
         int scope;
         int options;
         int messages_filter;
@@ -255,6 +242,7 @@ public:
         int                        selection_mode;
         int                        sash_pos;
         bool                       sidebar_collapsed;
+        int                        variant_sash_pos;
     };
 
     struct PANEL_LIB_VIEW
@@ -284,6 +272,7 @@ public:
     {
         bool crossprobe;
         bool scroll_on_crossprobe;
+        bool show_all_errors;
     };
 
     struct DIALOG_CHANGE_SYMBOLS
@@ -345,7 +334,7 @@ private:
 public:
     APPEARANCE                m_Appearance;
     AUI_PANELS                m_AuiPanels;
-    REMOTE_SYMBOL_CONFIG      m_RemoteSymbol;
+    REMOTE_PROVIDER_SETTINGS  m_RemoteSymbol;
 
     DRAWING                   m_Drawing;
     INPUT                     m_Input;

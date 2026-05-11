@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  *
  * This program is free software; you can redistribute it and/or
@@ -41,7 +42,7 @@
 
 using namespace KIGFX;
 
-static const wxString productName = wxT( "KiCad E.D.A." );
+static const wxString productName = wxT( "Trace" );
 
 DS_RENDER_SETTINGS::DS_RENDER_SETTINGS()
 {
@@ -107,6 +108,8 @@ void DS_DRAW_ITEM_LIST::GetTextVars( wxArrayString* aVars )
     aVars->push_back( wxT( "PROJECTNAME" ) );
     aVars->push_back( wxT( "PAPER" ) );
     aVars->push_back( wxT( "LAYER" ) );
+    aVars->push_back( wxT( "VARIANT" ) );
+    aVars->push_back( wxT( "VARIANT_DESC" ) );
     TITLE_BLOCK::GetContextualTextVars( aVars );
 }
 
@@ -120,7 +123,7 @@ wxString DS_DRAW_ITEM_LIST::BuildFullText( const wxString& aTextbase )
 
                 if( token->IsSameAs( wxT( "KICAD_VERSION" ) ) && PgmOrNull() )
                 {
-                    *token = wxString::Format( wxT( "%s %s" ), productName, GetBaseVersion() );
+                    *token = wxString::Format( wxT( "%s %s" ), productName, GetTraceBaseVersion() );
                     tokenUpdated = true;
                 }
                 else if( token->IsSameAs( wxT( "#" ) ) )
@@ -163,6 +166,16 @@ wxString DS_DRAW_ITEM_LIST::BuildFullText( const wxString& aTextbase )
                 else if( token->IsSameAs( wxT( "LAYER" ) ) )
                 {
                     *token = m_sheetLayer;
+                    tokenUpdated = true;
+                }
+                else if( token->IsSameAs( wxT( "VARIANT" ) ) )
+                {
+                    *token = m_variantName;
+                    tokenUpdated = true;
+                }
+                else if( token->IsSameAs( wxT( "VARIANT_DESC" ) ) )
+                {
+                    *token = m_variantDesc;
                     tokenUpdated = true;
                 }
                 else if( m_titleBlock )

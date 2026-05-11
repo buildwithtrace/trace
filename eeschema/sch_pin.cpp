@@ -39,6 +39,8 @@
 #include <trace_helpers.h>
 #include <trigo.h>
 #include <string_utils.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 wxString FormatStackedPinForDisplay( const wxString& aPinNumber, int aPinLength, int aTextSize, KIFONT::FONT* aFont,
                                      const KIFONT::METRICS& aFontMetrics )
@@ -342,32 +344,34 @@ void SCH_PIN::SetType( ELECTRICAL_PINTYPE aType )
 
 wxString SCH_PIN::GetCanonicalElectricalTypeName() const
 {
-    if( m_type != ELECTRICAL_PINTYPE::PT_INHERIT )
-        return ::GetCanonicalElectricalTypeName( m_type );
-
-    if( !m_libPin )
-        return ::GetCanonicalElectricalTypeName( ELECTRICAL_PINTYPE::PT_UNSPECIFIED );
-
-    return m_libPin->GetCanonicalElectricalTypeName();
+    // Use GetType() which correctly handles alternates
+    return ::GetCanonicalElectricalTypeName( GetType() );
 }
 
 
 wxString SCH_PIN::GetElectricalTypeName() const
 {
-    if( m_type != ELECTRICAL_PINTYPE::PT_INHERIT )
-        return ElectricalPinTypeGetText( m_type );
-
-    if( !m_libPin )
-        return ElectricalPinTypeGetText( ELECTRICAL_PINTYPE::PT_UNSPECIFIED );
-
-    return m_libPin->GetElectricalTypeName();
+    // Use GetType() which correctly handles alternates
+    return ElectricalPinTypeGetText( GetType() );
 }
 
 
 bool SCH_PIN::IsGlobalPower() const
 {
-    return GetType() == ELECTRICAL_PINTYPE::PT_POWER_IN
-           && ( !IsVisible() || GetParentSymbol()->IsGlobalPower() );
+    if( GetType() != ELECTRICAL_PINTYPE::PT_POWER_IN )
+        return false;
+
+    const SYMBOL* parent = GetParentSymbol();
+
+    if( parent->IsGlobalPower() )
+        return true;
+
+    // Local power symbols are never global, even with invisible pins
+    if( parent->IsLocalPower() )
+        return false;
+
+    // Legacy support: invisible power-in pins on non-power symbols act as global power
+    return !IsVisible();
 }
 
 
@@ -574,7 +578,7 @@ bool SCH_PIN::HitTest( const BOX2I& aRect, bool aContained, int aAccuracy ) cons
 }
 
 
-wxString SCH_PIN::GetShownName() const
+const wxString& SCH_PIN::GetShownName() const
 {
     if( !m_alt.IsEmpty() )
         return m_alt;
@@ -585,7 +589,7 @@ wxString SCH_PIN::GetShownName() const
 }
 
 
-wxString SCH_PIN::GetShownNumber() const
+const wxString& SCH_PIN::GetShownNumber() const
 {
     return m_number;
 }
@@ -593,15 +597,13 @@ wxString SCH_PIN::GetShownNumber() const
 
 std::vector<wxString> SCH_PIN::GetStackedPinNumbers( bool* aValid ) const
 {
-    wxString shown = GetShownNumber();
-    wxLogTrace( traceStackedPins,
-                wxString::Format( "GetStackedPinNumbers: shown='%s'", shown ) );
+    const wxString& shown = GetShownNumber();
+    wxLogTrace( traceStackedPins, "GetStackedPinNumbers: shown='%s'", shown );
 
     std::vector<wxString> numbers = ExpandStackedPinNotation( shown, aValid );
 
     // Log the expansion for debugging
-    wxLogTrace( traceStackedPins,
-                wxString::Format( "Expanded '%s' to %zu pins", shown, numbers.size() ) );
+    wxLogTrace( traceStackedPins, "Expanded '%s' to %zu pins", shown, numbers.size() );
     for( const wxString& num : numbers )
     {
         wxLogTrace( traceStackedPins, wxString::Format( " -> '%s'", num ) );
@@ -613,7 +615,7 @@ std::vector<wxString> SCH_PIN::GetStackedPinNumbers( bool* aValid ) const
 
 int SCH_PIN::GetStackedPinCount( bool* aValid ) const
 {
-    wxString shown = GetShownNumber();
+    const wxString& shown = GetShownNumber();
     return CountStackedPinNotation( shown, aValid );
 }
 
@@ -735,6 +737,9 @@ void SCH_PIN::PlotPinType( PLOTTER *aPlotter, const VECTOR2I &aPosition,
 
     if( bg == COLOR4D::UNSPECIFIED || !aPlotter->GetColorMode() )
         bg = COLOR4D::WHITE;
+
+    if( color.m_text && Schematic() )
+        color = COLOR4D( ResolveText( *color.m_text, &Schematic()->CurrentSheet() ) );
 
     if( aDimmed )
     {
@@ -858,7 +863,7 @@ void SCH_PIN::PlotPinType( PLOTTER *aPlotter, const VECTOR2I &aPosition,
                                       y1 + ( MapY1 + MapX1 ) * deco_size ) );
     }
 
-    if( m_type == ELECTRICAL_PINTYPE::PT_NC ) // Draw a N.C. symbol
+    if( GetType() == ELECTRICAL_PINTYPE::PT_NC ) // Draw a N.C. symbol
     {
         const int deco_size = TARGET_PIN_RADIUS;
         const int ex1 = aPosition.x;
@@ -906,6 +911,12 @@ void SCH_PIN::PlotPinTexts( PLOTTER *aPlotter, const VECTOR2I &aPinPos, PIN_ORIE
 
     if( bg == COLOR4D::UNSPECIFIED || !aPlotter->GetColorMode() )
         bg = COLOR4D::WHITE;
+
+    if( nameColor.m_text && Schematic() )
+        nameColor = COLOR4D( ResolveText( *nameColor.m_text, &Schematic()->CurrentSheet() ) );
+
+    if( numColor.m_text && Schematic() )
+        numColor = COLOR4D( ResolveText( *numColor.m_text, &Schematic()->CurrentSheet() ) );
 
     if( aDimmed )
     {
@@ -1361,7 +1372,6 @@ void SCH_PIN::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& aP
 
 void SCH_PIN::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList )
 {
-    wxString msg;
     SYMBOL*  symbol = GetParentSymbol();
 
     aList.emplace_back( _( "Type" ), _( "Pin" ) );
@@ -1426,9 +1436,9 @@ wxString SCH_PIN::GetDefaultNetName( const SCH_SHEET_PATH& aPath, bool aForceNoC
     // with legacy global power pins on non-power symbols
     if( IsGlobalPower() || IsLocalPower() )
     {
-        SYMBOL* parent = GetLibPin()->GetParentSymbol();
+        SYMBOL* parent = GetLibPin() ? GetLibPin()->GetParentSymbol() : nullptr;
 
-        if( parent->IsGlobalPower() || parent->IsLocalPower() )
+        if( parent && ( parent->IsGlobalPower() || parent->IsLocalPower() ) )
         {
             return EscapeString( symbol->GetValue( true, &aPath, false ), CTX_NETNAME );
         }
@@ -1461,10 +1471,10 @@ wxString SCH_PIN::GetDefaultNetName( const SCH_SHEET_PATH& aPath, bool aForceNoC
 
     bool annotated = true;
 
-    std::vector<SCH_PIN*> pins = symbol->GetPins( &aPath );
+    std::vector<const SCH_PIN*> pins = symbol->GetPins( &aPath );
     bool has_multiple = false;
 
-    for( SCH_PIN* pin : pins )
+    for( const SCH_PIN* pin : pins )
     {
         if( pin->GetShownName() == GetShownName()
                 && pin->GetShownNumber() != GetShownNumber()
@@ -1589,7 +1599,19 @@ bool SCH_PIN::HasConnectivityChanges( const SCH_ITEM* aItem,
     if( GetNumber() != pin->GetNumber() )
         return true;
 
-    return GetName() != pin->GetName();
+    if( GetName() != pin->GetName() )
+        return true;
+
+    // For power input pins, visibility changes affect IsGlobalPower() which changes
+    // connectivity semantics. Hidden power pins create implicit global net connections.
+    // Also check if a pin changed type to/from PT_POWER_IN.
+    if( GetType() == ELECTRICAL_PINTYPE::PT_POWER_IN || pin->GetType() == ELECTRICAL_PINTYPE::PT_POWER_IN )
+    {
+        if( IsVisible() != pin->IsVisible() || GetType() != pin->GetType() )
+            return true;
+    }
+
+    return false;
 }
 
 
@@ -1703,7 +1725,7 @@ int SCH_PIN::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
     if( m_number != tmp->m_number )
     {
         // StrNumCmp: sort the same as the pads in the footprint file
-        return StrNumCmp( m_number, tmp->m_number ) < 0;
+        return StrNumCmp( m_number, tmp->m_number );
     }
 
     if( m_position.x != tmp->m_position.x )

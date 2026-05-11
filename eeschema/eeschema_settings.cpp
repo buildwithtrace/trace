@@ -2,6 +2,7 @@
 * This program source code file is part of KiCad, a free EDA CAD application.
 *
 * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
 *
 * This program is free software; you can redistribute it and/or
 * modify it under the terms of the GNU General Public License
@@ -33,6 +34,7 @@
 #include <settings/common_settings.h>
 #include <settings/json_settings_internals.h>
 #include <settings/parameters.h>
+#include <settings/color_settings.h>
 #include <settings/settings_manager.h>
 #include <settings/aui_settings.h>
 #include <wx/config.h>
@@ -119,6 +121,7 @@ const wxAuiPaneInfo& defaultSchSelectionFilterPaneInfo( wxWindow* aWindow )
             .TopDockable( false )
             .BottomDockable( false )
             .CloseButton( true )
+            // Fixed-size pane; -1 for MinSize height is required
             .MinSize( aWindow->FromDIP( wxSize( 180, -1 ) ) )
             .BestSize( aWindow->FromDIP( wxSize( 180, -1 ) ) )
             .Show( true );
@@ -171,25 +174,28 @@ const wxAuiPaneInfo& defaultRemoteSymbolPaneInfo( wxWindow* aWindow )
 }
 
 
-wxString EESCHEMA_SETTINGS::REMOTE_SYMBOL_CONFIG::DefaultDestinationDir()
+const wxAuiPaneInfo& defaultAIChatPaneInfo( wxWindow* aWindow )
 {
-        return wxS( "${KIPRJMOD}/RemoteLibrary" );
+    static wxAuiPaneInfo paneInfo;
+
+    paneInfo.Name( wxS( "AIChat" ) )
+            .Caption( _( "AI Agent" ) )
+            .CaptionVisible( false )
+            .PaneBorder( false )
+            .Right().Layer( 3 ).Position( 0 )
+            .TopDockable( false )
+            .BottomDockable( false )
+            .CloseButton( false )
+            .MinSize( aWindow->FromDIP( wxSize( 300, 200 ) ) )
+            .BestSize( aWindow->FromDIP( wxSize( 350, 500 ) ) )
+            .FloatingSize( aWindow->FromDIP( wxSize( 400, 600 ) ) )
+            .FloatingPosition( aWindow->FromDIP( wxPoint( 100, 100 ) ) )
+            .Show( true );
+
+    return paneInfo;
 }
 
 
-wxString EESCHEMA_SETTINGS::REMOTE_SYMBOL_CONFIG::DefaultLibraryPrefix()
-{
-        return wxS( "remote" );
-}
-
-
-void EESCHEMA_SETTINGS::REMOTE_SYMBOL_CONFIG::ResetToDefaults()
-{
-        destination_dir = DefaultDestinationDir();
-        library_prefix = DefaultLibraryPrefix();
-        add_to_global_table = false;
-        user_ids.clear();
-}
 
 
 EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
@@ -301,6 +307,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<int>( "aui.remote_symbol_panel_float_height",
             &m_AuiPanels.remote_symbol_panel_float_height, -1 ) );
 
+    m_params.emplace_back( new PARAM<bool>( "aui.ai_chat_show",
+            &m_AuiPanels.ai_chat_show, true ) );
+
     m_params.emplace_back( new PARAM<bool>( "aui.schematic_hierarchy_float",
             &m_AuiPanels.schematic_hierarchy_float, false ) );
 
@@ -354,17 +363,20 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<wxString>( "remote_symbols.destination_dir",
             &m_RemoteSymbol.destination_dir,
-            REMOTE_SYMBOL_CONFIG::DefaultDestinationDir() ) );
+            REMOTE_PROVIDER_SETTINGS::DefaultDestinationDir() ) );
 
     m_params.emplace_back( new PARAM<wxString>( "remote_symbols.library_prefix",
             &m_RemoteSymbol.library_prefix,
-            REMOTE_SYMBOL_CONFIG::DefaultLibraryPrefix() ) );
+            REMOTE_PROVIDER_SETTINGS::DefaultLibraryPrefix() ) );
 
     m_params.emplace_back( new PARAM<bool>( "remote_symbols.add_to_global_table",
             &m_RemoteSymbol.add_to_global_table, false ) );
 
-    m_params.emplace_back( new PARAM_WXSTRING_MAP( "remote_symbols.user_ids",
-            &m_RemoteSymbol.user_ids, {} ) );
+    m_params.emplace_back( new PARAM<wxString>( "remote_symbols.last_used_provider_id",
+            &m_RemoteSymbol.last_used_provider_id, wxEmptyString ) );
+
+    m_params.emplace_back( new PARAM_LIST<REMOTE_PROVIDER_ENTRY>( "remote_symbols.providers",
+            &m_RemoteSymbol.providers, {} ) );
 
     m_params.emplace_back( new PARAM<int>( "drawing.default_bus_thickness",
             &m_Drawing.default_bus_thickness, DEFAULT_BUS_WIDTH_MILS ) );
@@ -478,6 +490,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<bool>( "annotation.recursive",
             &m_AnnotatePanel.recursive, true ) );
 
+    m_params.emplace_back( new PARAM<bool>( "annotation.regroup_units",
+            &m_AnnotatePanel.regroup_units, false ) );
+
     m_params.emplace_back( new PARAM<int>( "annotation.scope",
             &m_AnnotatePanel.scope, 0, 0, 2 ) );
 
@@ -574,6 +589,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<int>( "field_editor.sash_pos",
             &m_FieldEditorPanel.sash_pos, 400 ) );
 
+    m_params.emplace_back( new PARAM<int>( "field_editor.variant_sash_pos",
+            &m_FieldEditorPanel.variant_sash_pos, 500 ) );
+
     m_params.emplace_back( new PARAM<bool>( "field_editor.sidebar_collapsed",
             &m_FieldEditorPanel.sidebar_collapsed, false ) );
 
@@ -641,6 +659,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "ERC.scroll_on_crossprobe",
             &m_ERCDialog.scroll_on_crossprobe, true ) );
+
+    m_params.emplace_back( new PARAM<bool>( "ERC.show_all_errors",
+            &m_ERCDialog.show_all_errors, false ) );
 
     m_params.emplace_back( new PARAM<bool>( "change_symbols.update_references",
             &m_ChangeSymbols.updateReferences, false ) );

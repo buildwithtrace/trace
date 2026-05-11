@@ -29,7 +29,7 @@
 #include <wx/log.h>
 #include <wx/window.h>
 
-#include <nlohmann/json.hpp>
+#include <json_common.h>
 
 #include <algorithm>
 #include <limits>

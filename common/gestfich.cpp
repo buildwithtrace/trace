@@ -4,6 +4,7 @@
  * Copyright (C) 2004 Jean-Pierre Charras, jaen-pierre.charras@gipsa-lab.inpg.com
  * Copyright (C) 2008 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -38,12 +39,85 @@
 #include <string_utils.h>
 #include <launch_ext.h>
 #include "wx/tokenzr.h"
+#include <wildcards_and_files_ext.h>
+#include <python_manager.h>
+#include <paths.h>
+#include <config.h>
+#include <wx/log.h>
+#include <wx/arrstr.h>
+#include <sexpr/sexpr.h>
+#include <sexpr/sexpr_parser.h>
 
 #include <wx/wfstream.h>
 #include <wx/fs_zip.h>
 #include <wx/zipstrm.h>
 
 #include <filesystem>
+#include <core/kicad_algo.h>
+
+#ifdef _WIN32
+#include <process_executor.h>
+#endif
+
+
+namespace {
+
+/**
+ * Execute a conversion command synchronously and return its exit code.
+ * On failure (non-zero exit), @a aErrorOutput receives stderr/stdout for logging.
+ *
+ * On Windows this bypasses wxExecute(wxEXEC_SYNC) — which pumps the message loop
+ * while waiting — in favor of CreateProcessW with a polling loop.  This prevents
+ * the KiCad manager window from flashing to the foreground when file-system-watcher
+ * events are dispatched during the wait.  A 60-second stall timeout ensures the GUI
+ * thread is never blocked indefinitely if the Python process hangs.
+ */
+long executeConversion( const wxString& aCommand, wxString& aErrorOutput )
+{
+#ifdef _WIN32
+    PROCESS_RESULT res = ExecuteProcessWithProgress( aCommand.ToStdWstring(), 60000 );
+
+    if( res.timedOut )
+    {
+        aErrorOutput = wxS( "Conversion process stalled and was terminated" );
+        return -1;
+    }
+
+    if( res.exitCode != 0 )
+        aErrorOutput = wxString::FromUTF8( res.output );
+
+    return res.exitCode;
+#else
+    wxArrayString outLines, errLines;
+    long rc = wxExecute( aCommand, outLines, errLines, wxEXEC_SYNC | wxEXEC_HIDE_CONSOLE );
+
+    if( rc != 0 )
+    {
+        for( const wxString& line : errLines )
+        {
+            if( !aErrorOutput.IsEmpty() )
+                aErrorOutput += wxS( "\n" );
+
+            aErrorOutput += line;
+        }
+
+        if( aErrorOutput.IsEmpty() )
+        {
+            for( const wxString& line : outLines )
+            {
+                if( !aErrorOutput.IsEmpty() )
+                    aErrorOutput += wxS( "\n" );
+
+                aErrorOutput += line;
+            }
+        }
+    }
+
+    return rc;
+#endif
+}
+
+} // anonymous namespace
 
 void QuoteString( wxString& string )
 {
@@ -302,6 +376,79 @@ void KiCopyFile( const wxString& aSrcPath, const wxString& aDestPath, wxString& 
 }
 
 
+static void traverseSEXPR( SEXPR::SEXPR* aNode, const std::function<void( SEXPR::SEXPR* )>& aVisitor )
+{
+    aVisitor( aNode );
+
+    if( aNode->IsList() )
+    {
+        for( unsigned i = 0; i < aNode->GetNumberOfChildren(); i++ )
+            traverseSEXPR( aNode->GetChild( i ), aVisitor );
+    }
+}
+
+
+void CopySexprFile( const wxString& aSrcPath, const wxString& aDestPath,
+                    std::function<bool( const std::string& token, wxString& value )> aCallback,
+                    wxString& aErrors )
+{
+    bool success = false;
+
+    try
+    {
+        SEXPR::PARSER parser;
+        std::unique_ptr<SEXPR::SEXPR> sexpr( parser.ParseFromFile( TO_UTF8( aSrcPath ) ) );
+
+        traverseSEXPR( sexpr.get(),
+                [&]( SEXPR::SEXPR* node )
+                {
+                    if( node->IsList() && node->GetNumberOfChildren() > 1 && node->GetChild( 0 )->IsSymbol() )
+                    {
+                        std::string          token = node->GetChild( 0 )->GetSymbol();
+                        SEXPR::SEXPR_STRING* pathNode = dynamic_cast<SEXPR::SEXPR_STRING*>( node->GetChild( 1 ) );
+                        SEXPR::SEXPR_SYMBOL* symNode = dynamic_cast<SEXPR::SEXPR_SYMBOL*>( node->GetChild( 1 ) );
+                        wxString             path;
+
+                        if( pathNode )
+                            path = pathNode->m_value;
+                        else if( symNode )
+                            path = symNode->m_value;
+
+                        if( aCallback( token, path ) )
+                        {
+                            if( pathNode )
+                                pathNode->m_value = path;
+                            else if( symNode )
+                                symNode->m_value = path;
+                        }
+                    }
+                } );
+
+        wxFFile destFile( aDestPath, "wb" );
+
+        if( destFile.IsOpened() )
+            success = destFile.Write( sexpr->AsString( 0 ) );
+
+        // wxFFile dtor will close the file
+    }
+    catch( ... )
+    {
+        success = false;
+    }
+
+    if( !success )
+    {
+        wxString msg;
+
+        if( !aErrors.empty() )
+            aErrors += wxS( "\n" );
+
+        msg.Printf( _( "Cannot copy file '%s'." ), aDestPath );
+        aErrors += msg;
+    }
+}
+
+
 wxString QuoteFullPath( wxFileName& fn, wxPathFormat format )
 {
     return wxT( "\"" ) + fn.GetFullPath( format ) + wxT( "\"" );
@@ -347,8 +494,7 @@ bool RmDirRecursive( const wxString& aFileName, wxString* aErrors )
     catch( const fs::filesystem_error& e )
     {
         if( aErrors )
-            *aErrors = wxString::Format( _( "Error removing directory '%s': %s" ),
-                                         aFileName, e.what() );
+            *aErrors = wxString::Format( _( "Error removing directory '%s': %s" ), aFileName, e.what() );
 
         return false;
     }
@@ -357,7 +503,8 @@ bool RmDirRecursive( const wxString& aFileName, wxString* aErrors )
 }
 
 
-bool CopyDirectory( const wxString& aSourceDir, const wxString& aDestDir, wxString& aErrors )
+bool CopyDirectory( const wxString& aSourceDir, const wxString& aDestDir,
+                    const std::vector<wxString>& aPathsWithOverwriteDisallowed, wxString& aErrors )
 {
     wxDir dir( aSourceDir );
 
@@ -380,23 +527,25 @@ bool CopyDirectory( const wxString& aSourceDir, const wxString& aDestDir, wxStri
 
     while( cont )
     {
-        wxString sourcePath = aSourceDir + wxFileName::GetPathSeparator() + filename;
+        wxString sourcePath = dir.GetNameWithSep() + filename;
         wxString destPath = aDestDir + wxFileName::GetPathSeparator() + filename;
 
         if( wxFileName::DirExists( sourcePath ) )
         {
             // Recursively copy subdirectories
-            if( !CopyDirectory( sourcePath, destPath, aErrors ) )
+            if( !CopyDirectory( sourcePath, destPath, aPathsWithOverwriteDisallowed, aErrors ) )
                 return false;
         }
         else
         {
             // Copy files
-            if( !wxCopyFile( sourcePath, destPath ) )
+            if( alg::contains( aPathsWithOverwriteDisallowed, sourcePath ) && wxFileExists( destPath ) )
             {
-                aErrors += wxString::Format( _( "Could not copy file: %s to %s" ),
-                                             sourcePath,
-                                             destPath );
+                // Presumably user does not want an error on a no-overwrite condition....
+            }
+            else if( !wxCopyFile( sourcePath, destPath ) )
+            {
+                aErrors += wxString::Format( _( "Could not copy file: %s to %s" ), sourcePath, destPath );
                 return false;
             }
         }
@@ -408,8 +557,8 @@ bool CopyDirectory( const wxString& aSourceDir, const wxString& aDestDir, wxStri
 }
 
 
-bool CopyFilesOrDirectory( const wxString& aSourcePath, const wxString& aDestDir, wxString& aErrors,
-                           int& aFileCopiedCount, const std::vector<wxString>& aExclusions )
+bool CopyFilesOrDirectory( const wxString& aSourcePath, const wxString& aDestDir, bool aAllowOverwrites,
+                           wxString& aErrors, std::vector<wxString>& aPathsWritten )
 {
     // Parse source path and determine if it's a directory
     wxFileName sourceFn( aSourcePath );
@@ -417,85 +566,72 @@ bool CopyFilesOrDirectory( const wxString& aSourcePath, const wxString& aDestDir
     bool       isSourceDirectory = wxFileName::DirExists( sourcePath );
     wxString   baseDestDir = aDestDir;
 
-    auto performCopy = [&]( const wxString& src, const wxString& dest ) -> bool
-    {
-        if( wxCopyFile( src, dest ) )
-        {
-            aFileCopiedCount++;
-            return true;
-        }
-
-        aErrors += wxString::Format( _( "Could not copy file: %s to %s" ), src, dest );
-        aErrors += wxT( "\n" );
-        return false;
-    };
-
-    auto processEntries = [&]( const wxString& srcDir, const wxString& pattern,
-                               const wxString& destDir ) -> bool
-    {
-        wxDir dir( srcDir );
-
-        if( !dir.IsOpened() )
-        {
-            aErrors += wxString::Format( _( "Could not open source directory: %s" ), srcDir );
-            aErrors += wxT( "\n" );
-            return false;
-        }
-
-        wxString filename;
-        bool     success = true;
-
-        // Find all entries matching pattern (files + directories + hidden items)
-        bool cont = dir.GetFirst( &filename, pattern, wxDIR_FILES | wxDIR_DIRS | wxDIR_HIDDEN );
-
-        while( cont )
-        {
-            const wxString entrySrc = srcDir + wxFileName::GetPathSeparator() + filename;
-            const wxString entryDest = destDir + wxFileName::GetPathSeparator() + filename;
-
-            // Apply exclusion filters
-            bool exclude =
-                    filename.Matches( wxT( "~*.lck" ) ) || filename.Matches( wxT( "*.lck" ) );
-
-            for( const auto& exclusion : aExclusions )
+    auto performCopy =
+            [&]( const wxString& src, const wxString& dest ) -> bool
             {
-                if( entrySrc.Matches( exclusion ) )
+                if( wxCopyFile( src, dest, aAllowOverwrites ) )
                 {
-                    exclude = true;
-                    break;
+                    aPathsWritten.push_back( dest );
+                    return true;
                 }
-            }
 
-            if( !exclude )
+                aErrors += wxString::Format( _( "Could not copy file: %s to %s" ), src, dest );
+                aErrors += wxT( "\n" );
+                return false;
+            };
+
+    auto processEntries =
+            [&]( const wxString& srcDir, const wxString& pattern, const wxString& destDir ) -> bool
             {
-                if( wxFileName::DirExists( entrySrc ) )
+                wxDir dir( srcDir );
+
+                if( !dir.IsOpened() )
                 {
-                    // Recursively process subdirectories
-                    if( !CopyFilesOrDirectory( entrySrc, destDir, aErrors, aFileCopiedCount,
-                                               aExclusions ) )
-                    {
-                        aErrors += wxString::Format( _( "Could not copy directory: %s to %s" ),
-                                                     entrySrc, entryDest );
-                        aErrors += wxT( "\n" );
-
-                        success = false;
-                    }
+                    aErrors += wxString::Format( _( "Could not open source directory: %s" ), srcDir );
+                    aErrors += wxT( "\n" );
+                    return false;
                 }
-                else
+
+                wxString filename;
+                bool     success = true;
+
+                // Find all entries matching pattern (files + directories + hidden items)
+                bool cont = dir.GetFirst( &filename, pattern, wxDIR_FILES | wxDIR_DIRS | wxDIR_HIDDEN );
+
+                while( cont )
                 {
-                    // Copy individual files
-                    if( !performCopy( entrySrc, entryDest ) )
+                    const wxString entrySrc = srcDir + wxFileName::GetPathSeparator() + filename;
+                    const wxString entryDest = destDir + wxFileName::GetPathSeparator() + filename;
+
+                    if( !filename.Matches( wxT( "~*.lck" ) ) && !filename.Matches( wxT( "*.lck" ) ) )
                     {
-                        success = false;
+                        if( wxFileName::DirExists( entrySrc ) )
+                        {
+                            // Recursively process subdirectories
+                            if( !CopyFilesOrDirectory( entrySrc, destDir, aAllowOverwrites, aErrors, aPathsWritten ) )
+                            {
+                                aErrors += wxString::Format( _( "Could not copy directory: %s to %s" ),
+                                                             entrySrc, entryDest );
+                                aErrors += wxT( "\n" );
+
+                                success = false;
+                            }
+                        }
+                        else
+                        {
+                            // Copy individual files
+                            if( !performCopy( entrySrc, entryDest ) )
+                            {
+                                success = false;
+                            }
+                        }
                     }
+
+                    cont = dir.GetNext( &filename );
                 }
-            }
 
-            cont = dir.GetNext( &filename );
-        }
-
-        return success;
-    };
+                return success;
+            };
 
     // If copying a directory, append its name to destination path
     if( isSourceDirectory )
@@ -507,8 +643,7 @@ bool CopyFilesOrDirectory( const wxString& aSourcePath, const wxString& aDestDir
     // Create destination directory hierarchy
     if( !wxFileName::Mkdir( baseDestDir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
     {
-        aErrors +=
-                wxString::Format( _( "Could not create destination directory: %s" ), baseDestDir );
+        aErrors += wxString::Format( _( "Could not create destination directory: %s" ), baseDestDir );
         aErrors += wxT( "\n" );
 
         return false;
@@ -531,6 +666,7 @@ bool CopyFilesOrDirectory( const wxString& aSourcePath, const wxString& aDestDir
 
                 return false;
             }
+
             // Process all matching files in source directory
             return processEntries( dirPath, fileName, baseDestDir );
         }
@@ -591,5 +727,335 @@ bool AddDirectoryToZip( wxZipOutputStream& aZip, const wxString& aSourceDir, wxS
         cont = dir.GetNext( &filename );
     }
 
+    return true;
+}
+
+
+bool ConvertKicadSchToTraceSch( const wxString& aKicadSchPath )
+{
+    wxFileName kicadSchFile( aKicadSchPath );
+    
+    // Only process .kicad_sch files
+    if( kicadSchFile.GetExt() != FILEEXT::KiCadSchematicFileExtension )
+        return false;
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert kicad_sch to trace_sch" ) );
+        return false;
+    }
+    
+    // Determine trace_sch output path
+    wxFileName traceSchFile( kicadSchFile );
+    traceSchFile.SetExt( FILEEXT::TraceSchematicFileExtension );
+    wxString traceSchPath = traceSchFile.GetFullPath();
+    
+    // Find trace.py script using unified runtime path detection
+    // PATHS::GetStockDataPath() automatically handles:
+    // - Windows install: C:\Program Files\Trace\X.X\share\trace
+    // - Windows dev: Build directory when KICAD_RUN_FROM_BUILD_DIR is set
+    // - macOS bundle: Trace.app/Contents/SharedSupport
+    // - Linux: /usr/share/trace
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/eeschema/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Build command: python trace/trace.py -f kicad_sch -t trace_sch input.kicad_sch output.trace_sch
+    wxString command = wxString::Format( wxT( "\"%s\" \"%s\" -f kicad_sch -t trace_sch \"%s\" \"%s\"" ),
+                                        pythonPath,
+                                        traceScript.GetFullPath(),
+                                        aKicadSchPath,
+                                        traceSchPath );
+    
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    wxString errorMsg;
+    long exitCode = executeConversion( command, errorMsg );
+    
+    if( exitCode != 0 )
+    {
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        wxLogWarning( wxString::Format( wxS( "Failed to convert kicad_sch to trace_sch:\n%s" ), errorMsg ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !traceSchFile.FileExists() )
+    {
+        wxLogWarning( wxS( "trace_sch file was not created after conversion" ) );
+        return false;
+    }
+    
+    return true;
+}
+
+
+bool ConvertTraceSchToKicadSch( const wxString& aTraceSchPath )
+{
+    wxFileName traceSchFile( aTraceSchPath );
+    
+    // Only process .trace_sch files
+    if( traceSchFile.GetExt() != FILEEXT::TraceSchematicFileExtension )
+        return false;
+    
+    // Determine kicad_sch output path (same directory, different extension)
+    wxFileName kicadSchFile( traceSchFile );
+    kicadSchFile.SetExt( FILEEXT::KiCadSchematicFileExtension );
+    wxString kicadSchPath = kicadSchFile.GetFullPath();
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert trace_sch to kicad_sch" ) );
+        return false;
+    }
+    
+    // Find trace.py script using unified runtime path detection
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/eeschema/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Check if output kicad_sch file exists - if so, pass it as existing_sch for merging
+    wxString existingSchFlag;
+    if( wxFileExists( kicadSchPath ) )
+    {
+        existingSchFlag = wxString::Format( wxT( " --existing-sch \"%s\"" ), kicadSchPath );
+    }
+    
+    wxString command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_sch -t kicad_sch%s \"%s\" \"%s\"" ),
+                                        pythonPath,
+                                        traceScript.GetFullPath(),
+                                        existingSchFlag,
+                                        aTraceSchPath,
+                                        kicadSchPath );
+    
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    wxString errorMsg;
+    long exitCode = executeConversion( command, errorMsg );
+    
+    if( exitCode != 0 )
+    {
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        wxLogWarning( wxString::Format( wxS( "Failed to convert trace_sch to kicad_sch:\n%s" ), errorMsg ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !kicadSchFile.FileExists() )
+    {
+        wxLogWarning( wxS( "kicad_sch file was not created after conversion" ) );
+        return false;
+    }
+    
+    return true;
+}
+
+
+bool ConvertKicadPcbToTracePcb( const wxString& aKicadPcbPath )
+{
+    wxFileName kicadPcbFile( aKicadPcbPath );
+    
+    // Only process .kicad_pcb files
+    if( kicadPcbFile.GetExt() != FILEEXT::KiCadPcbFileExtension )
+        return false;
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert kicad_pcb to trace_pcb" ) );
+        return false;
+    }
+    
+    // Determine trace_pcb output path
+    wxFileName tracePcbFile( kicadPcbFile );
+    tracePcbFile.SetExt( FILEEXT::TracePcbFileExtension );
+    wxString tracePcbPath = tracePcbFile.GetFullPath();
+    
+    // Find trace.py script
+    // Try multiple locations in order:
+    // Find trace.py script using unified runtime path detection
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/pcbnew/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Build command: python trace/pcbnew/trace.py -f kicad_pcb -t trace_pcb input.kicad_pcb output.trace_pcb
+    wxString command = wxString::Format( wxT( "\"%s\" \"%s\" -f kicad_pcb -t trace_pcb \"%s\" \"%s\"" ),
+                                        pythonPath,
+                                        traceScript.GetFullPath(),
+                                        aKicadPcbPath,
+                                        tracePcbPath );
+    
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    wxString errorMsg;
+    long exitCode = executeConversion( command, errorMsg );
+    
+    if( exitCode != 0 )
+    {
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        wxLogWarning( wxString::Format( wxS( "Failed to convert kicad_pcb to trace_pcb:\n%s" ), errorMsg ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !tracePcbFile.FileExists() )
+    {
+        wxLogWarning( wxS( "trace_pcb file was not created after conversion" ) );
+        return false;
+    }
+    
+    return true;
+}
+
+
+bool ConvertTracePcbToKicadPcb( const wxString& aTracePcbPath, 
+                                const wxString& aKicadPcbPath,
+                                const wxString& aKicadSchPath )
+{
+    wxFileName tracePcbFile( aTracePcbPath );
+    
+    // Only process .trace_pcb files
+    if( tracePcbFile.GetExt() != FILEEXT::TracePcbFileExtension )
+        return false;
+    
+    // Determine kicad_pcb output path (same directory, different extension, or use provided path)
+    wxFileName kicadPcbFile;
+    wxString kicadPcbPath;
+    
+    if( !aKicadPcbPath.IsEmpty() )
+    {
+        kicadPcbFile = wxFileName( aKicadPcbPath );
+        kicadPcbPath = aKicadPcbPath;
+    }
+    else
+    {
+        kicadPcbFile = wxFileName( tracePcbFile );
+        kicadPcbFile.SetExt( FILEEXT::KiCadPcbFileExtension );
+        kicadPcbPath = kicadPcbFile.GetFullPath();
+    }
+    
+    // Find Python interpreter
+    wxString pythonPath = PYTHON_MANAGER::FindPythonInterpreter();
+    
+    if( pythonPath.IsEmpty() )
+    {
+        wxLogWarning( wxS( "Could not find Python interpreter to convert trace_pcb to kicad_pcb" ) );
+        return false;
+    }
+    
+    // Find trace.py script using unified runtime path detection
+    wxString stockDataPath = PATHS::GetStockDataPath();
+    wxString scriptPath = stockDataPath + wxS( "/scripting/trace/pcbnew/trace.py" );
+    
+    wxFileName traceScript( scriptPath );
+    
+    if( !traceScript.FileExists() )
+    {
+        wxLogWarning( wxS( "Could not find trace.py script at %s" ), scriptPath );
+        return false;
+    }
+    
+    // Build command: python trace/pcbnew/trace.py -f trace_pcb -t kicad_pcb input.trace_pcb output.kicad_pcb [--existing-pcb existing.kicad_pcb] [--kicad-sch file.kicad_sch]
+    wxString command;
+    
+    if( !aKicadPcbPath.IsEmpty() && !aKicadSchPath.IsEmpty() )
+    {
+        // Both existing_pcb and kicad_sch provided
+        command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_pcb -t kicad_pcb --existing-pcb \"%s\" --kicad-sch \"%s\" \"%s\" \"%s\"" ),
+                                    pythonPath,
+                                    traceScript.GetFullPath(),
+                                    aKicadPcbPath,
+                                    aKicadSchPath,
+                                    aTracePcbPath,
+                                    kicadPcbPath );
+    }
+    else if( !aKicadPcbPath.IsEmpty() )
+    {
+        // Only existing_pcb provided
+        command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_pcb -t kicad_pcb --existing-pcb \"%s\" \"%s\" \"%s\"" ),
+                                    pythonPath,
+                                    traceScript.GetFullPath(),
+                                    aKicadPcbPath,
+                                    aTracePcbPath,
+                                    kicadPcbPath );
+    }
+    else
+    {
+        // No existing files provided
+        command = wxString::Format( wxT( "\"%s\" \"%s\" -f trace_pcb -t kicad_pcb \"%s\" \"%s\"" ),
+                                    pythonPath,
+                                    traceScript.GetFullPath(),
+                                    aTracePcbPath,
+                                    kicadPcbPath );
+    }
+    
+    wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Executing: %s" ), command ) );
+    
+    wxString errorMsg;
+    long exitCode = executeConversion( command, errorMsg );
+    
+    if( exitCode != 0 )
+    {
+        if( errorMsg.IsEmpty() )
+            errorMsg = wxString::Format( wxS( "Exit code: %ld" ), exitCode );
+        
+        wxLogWarning( wxString::Format( wxS( "Failed to convert trace_pcb to kicad_pcb:\n%s" ), errorMsg ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Command: %s" ), command ) );
+        wxLogTrace( wxS( "TraceConversion" ), wxString::Format( wxS( "Exit code: %ld" ), exitCode ) );
+        
+        return false;
+    }
+    
+    // Verify output file was created
+    if( !kicadPcbFile.FileExists() )
+    {
+        wxLogWarning( wxS( "kicad_pcb file was not created after conversion" ) );
+        return false;
+    }
+    
     return true;
 }

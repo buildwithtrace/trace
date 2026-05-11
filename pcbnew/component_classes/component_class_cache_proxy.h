@@ -22,7 +22,9 @@
 #define PCBNEW_COMPONENT_CLASS_CACHE_PROXY_H
 
 #include <component_classes/component_class.h>
-#include <footprint.h>
+#include <component_classes/component_class_manager.h>
+
+class FOOTPRINT;
 
 /*
  * A class which acts as a cache-aware proxy for a FOOTPRINT's component class.

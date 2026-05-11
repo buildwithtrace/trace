@@ -32,6 +32,7 @@
 #include <map>
 #include <algorithm>
 #include <wx/string.h>
+#include <font/font_metrics.h>
 #include <font/glyph.h>
 #include <font/text_attributes.h>
 
@@ -90,40 +91,6 @@ inline bool IsSubscript( TEXT_STYLE_FLAGS aFlags )
 
 namespace KIFONT
 {
-class GAL_API METRICS
-{
-public:
-    /**
-     * Compute the vertical position of an overbar.  This is the distance between the text
-     * baseline and the overbar.
-     */
-    double GetOverbarVerticalPosition( double aGlyphHeight ) const
-    {
-        return aGlyphHeight * m_OverbarHeight;
-    }
-
-    /**
-     * Compute the vertical position of an underline.  This is the distance between the text
-     * baseline and the underline.
-     */
-    double GetUnderlineVerticalPosition( double aGlyphHeight ) const
-    {
-        return aGlyphHeight * m_UnderlineOffset;
-    }
-
-    double GetInterline( double aFontHeight ) const
-    {
-        return aFontHeight * m_InterlinePitch;
-    }
-
-    static const METRICS& Default();
-
-public:
-    double m_InterlinePitch  =  1.68;
-    double m_OverbarHeight   =  1.23;
-    double m_UnderlineOffset = -0.16;
-};
-
 /**
  * FONT is an abstract base class for both outline and stroke fonts
  */
@@ -158,15 +125,19 @@ public:
      * @param aCursor is the current text position (for multiple text blocks within a single text
      *                object, such as a run of superscript characters)
      * @param aAttrs are the styling attributes of the text, including its rotation
+     * @param aMousePos optional parameter for highlighting urls in text
+     * @param aActiveUrl optional [out] parameter for returning highlighted url
      */
     void Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosition,
                const VECTOR2I& aCursor, const TEXT_ATTRIBUTES& aAttributes,
-               const METRICS& aFontMetrics ) const;
+               const METRICS& aFontMetrics, std::optional<VECTOR2I> aMousePos = std::nullopt,
+               wxString* aActiveUrl = nullptr ) const;
 
     void Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosition,
-               const TEXT_ATTRIBUTES& aAttributes, const METRICS& aFontMetrics ) const
+               const TEXT_ATTRIBUTES& aAttributes, const METRICS& aFontMetrics,
+               std::optional<VECTOR2I> aMousePos = std::nullopt, wxString* aActiveUrl = nullptr ) const
     {
-        Draw( aGal, aText, aPosition, VECTOR2I( 0, 0 ), aAttributes, aFontMetrics );
+        Draw( aGal, aText, aPosition, VECTOR2I( 0, 0 ), aAttributes, aFontMetrics, aMousePos, aActiveUrl );
     }
 
     /**
@@ -247,12 +218,16 @@ protected:
      * @param aAngle is text angle.
      * @param aMirror is true if text should be drawn mirrored, false otherwise.
      * @param aOrigin is the point around which the text should be rotated, mirrored, etc.
+     * @param aItalic draw the text in italic
+     * @param aUnderline draw the text in underline
+     * @param aHover draw the text in hyperlink hover mode (nominally blue + underline)
      * @return new cursor position in non-rotated, non-mirrored coordinates
      */
     void drawSingleLineText( KIGFX::GAL* aGal, BOX2I* aBoundingBox, const wxString& aText,
                              const VECTOR2I& aPosition, const VECTOR2I& aSize,
                              const EDA_ANGLE& aAngle, bool aMirror, const VECTOR2I& aOrigin,
-                             bool aItalic, bool aUnderline, const METRICS& aFontMetrics ) const;
+                             bool aItalic, bool aUnderline, bool aHover, const METRICS& aFontMetrics,
+                             std::optional<VECTOR2I> aMousePos, wxString* aActiveUrl ) const;
 
     /**
      * Compute the bounding box for a single line of text.
@@ -278,7 +253,8 @@ protected:
                          const wxString& aText, const VECTOR2I& aPosition,
                          const VECTOR2I& aSize, const EDA_ANGLE& aAngle, bool aMirror,
                          const VECTOR2I& aOrigin, TEXT_STYLE_FLAGS aTextStyle,
-                         const METRICS& aFontMetrics ) const;
+                         const METRICS& aFontMetrics, std::optional<VECTOR2I> aMousePos = std::nullopt,
+                         wxString* aActiveUrl = nullptr ) const;
 
     void wordbreakMarkup( std::vector<std::pair<wxString, int>>* aWords, const wxString& aText,
                           const VECTOR2I& aSize, TEXT_STYLE_FLAGS aTextStyle ) const;

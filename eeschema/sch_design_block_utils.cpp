@@ -37,6 +37,7 @@
 #include <common.h>
 #include <kidialog.h>
 #include <confirm.h>
+#include <tool/actions.h>
 #include <tool/tool_manager.h>
 #include <sch_selection_tool.h>
 #include <dialogs/dialog_design_block_properties.h>
@@ -151,7 +152,7 @@ bool SCH_EDIT_FRAME::SaveSheetAsDesignBlock( const wxString& aLibraryName, SCH_S
 }
 
 
-bool SCH_EDIT_FRAME::SaveSheetToDesignBlock( const LIB_ID& aLibId, SCH_SHEET_PATH& aSheetPath )
+bool SCH_EDIT_FRAME::UpdateDesignBlockFromSheet( const LIB_ID& aLibId, SCH_SHEET_PATH& aSheetPath )
 {
     // Make sure the user has selected a library to save into
     if( !Prj().DesignBlockLibs()->DesignBlockExists( aLibId.GetLibNickname(), aLibId.GetLibItemName() ) )
@@ -179,6 +180,13 @@ bool SCH_EDIT_FRAME::SaveSheetToDesignBlock( const LIB_ID& aLibId, SCH_SHEET_PAT
     catch( const IO_ERROR& ioe )
     {
         DisplayError( this, ioe.What() );
+        return false;
+    }
+
+    if( !blk )
+    {
+        DisplayErrorMessage(
+                this, wxString::Format( _( "Design block '%s' does not exist." ), aLibId.GetUniStringLibItemName() ) );
         return false;
     }
 
@@ -376,6 +384,63 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
         DisplayError( this, ioe.What() );
     }
 
+    if( success && !group )
+    {
+        SCH_COMMIT  commit( m_toolManager );
+        SCH_SCREEN* screen = GetScreen();
+
+        SCH_GROUP* newGroup = new SCH_GROUP;
+        newGroup->SetParent( screen );
+        newGroup->SetName( blk.GetLibId().GetUniStringLibItemName() );
+        newGroup->SetDesignBlockLibId( blk.GetLibId() );
+
+        int addedCount = 0;
+
+        for( EDA_ITEM* edaItem : selection )
+        {
+            if( !edaItem->IsSCH_ITEM() )
+                continue;
+
+            SCH_ITEM* item = static_cast<SCH_ITEM*>( edaItem );
+
+            if( item->GetParentSymbol() )
+                continue;
+
+            if( !item->IsGroupableType() )
+                continue;
+
+            if( EDA_GROUP* existingGroup = item->GetParentGroup() )
+                commit.Modify( existingGroup->AsEdaItem(), screen, RECURSE_MODE::NO_RECURSE );
+
+            commit.Modify( item, screen, RECURSE_MODE::NO_RECURSE );
+            newGroup->AddItem( item );
+            addedCount++;
+        }
+
+        if( addedCount > 0 )
+        {
+            commit.Add( newGroup, screen );
+            commit.Push( _( "Group Items" ) );
+
+            m_toolManager->RunAction( ACTIONS::selectionClear );
+            m_toolManager->RunAction( ACTIONS::selectItem, newGroup->AsEdaItem() );
+        }
+        else
+        {
+            newGroup->RemoveAll();
+            delete newGroup;
+        }
+    }
+    else if( success && group && !group->HasDesignBlockLink() )
+    {
+        SCH_COMMIT commit( m_toolManager );
+
+        commit.Modify( group, GetScreen() );
+        group->SetDesignBlockLibId( blk.GetLibId() );
+
+        commit.Push( _( "Set Group Design Block Link" ) );
+    }
+
     // Clean up the temporaries
     wxRemoveFile( tempFile );
     // This will also delete the screen
@@ -388,7 +453,7 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
 }
 
 
-bool SCH_EDIT_FRAME::SaveSelectionToDesignBlock( const LIB_ID& aLibId )
+bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
 {
     // Get all selected items
     SCH_SELECTION selection = m_toolManager->GetTool<SCH_SELECTION_TOOL>()->GetSelection();
@@ -415,7 +480,7 @@ bool SCH_EDIT_FRAME::SaveSelectionToDesignBlock( const LIB_ID& aLibId )
             SCH_SHEET_PATH curPath = GetCurrentSheet();
 
             curPath.push_back( sheet );
-            SaveSheetToDesignBlock( aLibId, curPath );
+            UpdateDesignBlockFromSheet( aLibId, curPath );
         }
         else
         {
@@ -456,6 +521,13 @@ bool SCH_EDIT_FRAME::SaveSelectionToDesignBlock( const LIB_ID& aLibId )
     catch( const IO_ERROR& ioe )
     {
         DisplayError( this, ioe.What() );
+        return false;
+    }
+
+    if( !blk )
+    {
+        DisplayErrorMessage(
+                this, wxString::Format( _( "Design block '%s' does not exist." ), aLibId.GetUniStringLibItemName() ) );
         return false;
     }
 
@@ -529,13 +601,61 @@ bool SCH_EDIT_FRAME::SaveSelectionToDesignBlock( const LIB_ID& aLibId )
                 commit.Modify( group, GetScreen() );
                 group->SetDesignBlockLibId( aLibId );
 
-                commit.Push( "Set Group Design Block Link" );
+                commit.Push( _( "Set Group Design Block Link" ) );
             }
         }
     }
     catch( const IO_ERROR& ioe )
     {
         DisplayError( this, ioe.What() );
+    }
+
+    if( success && !group )
+    {
+        SCH_COMMIT  commit( m_toolManager );
+        SCH_SCREEN* screen = GetScreen();
+
+        SCH_GROUP* newGroup = new SCH_GROUP;
+        newGroup->SetParent( screen );
+        newGroup->SetName( aLibId.GetUniStringLibItemName() );
+        newGroup->SetDesignBlockLibId( aLibId );
+
+        int addedCount = 0;
+
+        for( EDA_ITEM* edaItem : selection )
+        {
+            if( !edaItem->IsSCH_ITEM() )
+                continue;
+
+            SCH_ITEM* item = static_cast<SCH_ITEM*>( edaItem );
+
+            if( item->GetParentSymbol() )
+                continue;
+
+            if( !item->IsGroupableType() )
+                continue;
+
+            if( EDA_GROUP* existingGroup = item->GetParentGroup() )
+                commit.Modify( existingGroup->AsEdaItem(), screen, RECURSE_MODE::NO_RECURSE );
+
+            commit.Modify( item, screen, RECURSE_MODE::NO_RECURSE );
+            newGroup->AddItem( item );
+            addedCount++;
+        }
+
+        if( addedCount > 0 )
+        {
+            commit.Add( newGroup, screen );
+            commit.Push( _( "Group Items" ) );
+
+            m_toolManager->RunAction( ACTIONS::selectionClear );
+            m_toolManager->RunAction( ACTIONS::selectItem, newGroup->AsEdaItem() );
+        }
+        else
+        {
+            newGroup->RemoveAll();
+            delete newGroup;
+        }
     }
 
     // Clean up the temporaries

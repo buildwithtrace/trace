@@ -2,6 +2,7 @@
  * This program source code file is part of KiCad, a free EDA CAD application.
  *
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,9 +27,9 @@
 #include <widgets/lib_tree.h>
 #include <design_block_tree_model_adapter.h>
 #include <widgets/html_window.h>
+#include <wx/timer.h>
 
 class wxPanel;
-class wxTimer;
 class wxSplitterWindow;
 
 class EDA_DRAW_FRAME;

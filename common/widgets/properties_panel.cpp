@@ -26,6 +26,8 @@
 #include <import_export.h>
 #include <pgm_base.h>
 #include <properties/pg_cell_renderer.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 #include <algorithm>
 #include <iterator>
@@ -49,10 +51,12 @@ PROPERTIES_PANEL::PROPERTIES_PANEL( wxWindow* aParent, EDA_BASE_FRAME* aFrame ) 
 {
     wxBoxSizer* mainSizer = new wxBoxSizer( wxVERTICAL );
 
+#if !wxCHECK_VERSION( 3, 3, 0 )
     // on some platforms wxPGGlobalVars is initialized automatically,
     // but others need an explicit init
     if( !wxPGGlobalVars )
         wxPGInitResourceModule();
+#endif
 
     // See https://gitlab.com/kicad/code/kicad/-/issues/12297
     // and https://github.com/wxWidgets/wxWidgets/issues/11787

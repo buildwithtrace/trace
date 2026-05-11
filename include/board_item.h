@@ -29,6 +29,7 @@
 #include <eda_item.h>
 #include <geometry/approximation.h>
 #include <layer_ids.h>
+#include <properties/property.h>
 #include <lseq.h>
 #include <lset.h>
 #include <stroke_params.h>
@@ -44,6 +45,10 @@ class PCB_BASE_FRAME;
 class SHAPE;
 class PCB_GROUP;
 class FOOTPRINT;
+namespace KIGFX
+{
+    class RENDER_SETTINGS;
+};
 
 namespace KIFONT
 {
@@ -401,7 +406,7 @@ public:
      * Convert the item shape to a closed polygon. Circles and arcs are approximated by segments.
      *
      * @param aBuffer a buffer to store the polygon.
-     * @param aClearance the clearance around the pad.
+     * @param aClearance the clearance around the polygonal shape (inflated polygon).
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
      * @param ignoreLineWidth used for edge cut items where the line width is only
@@ -413,17 +418,18 @@ public:
 
     /**
      * Convert the item shape to a polyset. Circles and arcs are approximated by segments; hatched
-     * fills will be included.
+     * fills and details (if any) will be included.
      *
      * @param aBuffer a buffer to store the polygon.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
-     * @param ignoreLineWidth used for edge cut items where the line width is only
-     *                        for visualization.
+     * @param aRenderSettings used to plot outlines with not solid segments like dashed lines.
+     * So it is not used by all BOARD_ITEMS. If null lines like dashed will be converted as SOLID
      */
     virtual void TransformShapeToPolySet( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer,
-                                          int aClearance, int aError, ERROR_LOC aErrorLoc ) const
+                                          int aClearance, int aError, ERROR_LOC aErrorLoc,
+                                          KIGFX::RENDER_SETTINGS* aRenderSettings = nullptr ) const
     {
         TransformShapeToPolygon( aBuffer, aLayer, aClearance, aError, aErrorLoc );
     }
@@ -459,7 +465,6 @@ protected:
 #ifndef SWIG
 DECLARE_ENUM_TO_WXANY( PCB_LAYER_ID );
 #endif
-
 
 /**
  * A singleton item of this class is returned for a weak reference that no longer exists.

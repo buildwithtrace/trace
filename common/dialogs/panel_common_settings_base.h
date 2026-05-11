@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-75-g9786507b-dirty)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -60,9 +60,13 @@ class PANEL_COMMON_SETTINGS_BASE : public RESETTABLE_PANEL
 		wxTextCtrl* m_textCtrlFileManager;
 		wxRadioButton* m_defaultPDFViewer;
 		wxRadioButton* m_otherPDFViewer;
-		wxTextCtrl* m_PDFViewerPath;
-		STD_BITMAP_BUTTON* m_pdfViewerBtn;
-		wxStaticText* m_staticText22;
+	wxTextCtrl* m_PDFViewerPath;
+	STD_BITMAP_BUTTON* m_pdfViewerBtn;
+	wxStaticText* m_stBackendUrlHeader;
+	wxStaticLine* m_backendUrlLine;
+	wxStaticText* m_stBackendUrlLabel;
+	wxTextCtrl* m_backendUrlCtrl;
+	wxStaticText* m_staticText22;
 		wxStaticLine* m_staticline1;
 		wxCheckBox* m_checkBoxIconsInMenus;
 		wxCheckBox* m_showScrollbars;
@@ -89,6 +93,7 @@ class PANEL_COMMON_SETTINGS_BASE : public RESETTABLE_PANEL
 		wxStaticText* m_highContrastUnits;
 		wxStaticText* m_staticText251;
 		wxStaticLine* m_staticline7;
+		wxBoxSizer* m_scalingSizer;
 		wxStaticText* m_staticText23;
 		wxStaticLine* m_staticline6;
 		wxCheckBox* m_warpMouseOnMove;

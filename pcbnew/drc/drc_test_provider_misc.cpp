@@ -22,6 +22,7 @@
  */
 
 #include <board_design_settings.h>
+#include <project/net_settings.h>
 #include <drc/drc_engine.h>
 #include <drc/drc_item.h>
 #include <drc/drc_rule.h>
@@ -142,66 +143,79 @@ void DRC_TEST_PROVIDER_MISC::testOutline()
 
     OUTLINE_ERROR_HANDLER errorHandler =
             [&]( const wxString& msg, BOARD_ITEM* itemA, BOARD_ITEM* itemB, const VECTOR2I& pt )
+    {
+        errorHandled = true;
+
+        if( m_drcEngine->IsErrorLimitExceeded( DRCE_INVALID_OUTLINE ) )
+            return;
+
+        if( !itemA )
+            std::swap( itemA, itemB );
+
+        VECTOR2I   markerPos = pt;
+        int        gap = 0;
+        PCB_SHAPE* shapeA = nullptr;
+        PCB_SHAPE* shapeB = nullptr;
+        bool       usedGap = false;
+
+        if( itemA && itemB && itemA->Type() == PCB_SHAPE_T && itemB->Type() == PCB_SHAPE_T )
+        {
+            shapeA = static_cast<PCB_SHAPE*>( itemA );
+            shapeB = static_cast<PCB_SHAPE*>( itemB );
+        }
+        else
+        {
+            findClosestOutlineGap( m_board, shapeA, shapeB, markerPos, gap );
+            itemA = shapeA;
+            itemB = shapeB;
+            usedGap = shapeA && shapeB;
+        }
+
+        if( shapeA && shapeB )
+        {
+            std::shared_ptr<SHAPE> effectiveShapeA = shapeA->GetEffectiveShape();
+            std::shared_ptr<SHAPE> effectiveShapeB = shapeB->GetEffectiveShape();
+
+            if( effectiveShapeA && effectiveShapeB )
             {
-                errorHandled = true;
+                BOX2I bboxA = effectiveShapeA->BBox();
+                BOX2I bboxB = effectiveShapeB->BBox();
+                BOX2I overlap = bboxA.Intersect( bboxB );
 
-                if( m_drcEngine->IsErrorLimitExceeded( DRCE_INVALID_OUTLINE ) )
-                    return;
-
-                if( !itemA )        // If we only have a single item, make sure it's A
-                    std::swap( itemA, itemB );
-
-                VECTOR2I   markerPos = pt;
-                int        gap = 0;
-                PCB_SHAPE* shapeA = nullptr;
-                PCB_SHAPE* shapeB = nullptr;
-
-                if( itemA && itemB && itemA->Type() == PCB_SHAPE_T && itemB->Type() == PCB_SHAPE_T )
+                if( overlap.GetWidth() > 0 && overlap.GetHeight() > 0 )
                 {
-                    shapeA = static_cast<PCB_SHAPE*>( itemA );
-                    shapeB = static_cast<PCB_SHAPE*>( itemB );
+                    markerPos = overlap.Centre();
+                    usedGap = false;
                 }
                 else
                 {
-                    findClosestOutlineGap( m_board, shapeA, shapeB, markerPos, gap );
+                    VECTOR2I ptA, ptB;
 
-                    itemA = shapeA;
-                    itemB = shapeB;
+                    if( effectiveShapeA->NearestPoints( effectiveShapeB.get(), ptA, ptB ) )
+                    {
+                        gap = ( ptA - ptB ).EuclideanNorm();
+                        markerPos = ( ptA + ptB ) / 2;
+                        usedGap = true;
+                    }
                 }
+            }
+        }
 
-                if( shapeA && shapeB )
-                {
-                    VECTOR2I pts0[2] = { shapeA->GetStart(), shapeA->GetEnd() };
-                    VECTOR2I pts1[2] = { shapeB->GetStart(), shapeB->GetEnd() };
+        std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_INVALID_OUTLINE );
 
-                    SEG::ecoord d[4];
-                    d[0] = ( pts0[0] - pts1[0] ).SquaredEuclideanNorm();
-                    d[1] = ( pts0[0] - pts1[1] ).SquaredEuclideanNorm();
-                    d[2] = ( pts0[1] - pts1[0] ).SquaredEuclideanNorm();
-                    d[3] = ( pts0[1] - pts1[1] ).SquaredEuclideanNorm();
+        if( itemA && itemB && usedGap )
+        {
+            drcItem->SetErrorDetail( wxString::Format( _( "%s (gap %s)" ), msg, MessageTextFromValue( gap ) ) );
+        }
+        else
+        {
+            drcItem->SetErrorDetail( msg );
+        }
 
-                    int idx = std::min_element( d, d + 4 ) - d;
-                    gap = std::sqrt( d[idx] );
-                    markerPos = ( pts0[idx / 2] + pts1[idx % 2] ) / 2;
-                }
+        drcItem->SetItems( itemA, itemB );
 
-                std::shared_ptr<DRC_ITEM> drcItem = DRC_ITEM::Create( DRCE_INVALID_OUTLINE );
-
-                if( itemA && itemB )
-                {
-                    drcItem->SetErrorDetail( wxString::Format( _( "%s (gap %s)" ),
-                                                               msg,
-                                                               MessageTextFromValue( gap ) ) );
-                }
-                else
-                {
-                    drcItem->SetErrorDetail( msg );
-                }
-
-                drcItem->SetItems( itemA, itemB );
-
-                reportViolation( drcItem, markerPos, Edge_Cuts );
-            };
+        reportViolation( drcItem, markerPos, Edge_Cuts );
+    };
 
     // Test for very small graphic items (a few nm size) that can create issues
     // when trying to build the board outlines, and they are not easy to locate on screen.
@@ -231,7 +245,7 @@ void DRC_TEST_PROVIDER_MISC::testOutline()
     // Arc to segment approximation error (not critical here: we do not use the outline shape):
     int maxError = pcbIUScale.mmToIU( 0.05 );
 
-    if( !BuildBoardPolygonOutlines( m_board, dummyOutline, maxError, chainingEpsilon, &errorHandler ) )
+    if( !BuildBoardPolygonOutlines( m_board, dummyOutline, maxError, chainingEpsilon, true, &errorHandler ) )
     {
         if( errorHandled )
         {

@@ -11,6 +11,7 @@
 #include <wx/xrc/xmlres.h>
 #include <wx/intl.h>
 class STD_BITMAP_BUTTON;
+class UP_DOWN_TREE;
 
 #include "widgets/resettable_panel.h"
 #include <wx/string.h>
@@ -20,15 +21,16 @@ class STD_BITMAP_BUTTON;
 #include <wx/colour.h>
 #include <wx/settings.h>
 #include <wx/statline.h>
+#include <wx/stattext.h>
 #include <wx/choice.h>
-#include <wx/treectrl.h>
 #include <wx/sizer.h>
+#include <wx/treectrl.h>
+#include <widgets/split_button.h>
 #include <wx/bmpbuttn.h>
 #include <wx/bitmap.h>
 #include <wx/image.h>
 #include <wx/icon.h>
 #include <wx/button.h>
-#include <widgets/split_button.h>
 #include <wx/listctrl.h>
 #include <wx/panel.h>
 
@@ -44,12 +46,13 @@ class PANEL_TOOLBAR_CUSTOMIZATION_BASE : public RESETTABLE_PANEL
 	protected:
 		wxCheckBox* m_customToolbars;
 		wxStaticLine* m_staticline1;
+		wxStaticText* m_toolbarChoiceLabel;
 		wxChoice* m_tbChoice;
-		wxTreeCtrl* m_toolbarTree;
-		STD_BITMAP_BUTTON* m_btnToolDelete;
+		UP_DOWN_TREE* m_toolbarTree;
+		SPLIT_BUTTON* m_insertButton;
 		STD_BITMAP_BUTTON* m_btnToolMoveUp;
 		STD_BITMAP_BUTTON* m_btnToolMoveDown;
-		SPLIT_BUTTON* m_insertButton;
+		STD_BITMAP_BUTTON* m_btnToolDelete;
 		STD_BITMAP_BUTTON* m_btnAddTool;
 		wxListCtrl* m_actionsList;
 
@@ -59,15 +62,16 @@ class PANEL_TOOLBAR_CUSTOMIZATION_BASE : public RESETTABLE_PANEL
 		virtual void onTbChoiceSelect( wxCommandEvent& event ) { event.Skip(); }
 		virtual void onTreeBeginLabelEdit( wxTreeEvent& event ) { event.Skip(); }
 		virtual void onTreeEndLabelEdit( wxTreeEvent& event ) { event.Skip(); }
-		virtual void onToolDelete( wxCommandEvent& event ) { event.Skip(); }
 		virtual void onToolMoveUp( wxCommandEvent& event ) { event.Skip(); }
 		virtual void onToolMoveDown( wxCommandEvent& event ) { event.Skip(); }
+		virtual void onToolDelete( wxCommandEvent& event ) { event.Skip(); }
 		virtual void onBtnAddAction( wxCommandEvent& event ) { event.Skip(); }
+		virtual void onListItemActivated( wxListEvent& event ) { event.Skip(); }
 
 
 	public:
 
-		PANEL_TOOLBAR_CUSTOMIZATION_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 561,333 ), long style = wxTAB_TRAVERSAL, const wxString& name = wxEmptyString );
+		PANEL_TOOLBAR_CUSTOMIZATION_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( -1,-1 ), long style = wxTAB_TRAVERSAL, const wxString& name = wxEmptyString );
 
 		~PANEL_TOOLBAR_CUSTOMIZATION_BASE();
 

@@ -27,7 +27,7 @@ PANEL_PACKAGES_AND_UPDATES_BASE::PANEL_PACKAGES_AND_UPDATES_BASE( wxWindow* pare
 	wxBoxSizer* bSizer41;
 	bSizer41 = new wxBoxSizer( wxVERTICAL );
 
-	m_cbKicadUpdate = new wxCheckBox( this, wxID_ANY, _("Check for KiCad updates on startup"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_cbKicadUpdate = new wxCheckBox( this, wxID_ANY, _("Check for Trace updates on startup"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_cbKicadUpdate->SetValue(true);
 	bSizer41->Add( m_cbKicadUpdate, 0, wxTOP|wxBOTTOM|wxLEFT, 5 );
 

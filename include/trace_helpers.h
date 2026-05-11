@@ -122,7 +122,7 @@ extern KICOMMON_API const wxChar* const traceSchPlugin;
 extern KICOMMON_API const wxChar* const traceSchLegacyPlugin;
 
 /**
- * Flag to enable GEDA PCB plugin debug output.
+ * Flag to enable KiCad PCB plugin debug output.
  *
  * Use "KICAD_PCB_PLUGIN" to enable.
  */
@@ -338,7 +338,57 @@ extern KICOMMON_API const wxChar* const traceLibraries;
  */
 extern KICOMMON_API const wxChar* const traceSchMove;
 
+/**
+ * Flag to enable tracing of circular symbol inheritance detection.
+ *
+ * Use "KICAD_SYMBOL_INHERITANCE" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceSymbolInheritance;
+
+/**
+ * Flag to enable AI operation tracing.
+ *
+ * Use "TRACE_AI" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceAi;
+
+/**
+ * Flag to enable AI tool call tracing.
+ *
+ * Use "TRACE_AI_TOOL_CALL" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceAiToolCall;
+
+/**
+ * Flag to enable AI file operation tracing.
+ *
+ * Use "TRACE_AI_FILE_OP" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceAiFileOp;
+
+/**
+ * Flag to enable file save operation tracing.
+ *
+ * Use "TRACE_FILE_SAVE" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceFileSave;
+
+/**
+ * Flag to enable AI backend/streaming tracing.
+ *
+ * Use "TRACE_AI_BACKEND" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceAiBackend;
+
 ///@}
+
+/**
+ * Get a FILE* handle for the diagnostic log file.
+ * Creates the log directory if it doesn't exist.
+ * Uses PATHS::GetLogsPath() for cross-platform compatibility.
+ * @return FILE* opened for append, or nullptr on failure. Caller must fclose().
+ */
+KICOMMON_API FILE* GetDiagnosticLogFile();
 
 /**
  * Debug helper for printing wxKeyEvent information.
@@ -389,6 +439,21 @@ public:
 #endif
 
     bool IsTraceEnabled( const wxString& aWhat );
+
+    /**
+     * Initialize always-on file logging: opens the session log file,
+     * installs the wxLog target, and sets up signal handlers.
+     */
+    void InitLogging();
+
+#ifdef KICAD_DIAGNOSTIC_LOGGING
+    /**
+     * Create the live GUI diagnostic console window (dev builds only).
+     * Must be called after InitLogging().
+     * @param aParent Optional parent window (usually nullptr).
+     */
+    void InitDiagnosticConsoleWindow( wxWindow* aParent = nullptr );
+#endif
 
 private:
     void traceV( const wxString& aWhat, const wxString& aFmt, va_list vargs );

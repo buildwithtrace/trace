@@ -4,6 +4,7 @@
  * Copyright (C) 2012-2015 Jean-Pierre Charras, jp.charras at wanadoo.fr
  * Copyright (C) 2008-2016 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -27,6 +28,8 @@
 #include <bitmaps.h>
 #include <board_commit.h>
 #include <board.h>
+#include <project/net_settings.h>
+#include <settings/color_settings.h>
 #include <footprint.h>
 #include <confirm.h>
 #include <eda_pattern_match.h>
@@ -34,12 +37,14 @@
 #include <footprint_viewer_frame.h>
 #include <footprint_library_adapter.h>
 #include <kiway.h>
-#include <kiway_express.h>
+#include <kiway_mail.h>
 #include <netlist_reader/pcb_netlist.h>
+#include <widgets/kistatusbar.h>
 #include <widgets/msgpanel.h>
 #include <widgets/wx_listbox.h>
 #include <widgets/wx_aui_utils.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <pad.h>
 #include <pcb_draw_panel_gal.h>
 #include <pcb_painter.h>
 #include <pcbnew_id.h>
@@ -103,7 +108,7 @@ FOOTPRINT_VIEWER_FRAME::FOOTPRINT_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent
                     FOOTPRINT_VIEWER_FRAME_NAME ),
    m_comp( LIB_ID(), wxEmptyString, wxEmptyString, KIID_PATH(), {} )
 {
-    m_aboutTitle = _HKI( "KiCad Footprint Library Browser" );
+    m_aboutTitle = _HKI( "Trace Footprint Library Browser" );
 
     // Force the items to always snap
     m_magneticItems.pads     = MAGNETIC_OPTIONS::CAPTURE_ALWAYS;
@@ -257,7 +262,7 @@ FOOTPRINT_VIEWER_FRAME::FOOTPRINT_VIEWER_FRAME( KIWAY* aKiway, wxWindow* aParent
     // Horizontal items; layers 4 - 6
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().VToolbar().Name( "TopMainToolbar" ).Top().Layer(6) );
     m_auimgr.AddPane( m_tbLeft, EDA_PANE().VToolbar().Name( "LeftToolbar" ).Left().Layer(3) );
-    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(6) );
+    m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer(1) );
 
     // Vertical items; layers 1 - 3
     m_auimgr.AddPane( libPanel, EDA_PANE().Palette().Name( "Libraries" ).Left().Layer(2)
@@ -352,9 +357,6 @@ void FOOTPRINT_VIEWER_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::cursorSmallCrosshairs, CHECK( cond.CursorSmallCrosshairs() ) );
     mgr->SetConditions( ACTIONS::cursorFullCrosshairs,  CHECK( cond.CursorFullCrosshairs() ) );
     mgr->SetConditions( ACTIONS::cursor45Crosshairs,    CHECK( cond.Cursor45Crosshairs() ) );
-    mgr->SetConditions( ACTIONS::millimetersUnits,  CHECK( cond.Units( EDA_UNITS::MM ) ) );
-    mgr->SetConditions( ACTIONS::inchesUnits,       CHECK( cond.Units( EDA_UNITS::INCH ) ) );
-    mgr->SetConditions( ACTIONS::milsUnits,         CHECK( cond.Units( EDA_UNITS::MILS ) ) );
 
     mgr->SetConditions( PCB_ACTIONS::saveFpToBoard, ENABLE( addToBoardCond ) );
 
@@ -487,21 +489,16 @@ void FOOTPRINT_VIEWER_FRAME::ReCreateFootprintList()
     if( !getCurNickname() )
         setCurFootprintName( wxEmptyString );
 
-    auto fp_info_list = FOOTPRINT_LIST::GetInstance( Kiway() );
-
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &Prj() );
     wxString nickname = getCurNickname();
 
-    fp_info_list->ReadFootprintFiles( PROJECT_PCB::FootprintLibAdapter( &Prj() ), !nickname ? nullptr : &nickname );
+    if( !nickname )
+        return;
 
-    if( fp_info_list->GetErrorCount() )
-    {
-        fp_info_list->DisplayErrors( this );
+    std::vector<FOOTPRINT*> footprints = adapter->GetFootprints( nickname, true );
 
-        // For footprint libraries that support one footprint per file, there may have been
-        // valid footprints read so show the footprints that loaded properly.
-        if( fp_info_list->GetList().empty() )
-            return;
-    }
+    if( footprints.empty() )
+        return;
 
     std::set<wxString> excludes;
 
@@ -514,24 +511,25 @@ void FOOTPRINT_VIEWER_FRAME::ReCreateFootprintList()
             const wxString       filterTerm = tokenizer.GetNextToken().Lower();
             EDA_COMBINED_MATCHER matcher( filterTerm, CTX_LIBITEM );
 
-            for( const std::unique_ptr<FOOTPRINT_INFO>& footprint : fp_info_list->GetList() )
+            for( FOOTPRINT* footprint : footprints )
             {
-                std::vector<SEARCH_TERM> searchTerms = footprint->GetSearchTerms();
-                int                      matched = matcher.ScoreTerms( searchTerms );
+                int matched = matcher.ScoreTerms( footprint->GetSearchTerms() );
 
-                if( filterTerm.IsNumber() && wxAtoi( filterTerm ) == (int)footprint->GetPadCount() )
+                if( filterTerm.IsNumber() && wxAtoi( filterTerm ) == (int)footprint->GetPadCount( DO_NOT_INCLUDE_NPTH ) )
                     matched++;
 
                 if( !matched )
-                    excludes.insert( footprint->GetFootprintName() );
+                    excludes.insert( footprint->GetFPID().GetLibItemName() );
             }
         }
     }
 
-    for( const std::unique_ptr<FOOTPRINT_INFO>& footprint : fp_info_list->GetList() )
+    for( FOOTPRINT* footprint : footprints )
     {
-        if( !excludes.count( footprint->GetFootprintName() ) )
-            m_fpList->Append( footprint->GetFootprintName() );
+        wxString fpName = footprint->GetFPID().GetLibItemName();
+
+        if( !excludes.count( fpName ) )
+            m_fpList->Append( fpName );
     }
 
     int index = wxNOT_FOUND;
@@ -952,7 +950,7 @@ void FOOTPRINT_VIEWER_FRAME::HardRedraw()
     ReloadFootprint( GetBoard()->GetFirstFootprint() );
 }
 
-void FOOTPRINT_VIEWER_FRAME::KiwayMailIn( KIWAY_EXPRESS& mail )
+void FOOTPRINT_VIEWER_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 {
     switch( mail.Command() )
     {
@@ -1090,4 +1088,3 @@ BOARD_ITEM_CONTAINER* FOOTPRINT_VIEWER_FRAME::GetModel() const
 {
     return GetBoard()->GetFirstFootprint();
 }
-

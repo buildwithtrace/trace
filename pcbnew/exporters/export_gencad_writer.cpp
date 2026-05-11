@@ -19,6 +19,7 @@
 #include "export_gencad_writer.h"
 
 #include <build_version.h>
+#include <common.h>
 #include <board.h>
 #include <board_design_settings.h>
 #include <convert_basic_shapes_to_polygon.h>
@@ -26,9 +27,7 @@
 #include <footprint.h>
 #include <pad.h>
 #include <pcb_track.h>
-#include <richio.h>
 #include <string_utils.h>
-#include <locale_io.h>
 #include <macros.h>
 #include <hash_eda.h>
 #include <fmt.h>
@@ -44,9 +43,9 @@ static std::string genCADLayerName( int aCuCount, PCB_LAYER_ID aId )
         else if( aId == B_Cu )
             return "BOTTOM";
         else if( aId <= 14 )
-            return StrPrintf( "INNER%d", aCuCount - aId - 1 );
+            return fmt::format( "INNER{}", aCuCount - aId - 1 );
         else
-            return StrPrintf( "LAYER%d", aId );
+            return fmt::format( "LAYER{}", static_cast<int>( aId ) );
     }
 
     else
@@ -94,7 +93,7 @@ static std::string genCADLayerName( int aCuCount, PCB_LAYER_ID aId )
 static std::string genCADLayerNameFlipped( int aCuCount, PCB_LAYER_ID aId )
 {
     if( 1<= aId && aId <= 14 )
-        return StrPrintf(  "INNER%d", 14 - aId );
+        return fmt::format(  "INNER{}", 14 - aId );
 
     return genCADLayerName( aCuCount, aId );
 }
@@ -167,7 +166,7 @@ bool GENCAD_EXPORTER::WriteFile( const wxString& aFullFileName )
     BOARD*  pcb = m_board;
 
     // Update some board data, to ensure a reliable GenCAD export.
-    pcb->ComputeBoundingBox( false );
+    pcb->ComputeBoundingBox( false, false );
 
     /* Temporary modification of footprints that are flipped (i.e. on bottom
      * layer) to convert them to non flipped footprints.
@@ -1085,7 +1084,9 @@ void GENCAD_EXPORTER::createBoardSection()
 
     // Extract the board edges
     SHAPE_POLY_SET outline;
-    m_board->GetBoardPolygonOutlines( outline );
+
+    if( !m_board->GetBoardPolygonOutlines( outline, true ) )
+        wxLogError( _( "Board outline is malformed. Run DRC for a full analysis." ) );
 
     for( auto seg1 = outline.IterateSegmentsWithHoles(); seg1; seg1++ )
     {

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://go.kicad.org/schemas/kicad-remote-symbol-manifest-v1.schema.json",
+  "title": "KiCad Remote Symbol Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "part_id",
+    "display_name",
+    "assets"
+  ],
+  "properties": {
+    "part_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string"
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "asset_type",
+          "name",
+          "content_type",
+          "size_bytes",
+          "sha256",
+          "download_url",
+          "required"
+        ],
+        "properties": {
+          "asset_type": {
+            "type": "string",
+            "enum": [
+              "symbol",
+              "footprint",
+              "3dmodel",
+              "spice"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_library": {
+            "type": "string"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$"
+          },
+          "download_url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

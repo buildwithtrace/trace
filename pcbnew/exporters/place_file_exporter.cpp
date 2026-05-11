@@ -32,6 +32,7 @@
 #include <board_design_settings.h>
 #include <build_version.h>
 #include <exporters/place_file_exporter.h>
+#include <footprint.h>
 #include <pad.h>
 
 #include <fmt/format.h>
@@ -139,7 +140,7 @@ std::string PLACE_FILE_EXPORTER::GenPositionData()
                 continue;
         }
 
-        if( footprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES )
+        if( footprint->GetExcludedFromPosFilesForVariant( m_variant ) )
             continue;
 
         if( m_onlySMD && !( footprint->GetAttributes() & FP_SMD ) )
@@ -148,10 +149,10 @@ std::string PLACE_FILE_EXPORTER::GenPositionData()
         if( m_excludeAllTH && footprint->HasThroughHolePads() )
             continue;
 
-        if( m_excludeDNP && ( footprint->GetAttributes() & FP_DNP ) )
+        if( m_excludeDNP && footprint->GetDNPForVariant( m_variant ) )
             continue;
 
-        if( m_excludeBOM && ( footprint->GetAttributes() & FP_EXCLUDE_FROM_BOM ) )
+        if( m_excludeBOM && footprint->GetExcludedFromBOMForVariant( m_variant ) )
             continue;
 
         m_fpCount++;
@@ -315,7 +316,7 @@ std::string PLACE_FILE_EXPORTER::GenReportData()
 
     buffer += "\n$BeginDESCRIPTION\n";
 
-    BOX2I bbbox = m_board->ComputeBoundingBox( false );
+    BOX2I bbbox = m_board->ComputeBoundingBox( false, true );
 
     buffer += "\n$BOARD\n";
 

@@ -34,7 +34,7 @@
 #define ARG_FORCE_A4 "--force-a4"
 
 CLI::PCB_EXPORT_PS_COMMAND::PCB_EXPORT_PS_COMMAND() :
-        PCB_EXPORT_BASE_COMMAND( "ps", false, true )
+        PCB_EXPORT_BASE_COMMAND( "ps", IO_TYPE::FILE, IO_TYPE::DIRECTORY )
 {
     m_argParser.add_description( UTF8STDSTR( _( "Generate Postscript from a list of layers" ) ) );
 
@@ -142,6 +142,8 @@ CLI::PCB_EXPORT_PS_COMMAND::PCB_EXPORT_PS_COMMAND() :
     m_argParser.add_argument( ARG_CHECK_ZONES )
             .help( UTF8STDSTR( _( ARG_CHECK_ZONES_DESC ) ) )
             .flag();
+
+    addVariantsArg();
 }
 
 
@@ -153,6 +155,9 @@ int CLI::PCB_EXPORT_PS_COMMAND::doPerform( KIWAY& aKiway )
     psJob->SetConfiguredOutputPath( m_argOutput );
     psJob->m_drawingSheet = m_argDrawingSheet;
     psJob->SetVarOverrides( m_argDefineVars );
+
+    if( !m_argVariantNames.empty() )
+        psJob->m_variant = m_argVariantNames.front();
 
     if( !wxFile::Exists( psJob->m_filename ) )
     {
@@ -173,6 +178,8 @@ int CLI::PCB_EXPORT_PS_COMMAND::doPerform( KIWAY& aKiway )
     psJob->m_checkZonesBeforePlot = m_argParser.get<bool>( ARG_CHECK_ZONES );
 
     psJob->m_sketchPadsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_PADS_ON_FAB_LAYERS );
+    if( psJob->m_sketchPadsOnFabLayers )
+        psJob->m_plotPadNumbers = true;
     psJob->m_hideDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_HIDE_DNP_FPS_ON_FAB_LAYERS );
     psJob->m_sketchDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_SKETCH_DNP_FPS_ON_FAB_LAYERS );
     psJob->m_crossoutDNPFPsOnFabLayers = m_argParser.get<bool>( ARG_CROSSOUT_DNP_FPS_ON_FAB_LAYERS );

@@ -50,7 +50,7 @@ public:
         SetLayer( LAYER_RULE_AREAS );
     }
 
-    virtual ~SCH_RULE_AREA() {}
+    virtual ~SCH_RULE_AREA();
 
     wxString GetClass() const override;
 
@@ -91,8 +91,17 @@ public:
     /**
      * Set or clear exclude from board netlist flag.
      */
-    void SetExcludedFromBoard( bool aExcludeFromBoard ) override { m_excludedFromBoard = aExcludeFromBoard; }
-    bool GetExcludedFromBoard() const override { return m_excludedFromBoard; }
+    void SetExcludedFromBoard( bool aExclude, const SCH_SHEET_PATH* aInstance = nullptr,
+                               const wxString& aVariantName = wxEmptyString ) override
+    {
+        m_excludedFromBoard = aExclude;
+    }
+
+    bool GetExcludedFromBoard( const SCH_SHEET_PATH* aInstance = nullptr,
+                               const wxString& aVariantName = wxEmptyString ) const override
+    {
+        return m_excludedFromBoard;
+    }
 
     /**
      * Set or clear the 'Do Not Populate' flag.
@@ -156,6 +165,13 @@ protected:
     bool          m_excludedFromBOM;
     bool          m_excludedFromBoard;
     bool          m_DNP;                   ///< True if symbol is set to 'Do Not Populate'.
+
+public:
+    /// Remove an item from this rule area's caches (called when the item is deleted).
+    void RemoveItem( SCH_ITEM* aItem );
+
+    /// Remove a directive label from this rule area's caches (called when the label is deleted).
+    void RemoveDirective( SCH_DIRECTIVE_LABEL* aLabel );
 
     /// All #SCH_ITEM objects currently contained or intersecting the rule area.  No ownership.
     std::unordered_set<SCH_ITEM*>            m_items;

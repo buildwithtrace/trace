@@ -35,6 +35,7 @@
 #include <filename_resolver.h>
 #include <pcb_edit_frame.h>
 #include <pcbnew_settings.h>
+#include <pcb_fields_grid_table.h>
 #include <pgm_base.h>
 #include <project_pcb.h>
 #include <kiplatform/ui.h>
@@ -63,7 +64,6 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
         m_netClearance( aParent, m_NetClearanceLabel, m_NetClearanceCtrl, m_NetClearanceUnits ),
         m_solderMask( aParent, m_SolderMaskMarginLabel, m_SolderMaskMarginCtrl, m_SolderMaskMarginUnits ),
         m_solderPaste( aParent, m_SolderPasteMarginLabel, m_SolderPasteMarginCtrl, m_SolderPasteMarginUnits ),
-        m_solderPasteRatio( aParent, m_PasteMarginRatioLabel, m_PasteMarginRatioCtrl, m_PasteMarginRatioUnits ),
         m_returnValue( FP_PROPS_CANCEL ),
         m_initialized( false )
 {
@@ -132,10 +132,12 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
         SetInitialFocus( m_NetClearanceCtrl );
     }
 
-    m_solderPaste.SetNegativeZero();
-
-    m_solderPasteRatio.SetUnits( EDA_UNITS::PERCENT );
-    m_solderPasteRatio.SetNegativeZero();
+    // Update label text and tooltip for combined offset + ratio field
+    m_SolderPasteMarginLabel->SetLabel( _( "Solder paste clearance:" ) );
+    m_SolderPasteMarginLabel->SetToolTip( _( "Local solder paste clearance for this footprint.\n"
+                                             "Enter an absolute value (e.g., -0.1mm), a percentage "
+                                             "(e.g., -5%), or both (e.g., -0.1mm - 5%).\n"
+                                             "If blank, the global value is used." ) );
 
     // Configure button logos
     m_bpAdd->SetBitmap( KiBitmapBundle( BITMAPS::small_plus ) );
@@ -161,7 +163,6 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
         m_SolderMaskMarginCtrl,
       	m_allowSolderMaskBridges,
         m_SolderPasteMarginCtrl,
-      	m_PasteMarginRatioCtrl,
         m_ZoneConnectionChoice
     };
 
@@ -250,11 +251,19 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
     if( !m_embeddedFiles->TransferDataToWindow() )
         return false;
 
+    wxString variantName;
+
+    if( m_footprint->GetBoard() )
+        variantName = m_footprint->GetBoard()->GetCurrentVariant();
+
     // Footprint Fields
     for( PCB_FIELD* srcField : m_footprint->GetFields() )
     {
+        wxCHECK2( srcField, continue );
+
         PCB_FIELD field( *srcField );
-        field.SetText( m_footprint->GetBoard()->ConvertKIIDsToCrossReferences( field.GetText() ) );
+        wxString  text = m_footprint->GetFieldValueForVariant( variantName, field.GetName() );
+        field.SetText( m_footprint->GetBoard()->ConvertKIIDsToCrossReferences( text ) );
 
         m_fields->push_back( field );
     }
@@ -285,9 +294,10 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
         m_componentType->SetSelection( 2 );
 
     m_boardOnly->SetValue( m_footprint->GetAttributes() & FP_BOARD_ONLY );
-    m_excludeFromPosFiles->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES );
-    m_excludeFromBOM->SetValue( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_BOM );
-    m_cbDNP->SetValue( m_footprint->GetAttributes() & FP_DNP );
+
+    m_excludeFromPosFiles->SetValue( m_footprint->GetExcludedFromPosFilesForVariant( variantName ) );
+    m_excludeFromBOM->SetValue( m_footprint->GetExcludedFromBOMForVariant( variantName ) );
+    m_cbDNP->SetValue( m_footprint->GetDNPForVariant( variantName ) );
 
     // Local Clearances
 
@@ -301,15 +311,8 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
     else
         m_solderMask.SetValue( wxEmptyString );
 
-    if( m_footprint->GetLocalSolderPasteMargin().has_value() )
-        m_solderPaste.SetValue( m_footprint->GetLocalSolderPasteMargin().value() );
-    else
-        m_solderPaste.SetValue( wxEmptyString );
-
-    if( m_footprint->GetLocalSolderPasteMarginRatio().has_value() )
-        m_solderPasteRatio.SetDoubleValue( m_footprint->GetLocalSolderPasteMarginRatio().value() * 100.0 );
-    else
-        m_solderPasteRatio.SetValue( wxEmptyString );
+    m_solderPaste.SetOffsetValue( m_footprint->GetLocalSolderPasteMargin() );
+    m_solderPaste.SetRatioValue( m_footprint->GetLocalSolderPasteMarginRatio() );
 
     m_allowSolderMaskBridges->SetValue( m_footprint->AllowSolderMaskBridges() );
 
@@ -533,6 +536,8 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     // Find any files referenced in the old fields that are not in the new fields
     for( PCB_FIELD* field : m_footprint->GetFields() )
     {
+        wxCHECK2( field, continue );
+
         if( field->GetText().StartsWith( FILEEXT::KiCadUriPrefix ) )
         {
             if( files.find( field->GetText() ) == files.end() )
@@ -547,8 +552,26 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     }
 
     // Update fields
+    BOARD* board = m_footprint->GetBoard();
+
+    wxString variantName;
+
+    if( board )
+        variantName = board->GetCurrentVariant();
+
+    // Save base field values before deletion so we can detect variant changes
+    std::map<wxString, wxString> baseFieldValues;
+
     for( PCB_FIELD* existing : m_footprint->GetFields() )
+        baseFieldValues[existing->GetName()] = existing->GetText();
+
+    for( PCB_FIELD* existing : m_footprint->GetFields() )
+    {
+        if( board )
+            board->UncacheItemById( existing->m_Uuid );
+
         delete existing;
+    }
 
     m_footprint->GetFields().clear();
 
@@ -557,7 +580,27 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     for( PCB_FIELD& field : *m_fields )
     {
         PCB_FIELD* newField = field.CloneField();
-        newField->SetText( commit.GetBoard()->ConvertCrossReferencesToKIIDs( field.GetText() ) );
+        wxString   newText = commit.GetBoard()->ConvertCrossReferencesToKIIDs( field.GetText() );
+
+        if( !variantName.IsEmpty() )
+        {
+            auto     it = baseFieldValues.find( field.GetName() );
+            wxString baseText = ( it != baseFieldValues.end() ) ? it->second : wxString();
+
+            FOOTPRINT_VARIANT* variant = m_footprint->GetVariant( variantName );
+
+            if( !variant )
+                variant = m_footprint->AddVariant( variantName );
+
+            if( variant )
+                variant->SetFieldValue( field.GetName(), newText );
+
+            newField->SetText( baseText );
+        }
+        else
+        {
+            newField->SetText( newText );
+        }
 
         if( !field.IsMandatory() )
             newField->SetOrdinal( ordinal++ );
@@ -585,15 +628,8 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     else
         m_footprint->SetLocalSolderMaskMargin( m_solderMask.GetValue() );
 
-    if( m_solderPaste.IsNull() )
-        m_footprint->SetLocalSolderPasteMargin( {} );
-    else
-        m_footprint->SetLocalSolderPasteMargin( m_solderPaste.GetValue() );
-
-    if( m_solderPasteRatio.IsNull() )
-        m_footprint->SetLocalSolderPasteMarginRatio( {} );
-    else
-        m_footprint->SetLocalSolderPasteMarginRatio( m_solderPasteRatio.GetDoubleValue() / 100.0 );
+    m_footprint->SetLocalSolderPasteMargin( m_solderPaste.GetOffsetValue() );
+    m_footprint->SetLocalSolderPasteMarginRatio( m_solderPaste.GetRatioValue() );
 
     switch( m_ZoneConnectionChoice->GetSelection() )
     {
@@ -621,14 +657,41 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     if( m_boardOnly->GetValue() )
         attributes |= FP_BOARD_ONLY;
 
-    if( m_excludeFromPosFiles->GetValue() )
-        attributes |= FP_EXCLUDE_FROM_POS_FILES;
+    if( !variantName.IsEmpty() )
+    {
+        FOOTPRINT_VARIANT* variant = m_footprint->GetVariant( variantName );
 
-    if( m_excludeFromBOM->GetValue() )
-        attributes |= FP_EXCLUDE_FROM_BOM;
+        if( !variant )
+            variant = m_footprint->AddVariant( variantName );
 
-    if( m_cbDNP->GetValue() )
-        attributes |= FP_DNP;
+        if( variant )
+        {
+            variant->SetExcludedFromPosFiles( m_excludeFromPosFiles->GetValue() );
+            variant->SetExcludedFromBOM( m_excludeFromBOM->GetValue() );
+            variant->SetDNP( m_cbDNP->GetValue() );
+        }
+
+        // Preserve base attribute flags for these three properties
+        if( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_POS_FILES )
+            attributes |= FP_EXCLUDE_FROM_POS_FILES;
+
+        if( m_footprint->GetAttributes() & FP_EXCLUDE_FROM_BOM )
+            attributes |= FP_EXCLUDE_FROM_BOM;
+
+        if( m_footprint->GetAttributes() & FP_DNP )
+            attributes |= FP_DNP;
+    }
+    else
+    {
+        if( m_excludeFromPosFiles->GetValue() )
+            attributes |= FP_EXCLUDE_FROM_POS_FILES;
+
+        if( m_excludeFromBOM->GetValue() )
+            attributes |= FP_EXCLUDE_FROM_BOM;
+
+        if( m_cbDNP->GetValue() )
+            attributes |= FP_DNP;
+    }
 
     m_footprint->SetAttributes( attributes );
 

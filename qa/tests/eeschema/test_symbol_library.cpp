@@ -163,4 +163,45 @@ BOOST_AUTO_TEST_CASE( AsyncLoad )
     }
 }
 
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23480
+// Verifies that reloading project tables during an async library load does not
+// crash due to dangling LIBRARY_TABLE_ROW pointers held by background workers.
+BOOST_AUTO_TEST_CASE( ProjectChangeDuringAsyncLoad )
+{
+    if( !wxGetEnv( wxT( "KICAD_CONFIG_HOME_IS_QA" ), nullptr ) )
+    {
+        BOOST_TEST_MESSAGE( "QA test is running using unknown config home; skipping" );
+        return;
+    }
+
+    LIBRARY_MANAGER manager;
+    manager.LoadGlobalTables();
+
+    wxFileName fn( KI_TEST::GetTestDataRootDir(), "test_project.kicad_sch" );
+    fn.AppendDir( "libraries" );
+    fn.AppendDir( "test_project" );
+
+    LoadSchematic( fn.GetFullPath() );
+    PROJECT& project = SettingsManager().Prj();
+    manager.LoadProjectTables( project.GetProjectDirectory() );
+
+    manager.RegisterAdapter( LIBRARY_TABLE_TYPE::SYMBOL,
+                             std::make_unique<SYMBOL_LIBRARY_ADAPTER>( manager ) );
+
+    auto adapterOpt = manager.Adapter( LIBRARY_TABLE_TYPE::SYMBOL );
+    BOOST_REQUIRE( adapterOpt.has_value() );
+    SYMBOL_LIBRARY_ADAPTER* adapter = static_cast<SYMBOL_LIBRARY_ADAPTER*>( *adapterOpt );
+
+    adapter->AsyncLoad();
+
+    // Immediately trigger a project table reload while async workers are running.
+    // Before the fix, this destroyed table rows that workers were still using.
+    manager.ProjectChanged();
+
+    adapter->BlockUntilLoaded();
+
+    BOOST_TEST_MESSAGE( "ProjectChanged during async load completed without crash" );
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()

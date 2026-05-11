@@ -36,6 +36,8 @@
 #include <pcb_generator.h>
 #include <footprint.h>
 #include <font/font.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 
 bool BOARD_ITEM::IsGroupableType() const
@@ -273,6 +275,9 @@ void BOARD_ITEM::SwapItemData( BOARD_ITEM* aImage )
     if( aImage == nullptr )
         return;
 
+    if( aImage->Type() != Type() )
+        return;
+
     EDA_ITEM* parent = GetParent();
 
     swapData( aImage );
@@ -305,8 +310,8 @@ void BOARD_ITEM::TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID 
                                           int aClearance, int aError, ERROR_LOC aErrorLoc,
                                           bool ignoreLineWidth ) const
 {
-    wxFAIL_MSG( wxString::Format( wxT( "%s doesn't implement TransformShapeToPolygon()" ), GetClass() ) );
-};
+    wxLogDebug( wxT( "%s doesn't implement TransformShapeToPolygon()" ), GetClass() );
+}
 
 
 bool BOARD_ITEM::ptr_cmp::operator() ( const BOARD_ITEM* a, const BOARD_ITEM* b ) const
@@ -440,15 +445,12 @@ static struct BOARD_ITEM_DESC
 
         propMgr.AddProperty( new PROPERTY<BOARD_ITEM, int>( _HKI( "Position X" ),
                     &BOARD_ITEM::SetX, &BOARD_ITEM::GetX, PROPERTY_DISPLAY::PT_COORD,
-                    ORIGIN_TRANSFORMS::ABS_X_COORD ) )
-               .SetAvailableFunc( isNotFootprintHolder );
+                    ORIGIN_TRANSFORMS::ABS_X_COORD ) );
         propMgr.AddProperty( new PROPERTY<BOARD_ITEM, int>( _HKI( "Position Y" ),
                     &BOARD_ITEM::SetY, &BOARD_ITEM::GetY, PROPERTY_DISPLAY::PT_COORD,
-                    ORIGIN_TRANSFORMS::ABS_Y_COORD ) )
-               .SetAvailableFunc( isNotFootprintHolder );
+                    ORIGIN_TRANSFORMS::ABS_Y_COORD ) );
         propMgr.AddProperty( new PROPERTY_ENUM<BOARD_ITEM, PCB_LAYER_ID>( _HKI( "Layer" ),
-                    &BOARD_ITEM::SetLayer, &BOARD_ITEM::GetLayer ) )
-               .SetAvailableFunc( isNotFootprintHolder );
+                    &BOARD_ITEM::SetLayer, &BOARD_ITEM::GetLayer ) );
         propMgr.AddProperty( new PROPERTY<BOARD_ITEM, bool>( _HKI( "Locked" ),
                     &BOARD_ITEM::SetLocked, &BOARD_ITEM::IsLocked ) )
                .SetAvailableFunc( isNotFootprintHolder );

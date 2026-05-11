@@ -5,6 +5,7 @@
  * Copyright (C) 2015 SoftPLC Corporation, Dick Hollenbeck <dick@softplc.com>
  * Copyright (C) 2015-2016 Wayne Stambaugh <stambaughw@gmail.com>
  * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * Copyright The Trace Developers, see TRACE_AUTHORS.txt for contributors.
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -36,23 +37,27 @@
 #include "tools/pcb_selection_tool.h"
 #include <python/scripting/pcb_scripting_tool.h>
 #include <3d_viewer/eda_3d_viewer_frame.h>
+#include <auth/auth_manager.h>
 #include <bitmaps.h>
 #include <board.h>
+#include <project/net_settings.h>
+#include <widgets/wx_infobar.h>
 #include <footprint.h>
 #include <confirm.h>
 #include <footprint_edit_frame.h>
 #include <footprint_editor_settings.h>
-#include <footprint_info_impl.h>
 #include <footprint_library_adapter.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <kiface_base.h>
 #include <kiplatform/app.h>
+#include <kiplatform/ui.h>
 #include <kiway.h>
 #include <macros.h>
 #include <pcbnew_id.h>
 #include <pgm_base.h>
 #include <project.h>
 #include <project_pcb.h>
+#include <string_utils.h>
 #include <settings/settings_manager.h>
 #include <tool/action_toolbar.h>
 #include <tool/common_control.h>
@@ -73,7 +78,6 @@
 #include <widgets/lib_tree.h>
 #include <widgets/panel_selection_filter.h>
 #include <widgets/pcb_properties_panel.h>
-#include <widgets/wx_progress_reporters.h>
 #include <wildcards_and_files_ext.h>
 #include <widgets/wx_aui_utils.h>
 #include <toolbars_footprint_editor.h>
@@ -95,6 +99,10 @@ BEGIN_EVENT_TABLE( FOOTPRINT_EDIT_FRAME, PCB_BASE_FRAME )
     // Drop files event
     EVT_DROP_FILES( FOOTPRINT_EDIT_FRAME::OnDropFiles )
 
+    // Account menu
+    EVT_MENU( ID_ACCOUNT_SIGN_IN_PCB, FOOTPRINT_EDIT_FRAME::onSignIn )
+    EVT_MENU( ID_ACCOUNT_SIGN_OUT_PCB, FOOTPRINT_EDIT_FRAME::onSignOut )
+
 END_EVENT_TABLE()
 
 
@@ -105,7 +113,7 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_show_layer_manager_tools( true )
 {
     m_showBorderAndTitleBlock = false;   // true to show the frame references
-    m_aboutTitle = _HKI( "KiCad Footprint Editor" );
+    m_aboutTitle = _HKI( "Trace Footprint Editor" );
     m_editorSettings = nullptr;
 
     // Give an icon
@@ -173,6 +181,9 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     ReCreateMenuBar();
 
+    // Listen for auth state changes to update the Account menu
+    AUTH_MANAGER::Instance().Bind( EVT_AUTH_STATE_CHANGED, &FOOTPRINT_EDIT_FRAME::onAuthStateChanged, this );
+
     m_selectionFilterPanel = new PANEL_SELECTION_FILTER( this );
     m_appearancePanel = new APPEARANCE_CONTROLS( this, GetCanvas(), true );
     m_propertiesPanel = new PCB_PROPERTIES_PANEL( this, this );
@@ -221,13 +232,15 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                       .Top().Layer( 6 ) );
 
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" )
-                      .Bottom().Layer( 6 ) );
+                      .Bottom().Layer( 1 ) );
 
     // Columns; layers 1 - 3
     m_auimgr.AddPane( m_treePane, EDA_PANE().Palette().Name( "Footprints" )
                       .Left().Layer( 4 )
                       .Caption( _( "Libraries" ) )
-                      .MinSize( FromDIP( 250 ), -1 ).BestSize( FromDIP( 250 ), -1 ) );
+                      // Don't use -1 for don't-change-height on a growable panel; it has side-effects.
+                      .MinSize( FromDIP( 250 ), FromDIP( 80 ) )
+                      .BestSize( FromDIP( 250 ), -1 ) );
     m_auimgr.AddPane( m_propertiesPanel, EDA_PANE().Name( PropertiesPaneName() )
                       .Left().Layer( 3 )
                       .Caption( _( "Properties" ) ).PaneBorder( false )
@@ -240,11 +253,15 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_auimgr.AddPane( m_appearancePanel, EDA_PANE().Name( "LayersManager" )
                       .Right().Layer( 3 )
                       .Caption( _( "Appearance" ) ).PaneBorder( false )
-                      .MinSize( FromDIP( 180 ), -1 ).BestSize( FromDIP( 180 ), -1 ) );
+                      // Don't use -1 for don't-change-height on a growable panel; it has side-effects.
+                      .MinSize( FromDIP( 180 ), FromDIP( 80 ) )
+                      .BestSize( FromDIP( 180 ), -1 ) );
     m_auimgr.AddPane( m_selectionFilterPanel, EDA_PANE().Palette().Name( "SelectionFilter" )
                       .Right().Layer( 3 ).Position( 2 )
                       .Caption( _( "Selection Filter" ) ).PaneBorder( false )
-                      .MinSize( FromDIP( 180 ), -1 ).BestSize( FromDIP( 180 ), -1 ) );
+                      // Fixed-size pane; -1 for MinSize height is required
+                      .MinSize( FromDIP( 180 ), -1 )
+                      .BestSize( FromDIP( 180 ), -1 ) );
 
     // Center
     m_auimgr.AddPane( GetCanvas(), EDA_PANE().Canvas().Name( "DrawFrame" )
@@ -326,6 +343,9 @@ FOOTPRINT_EDIT_FRAME::FOOTPRINT_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
 FOOTPRINT_EDIT_FRAME::~FOOTPRINT_EDIT_FRAME()
 {
+    // Unbind auth state change handler
+    AUTH_MANAGER::Instance().Unbind( EVT_AUTH_STATE_CHANGED, &FOOTPRINT_EDIT_FRAME::onAuthStateChanged, this );
+
     // Shutdown all running tools
     if( m_toolManager )
         m_toolManager->ShutdownAllTools();
@@ -539,32 +559,34 @@ void FOOTPRINT_EDIT_FRAME::updateEnabledLayers()
     // All FPs have these layers enabled
     LSET enabledLayers = LSET::AllTechMask() | LSET::UserMask();
 
-    const auto configureStackup = [&]( FOOTPRINT_STACKUP aMode, const LSET& aLayerSet )
-    {
-        const LSET cuLayers = aLayerSet & LSET::AllCuMask();
-        board.SetCopperLayerCount( cuLayers.count() );
+    const auto configureStackup =
+            [&]( FOOTPRINT_STACKUP aMode, const LSET& aLayerSet )
+            {
+                const LSET cuLayers = aLayerSet & LSET::AllCuMask();
+                board.SetCopperLayerCount( cuLayers.count() );
 
-        switch( aMode )
-        {
-        case FOOTPRINT_STACKUP::EXPAND_INNER_LAYERS:
-        {
-            enabledLayers |= LSET{ F_Cu, In1_Cu, B_Cu };
-            enabledLayers |= LSET::UserDefinedLayersMask( 4 );
-            board.SetLayerName( In1_Cu, _( "Inner layers" ) );
-            break;
-        }
-        case FOOTPRINT_STACKUP::CUSTOM_LAYERS:
-        {
-            // Nothing extra to add
+                switch( aMode )
+                {
+                case FOOTPRINT_STACKUP::EXPAND_INNER_LAYERS:
+                {
+                    enabledLayers |= LSET{ F_Cu, In1_Cu, B_Cu };
+                    board.SetLayerName( In1_Cu, _( "Inner layers" ) );
+                    break;
+                }
 
-            // Clear layer name defaults
-            board.SetLayerName( In1_Cu, wxEmptyString );
-            break;
-        }
-        }
+                case FOOTPRINT_STACKUP::CUSTOM_LAYERS:
+                {
+                    // Nothing extra to add
 
-        enabledLayers |= aLayerSet;
-    };
+                    // Clear layer name defaults
+                    board.SetLayerName( In1_Cu, wxEmptyString );
+                    break;
+                }
+
+                }
+
+                enabledLayers |= aLayerSet;
+            };
 
     if( footprint )
     {
@@ -589,9 +611,12 @@ void FOOTPRINT_EDIT_FRAME::updateEnabledLayers()
             RECURSE_MODE::RECURSE );
     }
 
-    // Enable any layers that the user has gone to the trouble to name
+    // Enable the user-configured number of user layers, plus any specifically named layers
     if( FOOTPRINT_EDITOR_SETTINGS* cfg = GetAppSettings<FOOTPRINT_EDITOR_SETTINGS>( "fpedit" ) )
     {
+        int userLayerCount = cfg->m_DesignSettings.GetUserDefinedLayerCount();
+        enabledLayers |= LSET::UserDefinedLayersMask( userLayerCount );
+
         for( const PCB_LAYER_ID& user : LSET::UserDefinedLayersMask() )
         {
             if( cfg->m_DesignSettings.m_UserLayerNames.contains( LSET::Name( user ).ToStdString() ) )
@@ -624,66 +649,79 @@ void FOOTPRINT_EDIT_FRAME::ReloadFootprint( FOOTPRINT* aFootprint )
 
     updateEnabledLayers();
 
-    const wxString libName = aFootprint->GetFPID().GetLibNickname();
+    // Use CallAfter so that we update the canvas before waiting for the infobar animation
+    CallAfter(
+            [this]()
+            {
+                FOOTPRINT* fp = GetBoard()->GetFirstFootprint();
+                wxString   libName = fp->GetFPID().GetLibNickname();
+                wxString   msg, link;
 
-    if( IsCurrentFPFromBoard() )
-    {
-        const wxString msg = wxString::Format( _( "Editing %s from board.  Saving will update the board only." ),
-                                               aFootprint->GetReference() );
-        const wxString openLibLink = wxString::Format( _( "Open in library %s" ),
-                                                       UnescapeString( libName ) );
-
-        const auto openLibraryCopy =
-                [this]( wxHyperlinkEvent& aEvent )
+                if( IsCurrentFPFromBoard() )
                 {
-                    GetToolManager()->RunAction( PCB_ACTIONS::editLibFpInFpEditor );
-                };
+                    msg.Printf( _( "Editing %s from board.  Saving will update the board only." ), fp->GetReference() );
+                    link.Printf( _( "Open in library %s" ), UnescapeString( libName ) );
 
-        if( WX_INFOBAR* infobar = GetInfoBar() )
-        {
-            wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, openLibLink,
-                                                           wxEmptyString );
-            button->Bind( wxEVT_COMMAND_HYPERLINK, openLibraryCopy );
+                    const auto openLibraryCopy =
+                            [this]( wxHyperlinkEvent& aEvent )
+                            {
+                                GetToolManager()->RunAction( PCB_ACTIONS::editLibFpInFpEditor );
+                            };
 
-            infobar->RemoveAllButtons();
-            infobar->AddButton( button );
-            infobar->AddCloseButton();
-            infobar->ShowMessage( msg, wxICON_INFORMATION );
-        }
-    }
-    // An empty libname is OK - you get that when creating a new footprint from the main menu
-    // In that case. treat is as editable, and the user will be prompted for save-as when saving.
-    else if( !libName.empty()
-             && !PROJECT_PCB::FootprintLibAdapter( &Prj() )->IsFootprintLibWritable( libName ) )
-    {
-        wxString msg = wxString::Format( _( "Editing footprint from read-only library %s." ),
-                                         UnescapeString( libName ) );
-
-        if( WX_INFOBAR* infobar = GetInfoBar() )
-        {
-            wxString link = _( "Save as editable copy" );
-
-            const auto saveAsEditableCopy =
-                    [this, aFootprint]( wxHyperlinkEvent& aEvent )
+                    if( WX_INFOBAR* infobar = GetInfoBar() )
                     {
-                        SaveFootprintAs( aFootprint );
-                        SyncLibraryTree( true );
-                    };
+                        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, link, wxEmptyString );
+                        button->Bind( wxEVT_COMMAND_HYPERLINK, openLibraryCopy );
 
-            wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, link, wxEmptyString );
-            button->Bind( wxEVT_COMMAND_HYPERLINK, saveAsEditableCopy );
+                        infobar->RemoveAllButtons();
+                        infobar->AddButton( button );
+                        infobar->AddCloseButton();
+                        infobar->ShowMessage( msg, wxICON_INFORMATION );
+                    }
+                }
+                // An empty libname is OK - you get that when creating a new footprint from the main menu
+                // In that case. treat is as editable, and the user will be prompted for save-as when saving.
+                else if( !libName.empty()
+                         && !PROJECT_PCB::FootprintLibAdapter( &Prj() )->IsFootprintLibWritable( libName ) )
+                {
+                    msg.Printf( _( "Editing footprint from read-only library %s." ), UnescapeString( libName ) );
 
-            infobar->RemoveAllButtons();
-            infobar->AddButton( button );
-            infobar->AddCloseButton();
-            infobar->ShowMessage( msg, wxICON_INFORMATION );
-        }
-    }
-    else
-    {
-        if( WX_INFOBAR* infobar = GetInfoBar() )
-            infobar->Dismiss();
-    }
+                    if( WX_INFOBAR* infobar = GetInfoBar() )
+                    {
+                        link = _( "Save as editable copy" );
+
+                        const auto saveAsEditableCopy =
+                                [this]( wxHyperlinkEvent& aEvent )
+                                {
+                                    SaveFootprintAs( GetBoard()->GetFirstFootprint() );
+                                    GetCanvas()->GetView()->Update( GetBoard()->GetFirstFootprint() );
+                                    ClearModify();
+
+                                    // Get rid of the save-will-update-board-only (or any other dismissable warning)
+                                    WX_INFOBAR* loc_infobar = GetInfoBar();
+
+                                    if( loc_infobar->IsShownOnScreen() && loc_infobar->HasCloseButton() )
+                                        loc_infobar->Dismiss();
+
+                                    GetCanvas()->ForceRefresh();
+                                    SyncLibraryTree( true );
+                                };
+
+                        wxHyperlinkCtrl* button = new wxHyperlinkCtrl( infobar, wxID_ANY, link, wxEmptyString );
+                        button->Bind( wxEVT_COMMAND_HYPERLINK, saveAsEditableCopy );
+
+                        infobar->RemoveAllButtons();
+                        infobar->AddButton( button );
+                        infobar->AddCloseButton();
+                        infobar->ShowMessage( msg, wxICON_INFORMATION );
+                    }
+                }
+                else
+                {
+                    if( WX_INFOBAR* infobar = GetInfoBar() )
+                        infobar->Dismiss();
+                }
+            } );
 
     UpdateMsgPanel();
     UpdateUserInterface();
@@ -806,7 +844,12 @@ void FOOTPRINT_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
         cfg->m_DesignSettings  = GetDesignSettings();
         cfg->m_Display         = m_displayOptions;
         cfg->m_LibWidth        = m_treePane->GetSize().x;
-        cfg->m_SelectionFilter = GetToolManager()->GetTool<PCB_SELECTION_TOOL>()->GetFilter();
+
+        if( TOOL_MANAGER* toolMgr = GetToolManager() )
+        {
+            if( PCB_SELECTION_TOOL* selTool = toolMgr->GetTool<PCB_SELECTION_TOOL>() )
+                cfg->m_SelectionFilter = selTool->GetFilter();
+        }
 
         cfg->m_AuiPanels.show_layer_manager = m_show_layer_manager_tools;
 
@@ -980,13 +1023,6 @@ void FOOTPRINT_EDIT_FRAME::doCloseWindow()
     m_auimgr.GetPane( wxT( "SelectionFilter" ) ).Show( false );
 
     Clear_Pcb( false );
-
-    SETTINGS_MANAGER* mgr = GetSettingsManager();
-
-    if( mgr->IsProjectOpen() && wxFileName::IsDirWritable( Prj().GetProjectPath() ) )
-    {
-        GFootprintList.WriteCacheToFile( Prj().GetProjectPath() + wxT( "fp-info-cache" ) );
-    }
 }
 
 
@@ -1126,17 +1162,6 @@ void FOOTPRINT_EDIT_FRAME::initLibraryTree()
 {
     FOOTPRINT_LIBRARY_ADAPTER* footprints = PROJECT_PCB::FootprintLibAdapter( &Prj() );
 
-    WX_PROGRESS_REPORTER progressReporter( this, _( "Load Footprint Libraries" ), 1, PR_CAN_ABORT );
-
-    if( GFootprintList.GetCount() == 0 )
-        GFootprintList.ReadCacheFromFile( Prj().GetProjectPath() + wxT( "fp-info-cache" ) );
-
-    GFootprintList.ReadFootprintFiles( footprints, nullptr, &progressReporter );
-    progressReporter.Show( false );
-
-    if( GFootprintList.GetErrorCount() )
-        GFootprintList.DisplayErrors( this );
-
     m_adapter = FP_TREE_SYNCHRONIZING_ADAPTER::Create( this, footprints );
     auto adapter = static_cast<FP_TREE_SYNCHRONIZING_ADAPTER*>( m_adapter.get() );
 
@@ -1144,24 +1169,12 @@ void FOOTPRINT_EDIT_FRAME::initLibraryTree()
 }
 
 
-void FOOTPRINT_EDIT_FRAME::SyncLibraryTree( bool aProgress )
+void FOOTPRINT_EDIT_FRAME::SyncLibraryTree( [[maybe_unused]] bool aProgress )
 {
     FOOTPRINT_LIBRARY_ADAPTER* footprints = PROJECT_PCB::FootprintLibAdapter( &Prj() );
     auto          adapter = static_cast<FP_TREE_SYNCHRONIZING_ADAPTER*>( m_adapter.get() );
     LIB_ID        target = GetTargetFPID();
     bool          targetSelected = ( target == GetLibTree()->GetSelectedLibId() );
-
-    // Sync FOOTPRINT_INFO list to the libraries on disk
-    if( aProgress )
-    {
-        WX_PROGRESS_REPORTER progressReporter( this, _( "Update Footprint Libraries" ), 1, PR_CAN_ABORT );
-        GFootprintList.ReadFootprintFiles( footprints, nullptr, &progressReporter );
-        progressReporter.Show( false );
-    }
-    else
-    {
-        GFootprintList.ReadFootprintFiles( footprints, nullptr, nullptr );
-    }
 
     // Unselect before syncing to avoid null reference in the adapter
     // if a selected item is removed during the sync
@@ -1368,7 +1381,7 @@ void FOOTPRINT_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( PCB_ACTIONS::rotateCcw,          ENABLE( cond.HasItems() ) );
     mgr->SetConditions( PCB_ACTIONS::mirrorH,            ENABLE( cond.HasItems() ) );
     mgr->SetConditions( PCB_ACTIONS::mirrorV,            ENABLE( cond.HasItems() ) );
-    mgr->SetConditions( ACTIONS::group,                  ENABLE( SELECTION_CONDITIONS::NotEmpty ) );
+    mgr->SetConditions( ACTIONS::group,                  ENABLE( SELECTION_CONDITIONS::MoreThan( 1 ) ) );
     mgr->SetConditions( ACTIONS::ungroup,                ENABLE( SELECTION_CONDITIONS::HasType( PCB_GROUP_T ) ) );
 
     mgr->SetConditions( PCB_ACTIONS::padDisplayMode,     CHECK( !cond.PadFillDisplay() ) );
@@ -1385,11 +1398,10 @@ void FOOTPRINT_EDIT_FRAME::setupUIConditions()
                 return GetDisplayOptions().m_ContrastModeDisplay != HIGH_CONTRAST_MODE::NORMAL;
             };
 
-    auto boardFlippedCond =
-            [this]( const SELECTION& )
-            {
-                return GetCanvas() && GetCanvas()->GetView()->IsMirroredX();
-            };
+    auto boardFlippedCond = [this]( const SELECTION& )
+    {
+        return GetDisplayOptions().m_FlipBoardView;
+    };
 
     auto libraryTreeCond =
             [this](const SELECTION& )
@@ -1553,6 +1565,8 @@ void FOOTPRINT_EDIT_FRAME::OnSaveFootprintAsPng( wxCommandEvent& event )
     wxFileDialog dlg( this, _( "Export View as PNG" ), projectPath, fn.GetFullName(),
                       FILEEXT::PngFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );
 
+    KIPLATFORM::UI::AllowNetworkFileSystems( &dlg );
+
     if( dlg.ShowModal() == wxID_CANCEL || dlg.GetPath().IsEmpty() )
         return;
 
@@ -1560,4 +1574,33 @@ void FOOTPRINT_EDIT_FRAME::OnSaveFootprintAsPng( wxCommandEvent& event )
     // to refresh the screen before creating the PNG or JPEG image from screen
     wxYield();
     this->SaveCanvasImageToFile( dlg.GetPath(), BITMAP_TYPE::PNG );
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onSignIn( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().StartLogin();
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onSignOut( wxCommandEvent& event )
+{
+    AUTH_MANAGER::Instance().SignOut();
+}
+
+
+void FOOTPRINT_EDIT_FRAME::onAuthStateChanged( wxCommandEvent& event )
+{
+    CallAfter( [this]() {
+        doReCreateMenuBar();
+
+#ifdef __WXMAC__
+        if( wxMenuBar* menuBar = GetMenuBar() )
+        {
+            menuBar->Refresh();
+        }
+#endif
+    } );
+
+    event.Skip();
 }

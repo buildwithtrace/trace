@@ -224,8 +224,8 @@ wxString DESIGN_BLOCK_PANE::createNewDesignBlockLibrary( const wxString& aDialog
 bool DESIGN_BLOCK_PANE::AddDesignBlockLibrary( const wxString& aDialogTitle, const wxString& aFilename,
                                                LIBRARY_TABLE_SCOPE aScope )
 {
-    // TODO(JE) library tables -- figure out where Jeff's added aDialogTitle should be used?
-    bool isGlobal = ( aScope == LIBRARY_TABLE_SCOPE::GLOBAL );
+    DESIGN_BLOCK_LIBRARY_ADAPTER* adapter = m_frame->Prj().DesignBlockLibs();
+    LIBRARY_MANAGER&              manager = Pgm().GetLibraryManager();
 
     wxFileName fn( aFilename );
     wxString   libPath = fn.GetFullPath();
@@ -235,7 +235,7 @@ bool DESIGN_BLOCK_PANE::AddDesignBlockLibrary( const wxString& aDialogTitle, con
         return false;
 
     // Open a dialog to ask for a description
-    wxString description = wxGetTextFromUser( _( "Enter a description for the library:" ), _( "Library Description" ),
+    wxString description = wxGetTextFromUser( _( "Enter a description for the library:" ), aDialogTitle,
                                               wxEmptyString, m_frame );
 
     DESIGN_BLOCK_IO_MGR::DESIGN_BLOCK_FILE_T lib_type = DESIGN_BLOCK_IO_MGR::GuessPluginTypeFromLibPath( libPath );
@@ -253,11 +253,11 @@ bool DESIGN_BLOCK_PANE::AddDesignBlockLibrary( const wxString& aDialogTitle, con
     // try to use path normalized to an environmental variable or project path
     wxString normalizedPath = NormalizePath( libPath, &Pgm().GetLocalEnvVariables(), &m_frame->Prj() );
 
-    std::optional<LIBRARY_TABLE*> optTable =
-                Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK, aScope );
-    wxCHECK( optTable, false );
-    LIBRARY_TABLE* table = *optTable;
+    std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::DESIGN_BLOCK, aScope );
+    wxCHECK( optTable.has_value(), false );
+    LIBRARY_TABLE* table = optTable.value();
 
+    bool               success = true;
     LIBRARY_TABLE_ROW& newRow = table->InsertRow();
 
     newRow.SetNickname( libName );
@@ -266,20 +266,21 @@ bool DESIGN_BLOCK_PANE::AddDesignBlockLibrary( const wxString& aDialogTitle, con
     newRow.SetDescription( description );
 
     table->Save().map_error(
-        [&]( const LIBRARY_ERROR& aError )
-        {
-            wxString msg = wxString::Format( _( "Error saving library table:\n\n%s" ), aError.message );
-            DisplayError( m_frame, msg );
-        } );
+            [&]( const LIBRARY_ERROR& aError )
+            {
+                DisplayError( m_frame, _( "Error saving library table:\n\n" ) + aError.message );
+                success = false;
+            } );
 
-    if( isGlobal )
-        Pgm().GetLibraryManager().LoadGlobalTables();
-    else
-        Pgm().GetLibraryManager().ProjectChanged();
+    if( success )
+    {
+        manager.ReloadTables( aScope, { LIBRARY_TABLE_TYPE::DESIGN_BLOCK } );
+        adapter->LoadOne( libName );
 
-    LIB_ID libID( libName, wxEmptyString );
-    RefreshLibs();
-    SelectLibId( libID );
+        LIB_ID libID( libName, wxEmptyString );
+        RefreshLibs();
+        SelectLibId( libID );
+    }
 
     return true;
 }
@@ -375,7 +376,6 @@ bool DESIGN_BLOCK_PANE::EditDesignBlockProperties( const LIB_ID& aLibId )
         return false;
 
     wxString libname = aLibId.GetLibNickname();
-    wxString dbname = aLibId.GetLibItemName();
 
     if( !m_frame->Prj().DesignBlockLibs()->IsDesignBlockLibWritable( libname ) )
     {

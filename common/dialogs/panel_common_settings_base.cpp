@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-75-g9786507b-dirty)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -154,6 +154,28 @@ PANEL_COMMON_SETTINGS_BASE::PANEL_COMMON_SETTINGS_BASE( wxWindow* parent, wxWind
 
 	bLeftSizer->Add( 0, 15, 0, 0, 5 );
 
+	m_stBackendUrlHeader = new wxStaticText( this, wxID_ANY, _("Backend"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_stBackendUrlHeader->Wrap( -1 );
+	bLeftSizer->Add( m_stBackendUrlHeader, 0, wxTOP|wxRIGHT|wxLEFT, 13 );
+
+	m_backendUrlLine = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
+	bLeftSizer->Add( m_backendUrlLine, 0, wxEXPAND|wxTOP|wxBOTTOM, 2 );
+
+	wxBoxSizer* bBackendUrlSizer;
+	bBackendUrlSizer = new wxBoxSizer( wxHORIZONTAL );
+
+	m_stBackendUrlLabel = new wxStaticText( this, wxID_ANY, _("Backend URL:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_stBackendUrlLabel->Wrap( -1 );
+	bBackendUrlSizer->Add( m_stBackendUrlLabel, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT|wxLEFT, 5 );
+
+	m_backendUrlCtrl = new wxTextCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	bBackendUrlSizer->Add( m_backendUrlCtrl, 1, wxALIGN_CENTER_VERTICAL, 5 );
+
+	bLeftSizer->Add( bBackendUrlSizer, 0, wxTOP|wxLEFT|wxEXPAND, 5 );
+
+
+	bLeftSizer->Add( 0, 15, 0, 0, 5 );
+
 	m_staticText22 = new wxStaticText( this, wxID_ANY, _("User Interface"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticText22->Wrap( -1 );
 	bLeftSizer->Add( m_staticText22, 0, wxTOP|wxRIGHT|wxLEFT, 13 );
@@ -296,20 +318,25 @@ PANEL_COMMON_SETTINGS_BASE::PANEL_COMMON_SETTINGS_BASE( wxWindow* parent, wxWind
 	bLeftSizer->Add( bUserInterfaceSizer, 0, wxTOP|wxLEFT|wxEXPAND, 5 );
 
 
-	bLeftSizer->Add( 0, 0, 0, 0, 5 );
-
-	m_staticText251 = new wxStaticText( this, wxID_ANY, _("Scaling"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticText251->Wrap( -1 );
-	bLeftSizer->Add( m_staticText251, 0, wxLEFT|wxRIGHT|wxTOP, 15 );
-
-	m_staticline7 = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
-	bLeftSizer->Add( m_staticline7, 0, wxEXPAND | wxALL, 5 );
-
-
 	bPanelSizer->Add( bLeftSizer, 0, wxRIGHT, 35 );
 
 	wxBoxSizer* rightSizer;
 	rightSizer = new wxBoxSizer( wxVERTICAL );
+
+	m_staticText251 = new wxStaticText( this, wxID_ANY, _("Scaling"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticText251->Wrap( -1 );
+	rightSizer->Add( m_staticText251, 0, wxLEFT|wxRIGHT|wxTOP|wxEXPAND, 13 );
+
+	m_staticline7 = new wxStaticLine( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
+	rightSizer->Add( m_staticline7, 0, wxEXPAND|wxTOP, 2 );
+
+	m_scalingSizer = new wxBoxSizer( wxVERTICAL );
+
+
+	rightSizer->Add( m_scalingSizer, 1, wxEXPAND|wxTOP|wxRIGHT|wxLEFT, 10 );
+
+
+	rightSizer->Add( 0, 15, 0, wxEXPAND, 5 );
 
 	m_staticText23 = new wxStaticText( this, wxID_ANY, _("Editing"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_staticText23->Wrap( -1 );
@@ -421,7 +448,7 @@ PANEL_COMMON_SETTINGS_BASE::PANEL_COMMON_SETTINGS_BASE( wxWindow* parent, wxWind
 	rightSizer->Add( bProjectBackupSizer, 0, wxEXPAND|wxTOP|wxLEFT, 5 );
 
 
-	bPanelSizer->Add( rightSizer, 0, wxRIGHT|wxLEFT, 5 );
+	bPanelSizer->Add( rightSizer, 1, wxLEFT|wxRIGHT, 5 );
 
 
 	this->SetSizer( bPanelSizer );

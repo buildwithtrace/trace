@@ -31,6 +31,7 @@
 #include <common.h>
 #include <core/mirror.h>
 #include <eda_draw_frame.h>
+#include <footprint.h>
 #include <pcb_draw_panel_gal.h>
 #include <pcb_painter.h>
 #include <plotters/plotter.h>
@@ -40,6 +41,8 @@
 #include <trigo.h>
 
 #include <wx/mstream.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 
 using KIGFX::PCB_PAINTER;
 using KIGFX::PCB_RENDER_SETTINGS;
@@ -171,7 +174,13 @@ void PCB_REFERENCE_IMAGE::Move( const VECTOR2I& aMoveVector )
 void PCB_REFERENCE_IMAGE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
     m_referenceImage.Flip( aCentre, aFlipDirection );
+
+    if( GetBoard() )
+        SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+    else
+        SetLayer( FlipLayer( GetLayer() ) );
 }
+
 
 void PCB_REFERENCE_IMAGE::Rotate( const VECTOR2I& aCenter, const EDA_ANGLE& aAngle )
 {

@@ -75,7 +75,7 @@ private:
 class KICOMMON_API GRID_CELL_ICON_RENDERER : public wxGridCellRenderer
 {
 public:
-    GRID_CELL_ICON_RENDERER( const wxBitmap& icon );
+    GRID_CELL_ICON_RENDERER( const wxBitmapBundle& aIcon );
 
     void Draw( wxGrid& aGrid, wxGridCellAttr& aAttr, wxDC& aDC,
                const wxRect& aRect, int aRow, int aCol, bool isSelected ) override;
@@ -84,7 +84,7 @@ public:
     wxGridCellRenderer* Clone() const override;
 
 private:
-    const wxBitmap& m_icon;
+    wxBitmapBundle m_icon;
 };
 
 //---- Grid helpers: custom wxGridCellRenderer that renders just an icon from wxArtprovider -
@@ -103,8 +103,8 @@ public:
     wxGridCellRenderer* Clone() const override;
 
 private:
-    int      m_status;
-    wxBitmap m_bitmap;
+    int            m_status;
+    wxBitmapBundle m_bitmap;
 };
 
 

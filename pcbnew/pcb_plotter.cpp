@@ -22,6 +22,7 @@
  */
 
 #include <pcb_plotter.h>
+#include <common.h>
 #include <plotters/plotter.h>
 #include <plotters/plotters_pslike.h>
 #include <board.h>
@@ -84,7 +85,7 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
 
     if( m_plotOpts.GetFormat() == PLOT_FORMAT::SVG && m_plotOpts.GetSvgFitPagetoBoard() ) // Page is board boundary size
     {
-        BOX2I     bbox = m_board->ComputeBoundingBox( false );
+        BOX2I     bbox = m_board->ComputeBoundingBox( false, false );
         PAGE_INFO currPageInfo = m_board->GetPageSettings();
 
         currPageInfo.SetWidthMils( bbox.GetWidth() / pcbIUScale.IU_PER_MILS );
@@ -101,7 +102,10 @@ bool PCB_PLOTTER::Plot( const wxString& aOutputPath, const LSEQ& aLayersToPlot,
     LSEQ layersToPlot;
     LSEQ commonLayers;
 
-    if( aOutputPathIsSingle && !m_plotOpts.GetDXFMultiLayeredExportOption() )
+    const bool isPdfMultiPage =
+            ( m_plotOpts.GetFormat() == PLOT_FORMAT::PDF && m_plotOpts.m_PDFSingle );
+
+    if( aOutputPathIsSingle && !m_plotOpts.GetDXFMultiLayeredExportOption() && !isPdfMultiPage )
     {
         layersToPlot.push_back( aLayersToPlot[0] );
 
@@ -485,7 +489,7 @@ void PCB_PLOTTER::PlotJobToPlotOpts( PCB_PLOT_PARAMS& aOpts, JOB_EXPORT_PCB_PLOT
             theme = pcbSettings->m_ColorTheme;
     }
 
-    COLOR_SETTINGS* colors = ::GetColorSettings( aJob->m_colorTheme );
+    COLOR_SETTINGS* colors = ::GetColorSettings( theme );
 
     if( colors->GetFilename() != theme && !aOpts.GetBlackAndWhite() )
     {

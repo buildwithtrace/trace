@@ -25,9 +25,11 @@
 #include <utility>
 
 #include <math/vector2d.h>
+#include <thread_pool.h>
 
 #include <geometry/seg.h>
 #include <geometry/shape_line_chain.h>
+#include <pcb_track.h>
 #include <zone.h>
 
 #include <wx/log.h>
@@ -93,30 +95,42 @@ NODE::~NODE()
 
     for( ITEM* item : *m_index )
     {
-        if( item->BelongsTo( this ) && item->OfKind( ITEM::HOLE_T ) )
+        if( item->BelongsTo( this ) )
         {
-#ifdef DEBUG
-            HOLE* hole = static_cast<HOLE*>( item );
+            if ( item->OfKind( ITEM::HOLE_T ) )
+            {
+                HOLE* hole = static_cast<HOLE*>( item );
+                if( hole->ParentPadVia() )
+                {
+                    // If a hole is no longer owned by the same NODE as its parent then we're in a
+                    // heap of trouble.
+                    assert( hole->ParentPadVia()->BelongsTo( this ) );
 
-            // If a hole is no longer owned by the same NODE as its parent then we're in a
-            // heap of trouble.
-            if( hole->ParentPadVia() && !hole->ParentPadVia()->BelongsTo( this ) )
-                assert( false );
-#endif
-
-            toDelete.push_back( item );
+                    // we will encounter its parent later, disguised as VIA or SOLID.
+                    // don't bother reparenting the hole now, it's deleted anyway.
+                }
+                else
+                {
+                    // freestanding hole
+                    toDelete.push_back(item);
+                }
+            }
+            else {
+                // other geometry with no holes
+                toDelete.push_back(item);
+            }
         }
+    }
+
+    if( m_ruleResolver )
+    {
+        m_ruleResolver->ClearCacheForItems( toDelete );
     }
 
     for( const ITEM* item : toDelete )
     {
         wxLogTrace( wxT( "PNS" ), wxT( "del item %p type %s" ), item, item->KindStr().c_str() );
         delete item;
-    }
-
-    if( m_ruleResolver )
-    {
-        m_ruleResolver->ClearCacheForItems( toDelete );
     }
 
     releaseGarbage();
@@ -244,7 +258,7 @@ struct NODE::DEFAULT_OBSTACLE_VISITOR : public OBSTACLE_VISITOR
         if( !aCandidate->Collide( m_item, m_node, m_layerContext.value_or( -1 ), m_ctx ) )
             return true;
 
-        if( m_ctx->options.m_limitCount > 0 && m_ctx->obstacles.size() >= m_ctx->options.m_limitCount )
+        if( m_ctx->options.m_limitCount > 0 && (int) m_ctx->obstacles.size() >= m_ctx->options.m_limitCount )
             return false;
 
         return true;
@@ -273,7 +287,7 @@ int NODE::QueryColliding( const ITEM* aItem, NODE::OBSTACLES& aObstacles,
     m_index->Query( aItem, m_maxClearance, visitor );
 
     // if we haven't found enough items, look in the root branch as well.
-    if( !isRoot() && ( ctx.obstacles.size() < aOpts.m_limitCount || aOpts.m_limitCount < 0 ) )
+    if( !isRoot() && ( (int) ctx.obstacles.size() < aOpts.m_limitCount || aOpts.m_limitCount < 0 ) )
     {
         visitor.SetWorld( m_root, this );
         m_root->m_index->Query( aItem, m_maxClearance, visitor );
@@ -287,8 +301,7 @@ NODE::OPT_OBSTACLE NODE::NearestObstacle( const LINE* aLine,
                                           const COLLISION_SEARCH_OPTIONS& aOpts )
 {
     DIRECTION_45::CORNER_MODE cornerMode = ROUTER::GetInstance()->Settings().GetCornerMode();
-    const int                 clearanceEpsilon = GetRuleResolver()->ClearanceEpsilon();
-    OBSTACLES                 obstacleList;
+    OBSTACLES                 obstacleSet;
 
     for( int i = 0; i < aLine->CLine().SegmentCount(); i++ )
     {
@@ -297,14 +310,146 @@ NODE::OPT_OBSTACLE NODE::NearestObstacle( const LINE* aLine,
         // Disabling the cache will lead to slowness.
 
         const SEGMENT s( *aLine, aLine->CLine().CSegment( i ) );
-        QueryColliding( &s, obstacleList, aOpts );
+        QueryColliding( &s, obstacleSet, aOpts );
     }
 
     if( aLine->EndsWithVia() )
-        QueryColliding( &aLine->Via(), obstacleList, aOpts );
+        QueryColliding( &aLine->Via(), obstacleSet, aOpts );
 
-    if( obstacleList.empty() )
+    if( obstacleSet.empty() )
         return OPT_OBSTACLE();
+
+    // Convert to indexed vector for parallel access.
+    std::vector<OBSTACLE> obstacles( obstacleSet.begin(), obstacleSet.end() );
+    const int             numObstacles = (int) obstacles.size();
+
+    const int      layer = aLine->Layer();
+    RULE_RESOLVER* ruleResolver = GetRuleResolver();
+    const bool     simplifyHull = ( cornerMode == DIRECTION_45::MITERED_90
+                                    || cornerMode == DIRECTION_45::ROUNDED_90 );
+    const bool     hasVia = aLine->EndsWithVia();
+
+    auto makeHull = [&]( const SHAPE_LINE_CHAIN& cachedHull ) -> SHAPE_LINE_CHAIN
+    {
+        if( simplifyHull )
+        {
+            BOX2I            bbox = cachedHull.BBox();
+            SHAPE_LINE_CHAIN hull;
+            hull.Append( bbox.GetLeft(),  bbox.GetTop()    );
+            hull.Append( bbox.GetRight(), bbox.GetTop()    );
+            hull.Append( bbox.GetRight(), bbox.GetBottom() );
+            hull.Append( bbox.GetLeft(),  bbox.GetBottom() );
+            return hull;
+        }
+
+        return cachedHull;
+    };
+
+    // The first step here is sequential since GetClearance() and HullCache() are not thread-safe.
+    // So, we populate all caches first and copy the returned hull references into owned values
+    // before releasing the sequential phase.
+    struct ObstacleHullData
+    {
+        SHAPE_LINE_CHAIN lineHull;
+        SHAPE_LINE_CHAIN viaHull; // only populated when hasVia
+    };
+
+    std::vector<ObstacleHullData> hullData( numObstacles );
+
+    for( int i = 0; i < numObstacles; i++ )
+    {
+        const OBSTACLE& obstacle = obstacles[i];
+
+        int clearance = GetClearance( obstacle.m_item, aLine, aOpts.m_useClearanceEpsilon )
+                            + aLine->Width() / 2;
+
+        hullData[i].lineHull = makeHull( ruleResolver->HullCache( obstacle.m_item, clearance,
+                                                                   0, layer ) );
+
+        if( hasVia )
+        {
+            const VIA& via = aLine->Via();
+            int viaClearance = GetClearance( obstacle.m_item, &via, aOpts.m_useClearanceEpsilon )
+                               + via.Diameter( aLine->Layer() ) / 2;
+
+            hullData[i].viaHull = makeHull( ruleResolver->HullCache( obstacle.m_item,
+                                                                      viaClearance, 0, layer ) );
+        }
+    }
+
+    // Run the obstacle finding in parallel and bring the results together afte
+    struct ObstacleResult
+    {
+        int      dist = INT_MAX;
+        VECTOR2I ip;
+    };
+
+    std::vector<ObstacleResult> results( numObstacles );
+    const SHAPE_LINE_CHAIN&     linePath = aLine->CLine();
+
+    auto processObstacle = [&]( int i )
+    {
+        std::vector<SHAPE_LINE_CHAIN::INTERSECTION> ips;
+        ObstacleResult& result = results[i];
+
+        HullIntersection( hullData[i].lineHull, linePath, ips );
+
+        for( const SHAPE_LINE_CHAIN::INTERSECTION& ip : ips )
+        {
+            if( !ip.valid )
+                continue;
+
+            int dist = linePath.PathLength( ip.p, ip.index_their );
+
+            if( dist < result.dist )
+            {
+                result.dist = dist;
+                result.ip = ip.p;
+            }
+        }
+
+        if( hasVia )
+        {
+            ips.clear();
+            HullIntersection( hullData[i].viaHull, linePath, ips );
+
+            for( const SHAPE_LINE_CHAIN::INTERSECTION& ip : ips )
+            {
+                if( !ip.valid )
+                    continue;
+
+                int dist = linePath.PathLength( ip.p, ip.index_their );
+
+                if( dist < result.dist )
+                {
+                    result.dist = dist;
+                    result.ip = ip.p;
+                }
+            }
+        }
+    };
+
+    // Each task submission locks the thread pool's priority queue mutex, and thread wakeup
+    // latency is ~5-20µs. With too few items per block the synchronization cost exceeds the
+    // geometry work. Use a minimum chunk size so blocks are always worth dispatching, while
+    // still entering the parallel path at a lower obstacle count than a flat threshold allows.
+    constexpr int MIN_OBSTACLES_PER_BLOCK = 8;
+    constexpr int PARALLEL_THRESHOLD      = MIN_OBSTACLES_PER_BLOCK;
+
+    if( numObstacles > PARALLEL_THRESHOLD )
+    {
+        thread_pool& tp       = GetKiCadThreadPool();
+        std::size_t numBlocks = std::max<std::size_t>( 1, numObstacles / MIN_OBSTACLES_PER_BLOCK );
+
+        auto futures = tp.submit_loop( 0, numObstacles, [&]( int i ) { processObstacle( i ); },
+                                       numBlocks );
+        futures.wait();
+    }
+    else
+    {
+        for( int i = 0; i < numObstacles; i++ )
+            processObstacle( i );
+    }
 
     OBSTACLE nearest;
     nearest.m_head = nullptr;
@@ -312,82 +457,21 @@ NODE::OPT_OBSTACLE NODE::NearestObstacle( const LINE* aLine,
     nearest.m_distFirst = INT_MAX;
     nearest.m_maxFanoutWidth = 0;
 
-    auto updateNearest =
-            [&]( const SHAPE_LINE_CHAIN::INTERSECTION& pt, const OBSTACLE& obstacle )
-            {
-                int dist = aLine->CLine().PathLength( pt.p, pt.index_their );
-
-                if( dist < nearest.m_distFirst )
-                {
-                    nearest = obstacle;
-                    nearest.m_distFirst = dist;
-                    nearest.m_ipFirst = pt.p;
-                }
-            };
-
-    SHAPE_LINE_CHAIN obstacleHull;
-    DEBUG_DECORATOR* debugDecorator = ROUTER::GetInstance()->GetInterface()->GetDebugDecorator();
-    std::vector<SHAPE_LINE_CHAIN::INTERSECTION> intersectingPts;
-    int layer = aLine->Layer();
-
-    for( const OBSTACLE& obstacle : obstacleList )
+    for( int i = 0; i < numObstacles; i++ )
     {
-        int clearance = GetClearance( obstacle.m_item, aLine, aOpts.m_useClearanceEpsilon )
-                            + aLine->Width() / 2;
-
-        obstacleHull = obstacle.m_item->Hull( clearance, 0, layer );
-
-        if( cornerMode == DIRECTION_45::MITERED_90 || cornerMode == DIRECTION_45::ROUNDED_90 )
+        if( results[i].dist < nearest.m_distFirst )
         {
-            BOX2I bbox = obstacleHull.BBox();
-            obstacleHull.Clear();
-            obstacleHull.Append( bbox.GetLeft(),  bbox.GetTop()    );
-            obstacleHull.Append( bbox.GetRight(), bbox.GetTop()    );
-            obstacleHull.Append( bbox.GetRight(), bbox.GetBottom() );
-            obstacleHull.Append( bbox.GetLeft(),  bbox.GetBottom() );
-        }
-        //debugDecorator->AddLine( obstacleHull, 2, 40000, "obstacle-hull-test" );
-        //debugDecorator->AddLine( aLine->CLine(), 5, 40000, "obstacle-test-line" );
+            nearest = obstacles[i];
+            nearest.m_distFirst = results[i].dist;
+            nearest.m_ipFirst = results[i].ip;
 
-        intersectingPts.clear();
-        HullIntersection( obstacleHull, aLine->CLine(), intersectingPts );
-
-        for( const auto& ip : intersectingPts )
-        {
-            //debugDecorator->AddPoint( ip.p, ip.valid?3:6, 100000, (const char *) wxString::Format("obstacle-isect-point-%d" ).c_str() );
-            if( ip.valid )
-                updateNearest( ip, obstacle );
-        }
-
-        if( aLine->EndsWithVia() )
-        {
-            const VIA& via = aLine->Via();
-            int viaClearance = GetClearance( obstacle.m_item, &via, aOpts.m_useClearanceEpsilon )
-                               + via.Diameter( aLine->Layer() ) / 2;
-
-            obstacleHull = obstacle.m_item->Hull( viaClearance, 0, layer );
-
-            if( cornerMode == DIRECTION_45::MITERED_90 || cornerMode == DIRECTION_45::ROUNDED_90 )
-            {
-                BOX2I bbox = obstacleHull.BBox();
-                obstacleHull.Clear();
-                obstacleHull.Append( bbox.GetLeft(),  bbox.GetTop()    );
-                obstacleHull.Append( bbox.GetRight(), bbox.GetTop()    );
-                obstacleHull.Append( bbox.GetRight(), bbox.GetBottom() );
-                obstacleHull.Append( bbox.GetLeft(),  bbox.GetBottom() );
-            }
-            //debugDecorator->AddLine( obstacleHull, 3 );
-
-            intersectingPts.clear();
-            HullIntersection( obstacleHull, aLine->CLine(), intersectingPts );
-
-            for( const SHAPE_LINE_CHAIN::INTERSECTION& ip : intersectingPts )
-                updateNearest( ip, obstacle );
+            if( results[i].dist == 0 )
+                break;
         }
     }
 
     if( nearest.m_distFirst == INT_MAX )
-        nearest = (*obstacleList.begin());
+        nearest = obstacles[0];
 
     return nearest;
 }
@@ -1100,10 +1184,6 @@ const LINE NODE::AssembleLine( LINKED_ITEM* aSeg, int* aOriginSegmentIndex, bool
                 const ARC*       arc = static_cast<const ARC*>( li );
                 const SHAPE_ARC* sa  = static_cast<const SHAPE_ARC*>( arc->Shape( -1 ) );
 
-                int      nSegs     = line.PointCount();
-                VECTOR2I last      = nSegs ? line.CLastPoint() : VECTOR2I();
-                ssize_t lastShape = nSegs ? line.ArcIndex( static_cast<ssize_t>( nSegs ) - 1 ) : -1;
-
                 line.Append( arcReversed[i] ? sa->Reversed() : *sa );
             }
 
@@ -1260,7 +1340,7 @@ void NODE::FixupVirtualVias()
 
     for( auto vvia : vvias )
     {
-        Add( ItemCast<VIA>( std::move( std::unique_ptr<VVIA>( vvia ) ) ) );
+        Add( ItemCast<VIA>( std::unique_ptr<VVIA>( vvia ) ) );
     }
 }
 
@@ -1503,21 +1583,28 @@ void NODE::releaseGarbage()
     if( !isRoot() )
         return;
 
-    std::vector<const ITEM*> cacheCheckItems;
-    cacheCheckItems.reserve( m_garbageItems.size() );
+    std::vector<const ITEM*> toDelete;
+    toDelete.reserve( m_garbageItems.size() );
 
     for( ITEM* item : m_garbageItems )
     {
         if( !item->BelongsTo( this ) )
-            delete item;
+        {
+            toDelete.push_back( item );
+        }
     }
-
-    m_garbageItems.clear();
 
     if( m_ruleResolver )
     {
-        m_ruleResolver->ClearCacheForItems( cacheCheckItems );
+        m_ruleResolver->ClearCacheForItems( toDelete );
     }
+
+    for( const ITEM* item : toDelete)
+    {
+        delete item;
+    }
+
+    m_garbageItems.clear();
 }
 
 
@@ -1769,4 +1856,3 @@ VIA* NODE::FindViaByHandle ( const VIA_HANDLE& handle ) const
 }
 
 }
-

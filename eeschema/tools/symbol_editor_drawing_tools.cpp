@@ -25,6 +25,7 @@
 #include <sch_actions.h>
 #include <optional>
 #include <symbol_edit_frame.h>
+#include <widgets/wx_infobar.h>
 #include <sch_commit.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <tools/symbol_editor_drawing_tools.h>
@@ -215,14 +216,13 @@ int SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
                 switch( type )
                 {
                 case SCH_PIN_T:
-                {
                     item = pinTool->CreatePin( cursorPos, symbol );
 
                     if( item )
                         g_lastPin = item->m_Uuid;
 
                     break;
-                }
+
                 case SCH_TEXT_T:
                 {
                     SCH_TEXT* text = new SCH_TEXT( cursorPos, wxEmptyString, LAYER_DEVICE );
@@ -252,6 +252,7 @@ int SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
 
                     break;
                 }
+
                 default:
                     wxFAIL_MSG( "TwoClickPlace(): unknown type" );
                 }

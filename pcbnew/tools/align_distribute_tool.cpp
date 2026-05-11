@@ -32,6 +32,8 @@
 
 #include <board.h>
 #include <board_commit.h>
+#include <footprint.h>
+#include <collectors.h>
 #include <bitmaps.h>
 #include <pcb_edit_frame.h>
 #include <geometry/distribute.h>
@@ -189,7 +191,7 @@ size_t ALIGN_DISTRIBUTE_TOOL::GetSelections( std::vector<std::pair<BOARD_ITEM*, 
 
     for( EDA_ITEM* item : selection )
     {
-        if( !item->IsBOARD_ITEM() )
+        if( !item->IsBOARD_ITEM() || item->Type() == PCB_TABLECELL_T )
             continue;
 
         BOARD_ITEM* boardItem = static_cast<BOARD_ITEM*>( item );

@@ -37,6 +37,7 @@
 #define ARG_BOM_COL_MFG "--bom-col-mfg"
 #define ARG_BOM_COL_DIST_PN "--bom-col-dist-pn"
 #define ARG_BOM_COL_DIST "--bom-col-dist"
+#define ARG_BOM_REV "--bom-rev"
 #define ARG_UNITS "--units"
 
 CLI::PCB_EXPORT_IPC2581_COMMAND::PCB_EXPORT_IPC2581_COMMAND() :
@@ -97,6 +98,13 @@ CLI::PCB_EXPORT_IPC2581_COMMAND::PCB_EXPORT_IPC2581_COMMAND() :
                                 "Material Distributor Column" ) )
             .metavar( "FIELD_NAME" );
 
+    m_argParser.add_argument( ARG_BOM_REV )
+            .default_value( std::string() )
+            .help( std::string( "BOM revision to use in the output file. "
+                                "Defaults to schematic revision from the project file" ) )
+            .metavar( "REVISION" );
+
+    addVariantsArg();
 }
 
 
@@ -108,6 +116,9 @@ int CLI::PCB_EXPORT_IPC2581_COMMAND::doPerform( KIWAY& aKiway )
     ipc2581Job->SetConfiguredOutputPath( m_argOutput );
     ipc2581Job->m_drawingSheet = m_argDrawingSheet;
     ipc2581Job->SetVarOverrides( m_argDefineVars );
+
+    if( !m_argVariantNames.empty() )
+        ipc2581Job->m_variant = m_argVariantNames.front();
 
     if( !wxFile::Exists( ipc2581Job->m_filename ) )
     {
@@ -139,6 +150,8 @@ int CLI::PCB_EXPORT_IPC2581_COMMAND::doPerform( KIWAY& aKiway )
             From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_DIST_PN ).c_str() );
     ipc2581Job->m_colDist =
             From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_DIST ).c_str() );
+    ipc2581Job->m_bomRev =
+            From_UTF8( m_argParser.get<std::string>( ARG_BOM_REV ).c_str() );
 
     LOCALE_IO dummy;
     return aKiway.ProcessJob( KIWAY::FACE_PCB, ipc2581Job.get() );

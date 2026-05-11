@@ -10,6 +10,8 @@
 #include <wx/artprov.h>
 #include <wx/xrc/xmlres.h>
 #include <wx/intl.h>
+class WX_GRID;
+
 #include "dialog_shim.h"
 #include <wx/string.h>
 #include <wx/stattext.h>
@@ -17,9 +19,9 @@
 #include <wx/font.h>
 #include <wx/colour.h>
 #include <wx/settings.h>
-#include <wx/grid.h>
-#include <wx/sizer.h>
 #include <wx/choice.h>
+#include <wx/sizer.h>
+#include <wx/grid.h>
 #include <wx/checkbox.h>
 #include <wx/button.h>
 #include <wx/dialog.h>
@@ -34,12 +36,11 @@ class DIALOG_MULTICHANNEL_REPEAT_LAYOUT_BASE : public DIALOG_SHIM
 	private:
 
 	protected:
-		wxStaticText* m_staticText4;
-		wxGrid* m_raGrid;
-		wxStaticText* m_staticText1;
 		wxStaticText* m_refRAName;
 		wxStaticText* m_staticText2;
 		wxChoice* m_refAnchorFp;
+		wxStaticText* m_staticText4;
+		WX_GRID* m_raGrid;
 		wxCheckBox* m_cbCopyPlacement;
 		wxCheckBox* m_cbCopyRouting;
 		wxCheckBox* m_cbCopyOnlyConnectedRouting;

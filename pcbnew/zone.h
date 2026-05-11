@@ -26,10 +26,10 @@
 #define ZONE_H
 
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include <map>
-#include <gr_basic.h>
 #include <board_item.h>
 #include <board_connected_item.h>
 #include <layer_ids.h>
@@ -133,7 +133,12 @@ public:
     wxString GetFriendlyName() const override;
 
     void SetLayerSet( const LSET& aLayerSet ) override;
-    virtual LSET GetLayerSet() const override { return m_layerSet; }
+
+    virtual LSET GetLayerSet() const override
+    {
+        std::lock_guard<std::mutex> lock( m_layerSetMutex );
+        return m_layerSet;
+    }
 
     /**
      * Set the zone to be on the aLayerSet layers and only remove the fill polygons
@@ -273,17 +278,17 @@ public:
         return m_outlinearea;
     }
 
-    std::mutex& GetLock()
-    {
-        return m_lock;
-    }
-
     int GetFillFlag( PCB_LAYER_ID aLayer )
     {
+        std::lock_guard<std::mutex> lock( m_fillFlagsMutex );
         return m_fillFlags.test( aLayer );
     }
 
-    void SetFillFlag( PCB_LAYER_ID aLayer, bool aFlag ) { m_fillFlags.set( aLayer, aFlag ); }
+    void SetFillFlag( PCB_LAYER_ID aLayer, bool aFlag )
+    {
+        std::lock_guard<std::mutex> lock( m_fillFlagsMutex );
+        m_fillFlags.set( aLayer, aFlag );
+    }
 
     bool IsFilled() const { return m_isFilled; }
     void SetIsFilled( bool isFilled ) { m_isFilled = isFilled; }
@@ -587,22 +592,30 @@ public:
 
     bool HasFilledPolysForLayer( PCB_LAYER_ID aLayer ) const
     {
+        std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
         return m_FilledPolysList.count( aLayer ) > 0;
     }
 
     /**
      * @return a reference to the list of filled polygons.
      */
-    const std::shared_ptr<SHAPE_POLY_SET>& GetFilledPolysList( PCB_LAYER_ID aLayer ) const
+    std::shared_ptr<SHAPE_POLY_SET> GetFilledPolysList( PCB_LAYER_ID aLayer ) const
     {
+        std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
         wxASSERT( m_FilledPolysList.count( aLayer ) );
         return m_FilledPolysList.at( aLayer );
     }
 
     SHAPE_POLY_SET* GetFill( PCB_LAYER_ID aLayer )
     {
-        wxASSERT( m_FilledPolysList.count( aLayer ) );
-        return m_FilledPolysList.at( aLayer ).get();
+        std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
+
+        auto it = m_FilledPolysList.find( aLayer );
+
+        if( it == m_FilledPolysList.end() )
+            return nullptr;
+
+        return it->second.get();
     }
 
     /**
@@ -616,6 +629,7 @@ public:
      */
     void SetFilledPolysList( PCB_LAYER_ID aLayer, const SHAPE_POLY_SET& aPolysList )
     {
+        std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
         m_FilledPolysList[aLayer] = std::make_shared<SHAPE_POLY_SET>( aPolysList );
     }
 
@@ -787,11 +801,23 @@ public:
 
     void SetFillPoly( PCB_LAYER_ID aLayer, SHAPE_POLY_SET* aPoly )
     {
-        m_FilledPolysList[ aLayer ] = std::make_shared<SHAPE_POLY_SET>( *aPoly );
+        {
+            std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
+            m_FilledPolysList[ aLayer ] = std::make_shared<SHAPE_POLY_SET>( *aPoly );
+        }
+
         SetFillFlag( aLayer, true );
     }
 
 #endif
+
+private:
+    /**
+     * Internal implementation of UnFill() that assumes the caller already holds
+     * m_filledPolysListMutex. This is needed because SetLayerSet() already acquires the mutex
+     * via scoped_lock before calling this.
+     */
+    bool unFillLocked();
 
 protected:
     virtual void swapData( BOARD_ITEM* aImage ) override;
@@ -804,6 +830,7 @@ protected:
     /// An optional unique name for this zone, used for identifying it in DRC checking
     wxString              m_zoneName;
 
+    mutable std::mutex    m_layerSetMutex;
     LSET                  m_layerSet;
 
     std::map<PCB_LAYER_ID, ZONE_LAYER_PROPERTIES> m_layerProperties;
@@ -862,7 +889,7 @@ protected:
      * m_needRefill = false does not imply filled areas are up to date, just
      * the zone was refilled after edition, and does not need refilling
      */
-    bool             m_needRefill;
+    std::atomic<bool> m_needRefill;
 
     int              m_thermalReliefGap;        // Width of the gap in thermal reliefs.
     int              m_thermalReliefSpokeWidth; // Width of the copper bridge in thermal reliefs.
@@ -889,9 +916,11 @@ protected:
      * connecting "holes" with external main outline.  In complex cases an outline
      * described by m_Poly can have many filled areas
      */
+    mutable std::mutex                                      m_filledPolysListMutex;
     std::map<PCB_LAYER_ID, std::shared_ptr<SHAPE_POLY_SET>> m_FilledPolysList;
 
     /// Temp variables used while filling
+    mutable std::mutex                     m_fillFlagsMutex;
     LSET                                   m_fillFlags;
 
     /// A hash value used in zone filling calculations to see if the filled areas are up to date
@@ -907,8 +936,6 @@ protected:
     double                    m_area;              // The filled zone area
     double                    m_outlinearea;       // The outline zone area
 
-    /// Lock used for multi-threaded filling on multi-layer zones
-    std::mutex                m_lock;
 };
 
 

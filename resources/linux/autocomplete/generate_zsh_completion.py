@@ -6,12 +6,12 @@ import sys
 
 # --- Tree Generation Logic ---
 
-KICAD_CLI = "kicad-cli"
+TRACE_CLI = "trace-cli"
 ENV = os.environ.copy()
 ENV["KICAD_RUN_FROM_BUILD_DIR"] = "1"
 
 def get_help(args):
-    cmd = [KICAD_CLI] + args + ["-h"]
+    cmd = [TRACE_CLI] + args + ["-h"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, env=ENV)
         return result.stdout
@@ -76,14 +76,14 @@ def escape_desc(desc):
 
 def generate_zsh_completion(tree):
     lines = []
-    lines.append("#compdef kicad-cli")
+    lines.append("#compdef trace-cli")
     lines.append("")
 
     # Helper to generate function name from path
     def get_func_name(path):
         if not path:
-            return "_kicad_cli"
-        return "_kicad_cli_" + "_".join(path).replace("-", "_")
+            return "_trace_cli"
+        return "_trace_cli_" + "_".join(path).replace("-", "_")
 
     all_functions = []
 
@@ -192,7 +192,7 @@ def generate_zsh_completion(tree):
 
     lines.append("")
     lines.append("if type compdef >/dev/null 2>&1; then")
-    lines.append("    compdef _kicad_cli kicad-cli")
+    lines.append("    compdef _trace_cli trace-cli")
     lines.append("fi")
 
     return "\n".join(lines)

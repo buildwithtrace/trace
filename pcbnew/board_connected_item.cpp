@@ -26,13 +26,18 @@
 #include <board.h>
 #include <board_connected_item.h>
 #include <board_design_settings.h>
+#include <project/net_settings.h>
+#include <drc/drc_engine.h>
 #include <connectivity/connectivity_data.h>
 #include <lset.h>
 #include <properties/property_validators.h>
+#include <properties/property.h>
+#include <properties/property_mgr.h>
 #include <string_utils.h>
 #include <i18n_utility.h>
 #include <netinfo.h>
 #include <api/board/board_types.pb.h>
+#include <shared_mutex>
 
 using namespace std::placeholders;
 
@@ -41,6 +46,18 @@ BOARD_CONNECTED_ITEM::BOARD_CONNECTED_ITEM( BOARD_ITEM* aParent, KICAD_T idtype 
     m_netinfo( NETINFO_LIST::OrphanedItem() )
 {
     m_localRatsnestVisible = true;
+}
+
+
+void BOARD_CONNECTED_ITEM::SetLayer( PCB_LAYER_ID aLayer )
+{
+    BOARD_ITEM::SetLayer( aLayer );
+
+    if( !( GetFlags() & ROUTER_TRANSIENT ) )
+    {
+        if( BOARD* board = GetBoard() )
+            board->InvalidateClearanceCache( m_Uuid );
+    }
 }
 
 
@@ -88,27 +105,25 @@ bool BOARD_CONNECTED_ITEM::SetNetCode( int aNetCode, bool aNoAssert )
     if( !aNoAssert )
         wxASSERT( m_netinfo );
 
+    if( board )
+    {
+        if( !( GetFlags() & ROUTER_TRANSIENT ) )
+            board->InvalidateClearanceCache( m_Uuid );
+
+        std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
+        board->m_ItemNetclassCache.erase( this );
+    }
+
     return ( m_netinfo != nullptr );
 }
 
 
 int BOARD_CONNECTED_ITEM::GetOwnClearance( PCB_LAYER_ID aLayer, wxString* aSource ) const
 {
-    DRC_CONSTRAINT constraint;
-
     if( GetBoard() && GetBoard()->GetDesignSettings().m_DRCEngine )
     {
         BOARD_DESIGN_SETTINGS& bds = GetBoard()->GetDesignSettings();
-
-        constraint = bds.m_DRCEngine->EvalRules( CLEARANCE_CONSTRAINT, this, nullptr, aLayer );
-    }
-
-    if( constraint.Value().HasMin() )
-    {
-        if( aSource )
-            *aSource = constraint.GetName();
-
-        return constraint.Value().Min();
+        return bds.m_DRCEngine->GetCachedOwnClearance( this, aLayer, aSource );
     }
 
     return 0;
@@ -125,10 +140,20 @@ int BOARD_CONNECTED_ITEM::GetNetCode() const
 // std::shared_ptr stuff shows up large in performance profiling.
 NETCLASS* BOARD_CONNECTED_ITEM::GetEffectiveNetClass() const
 {
+    // Static fallback netclass for items without a valid board (e.g., during DRC evaluation
+    // of dummy items, or items not yet added to a board).
+    static std::shared_ptr<NETCLASS> fallbackNetclass = std::make_shared<NETCLASS>( NETCLASS::Default );
+
     if( m_netinfo && m_netinfo->GetNetClass() )
         return m_netinfo->GetNetClass();
-    else
-        return GetBoard()->GetDesignSettings().m_NetSettings->GetDefaultNetclass().get();
+
+    if( const BOARD* board = GetBoard() )
+    {
+        if( board->GetDesignSettings().m_NetSettings )
+            return board->GetDesignSettings().m_NetSettings->GetDefaultNetclass().get();
+    }
+
+    return fallbackNetclass.get();
 }
 
 
@@ -205,7 +230,7 @@ static struct BOARD_CONNECTED_ITEM_DESC
 
         // Replace layer property as the properties panel will set a restriction for copper layers
         // only for BOARD_CONNECTED_ITEM that we don't want to apply to BOARD_ITEM
-        auto layer = new PROPERTY_ENUM<BOARD_CONNECTED_ITEM, PCB_LAYER_ID, BOARD_ITEM>(
+        auto layer = new PROPERTY_ENUM<BOARD_CONNECTED_ITEM, PCB_LAYER_ID>(
                 _HKI( "Layer" ),
                 &BOARD_CONNECTED_ITEM::SetLayer, &BOARD_CONNECTED_ITEM::GetLayer );
         layer->SetChoices( layerEnum.Choices() );

@@ -22,9 +22,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
-#include <gal/opengl/kiglew.h>    // Must be included first
-#include <gal/opengl/gl_utils.h>
+#include <kicad_gl/kiglu.h> // Must be included first
+#include <kicad_gl/gl_utils.h>
+#include <kicad_gl/gl_context_mgr.h>
+
 #include <wx/tokenzr.h>
+
+#include <fmt/format.h>
 
 #include "../common_ogl/ogl_utils.h"
 #include "eda_3d_canvas.h"
@@ -34,11 +38,14 @@
 #include <3d_viewer_id.h>
 #include <advanced_config.h>
 #include <build_version.h>
+#include <settings/color_settings.h>
 #include <board.h>
+#include <footprint.h>
 #include <pad.h>
 #include <pcb_field.h>
+#include <pcb_track.h>
 #include <reporter.h>
-#include <gal/opengl/gl_context_mgr.h>
+#include <widgets/wx_infobar.h>
 #include <core/profile.h>        // To use GetRunningMicroSecs or another profiling utility
 #include <bitmaps.h>
 #include <kiway_holder.h>
@@ -49,10 +56,9 @@
 #include <tool/tool_dispatcher.h>
 #include <string_utils.h>
 #include <mail_type.h>
-#include <kiway_express.h>
-#include <fmt/format.h>
-
+#include <kiway_mail.h>
 #include <widgets/wx_busy_indicator.h>
+#include <zone.h>
 
 
 /**
@@ -220,20 +226,20 @@ bool  EDA_3D_CANVAS::initializeOpenGL()
 {
     wxLogTrace( m_logTrace, wxT( "EDA_3D_CANVAS::initializeOpenGL" ) );
 
-    const GLenum err = glewInit();
+    SetOpenGLBackendInfo( GL_UTILS::DetectGLBackend( this ) );
 
-    if( GLEW_OK != err )
+    const int glVersion = gladLoaderLoadGL();
+
+    if( glVersion == 0 )
     {
-        const wxString msgError = (const char*) glewGetErrorString( err );
-
-        wxLogMessage( msgError );
+        wxLogMessage( wxT( "Failed to load OpenGL via loader" ) );
 
         return false;
     }
     else
     {
-        wxLogTrace( m_logTrace, wxT( "EDA_3D_CANVAS::initializeOpenGL Using GLEW version %s" ),
-                    From_UTF8( (char*) glewGetString( GLEW_VERSION ) ) );
+        wxLogTrace( m_logTrace, wxT( "EDA_3D_CANVAS::initializeOpenGL Using OpenGL version %s" ),
+                    From_UTF8( (char*) glGetString( GL_VERSION ) ) );
     }
 
     SetOpenGLInfo( (const char*) glGetString( GL_VENDOR ), (const char*) glGetString( GL_RENDERER ),
@@ -288,7 +294,12 @@ bool  EDA_3D_CANVAS::initializeOpenGL()
         }
     }
 
-    GL_UTILS::SetSwapInterval( -1 );
+#if wxCHECK_VERSION( 3, 3, 3 )
+    wxGLCanvas::SetSwapInterval( -1 );
+#else
+    GL_UTILS::SetSwapInterval( this, -1 );
+#endif
+
     m_is_opengl_initialized = true;
 
     return true;
@@ -636,7 +647,7 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
     // Set up framebuffer objects for off-screen rendering
     GLuint framebuffer = 0;
     GLuint colorTexture = 0;
-    GLuint depthBuffer = 0;
+    GLuint depthStencilBuffer = 0;
     GLint  oldFramebuffer = 0;
     GLint  oldViewport[4];
 
@@ -658,11 +669,14 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
     glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
     glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture, 0 );
 
-    // Create depth renderbuffer attachment
-    glGenRenderbuffers( 1, &depthBuffer );
-    glBindRenderbuffer( GL_RENDERBUFFER, depthBuffer );
-    glRenderbufferStorage( GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height );
-    glFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthBuffer );
+    // Create combined depth+stencil renderbuffer attachment.  The stencil buffer is required
+    // because the OpenGL renderer uses stencil operations to cut holes in copper layers and
+    // the board body (see OPENGL_RENDER_LIST::DrawCulled).
+    glGenRenderbuffers( 1, &depthStencilBuffer );
+    glBindRenderbuffer( GL_RENDERBUFFER, depthStencilBuffer );
+    glRenderbufferStorage( GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height );
+    glFramebufferRenderbuffer( GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+                               depthStencilBuffer );
 
     auto resetState = std::unique_ptr<void, std::function<void(void*)>>(
         reinterpret_cast<void*>(1),
@@ -671,7 +685,7 @@ void EDA_3D_CANVAS::RenderToFrameBuffer( unsigned char* buffer, int width, int h
             glViewport( oldViewport[0], oldViewport[1], oldViewport[2], oldViewport[3] );
             glDeleteFramebuffers( 1, &framebuffer );
             glDeleteTextures( 1, &colorTexture );
-            glDeleteRenderbuffers( 1, &depthBuffer );
+            glDeleteRenderbuffers( 1, &depthStencilBuffer );
             gl_mgr->UnlockCtx( m_glRC );
             m_is_currently_painting.clear();
         }

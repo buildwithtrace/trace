@@ -19,6 +19,9 @@
  */
 
 #include "pns_multi_dragger.h"
+
+#include <core/typeinfo.h>
+
 #include "pns_router.h"
 #include "pns_debug_decorator.h"
 #include "pns_walkaround.h"
@@ -76,11 +79,10 @@ bool MULTI_DRAGGER::Start( const VECTOR2I& aP, ITEM_SET& aPrimitives )
             l.originalLine = m_world->AssembleLine( litem );
             l.originalLeaders.push_back( litem );
             l.isDraggable = true;
+            l.mdragIndex = static_cast<int>( m_mdragLines.size() );
             m_mdragLines.push_back( std::move( l ) );
         }
     }
-
-    int n = 0;
 
     bool anyStrictCornersFound = false;
     bool anyStrictMidSegsFound = false;
@@ -148,19 +150,19 @@ bool MULTI_DRAGGER::Start( const VECTOR2I& aP, ITEM_SET& aPrimitives )
                     if( !aPrimitives.Contains( lseg ) )
                         continue;
 
-                        int d = lseg->Seg().Distance( aP );
+                    int d = lseg->Seg().Distance( aP );
 
-                        l.midSeg = lseg->Seg();
-                        l.isMidSeg = true;
-                        l.leaderSegIndex = lidx;
-                        l.leaderSegDistance = d + thr;
+                    l.midSeg = lseg->Seg();
+                    l.isMidSeg = true;
+                    l.leaderSegIndex = lidx;
+                    l.leaderSegDistance = d + thr;
 
-                        if( d < thr && !l.isStrict )
-                        {
-                            l.isCorner = false;
-                            l.isStrict = true;
-                            l.leaderSegDistance = 0;
-                        }
+                    if( d < thr && !l.isStrict )
+                    {
+                        l.isCorner = false;
+                        l.isStrict = true;
+                        l.leaderSegDistance = 0;
+                    }
                 }
             }
 
@@ -378,7 +380,6 @@ bool MULTI_DRAGGER::FixRoute( bool aForceCommit )
 bool MULTI_DRAGGER::tryWalkaround( NODE* aNode, LINE& aOrig, LINE& aWalk )
 {
     WALKAROUND walkaround( aNode, Router() );
-    bool       ok = false;
     walkaround.SetSolidsOnly( false );
     walkaround.SetDebugDecorator( Dbg() );
     walkaround.SetLogger( Logger() );
@@ -475,79 +476,93 @@ bool MULTI_DRAGGER::multidragWalkaround( std::vector<MDRAG_LINE>& aCompletedLine
         preWalkNode->Remove( l.originalLine );
     }
 
+    struct WALK_STATE
+    {
+        NODE *node;
+        int totalLength = 0;
+        std::vector<LINE> postWalkLines;
     bool fail = false;
+    };
 
-    NODE* tmpNodes[2];
-    int totalLength[2];
+    WALK_STATE walkState[2];
 
     for( int attempt = 0; attempt < 2; attempt++ )
     {
-        NODE *node = tmpNodes[attempt] = preWalkNode->Branch();
-        totalLength[attempt] = 0;
-        fail = false;
+        WALK_STATE *state = &walkState[ attempt ];
+        state->node = preWalkNode->Branch();
+        state->postWalkLines.resize( aCompletedLines.size() );
 
-        for( int lidx = 0; lidx < aCompletedLines.size(); lidx++ )
+        for( int lidx = 0; lidx < (int) aCompletedLines.size(); lidx++ )
         {
             MDRAG_LINE& l = aCompletedLines[attempt ? aCompletedLines.size() - 1 - lidx : lidx];
-
             LINE walk( l.draggedLine );
-            auto result = tryWalkaround( node, l.draggedLine, walk );
+
+            auto result = tryWalkaround( state->node, l.draggedLine, walk );
 
             PNS_DBG( Dbg(), AddItem, &l.draggedLine, YELLOW, 100000, wxString::Format("dragged lidx=%d attempt=%d dd=%d isPrimary=%d", lidx, attempt, l.dragDist, l.isPrimaryLine?1:0) );
             PNS_DBG( Dbg(), AddItem, &walk, BLUE, 100000, wxString::Format("walk    lidx=%d attempt=%d", lidx, attempt) );
 
-
             if( result )
             {
-                node->Add( walk );
-                totalLength[attempt] += walk.CLine().Length() - l.draggedLine.CLine().Length();
-                l.draggedLine = std::move( walk );
+                state->node->Add( walk );
+                state->totalLength += walk.CLine().Length() - l.draggedLine.CLine().Length();
+                state->postWalkLines[lidx] = walk;
             }
             else
             {
-                delete node;
-                tmpNodes[attempt] = nullptr;
-                fail = true;
+                state->fail = true;
                 break;
             }
         }
     }
 
-    if( fail )
-        return false;
+    std::optional<int> bestAttempt;
 
-
-    bool rv = false;
-
-    if( tmpNodes[0] && tmpNodes[1] )
+    if( !walkState[0].fail && !walkState[1].fail )
     {
-        if ( totalLength[0] < totalLength[1] )
+        if ( walkState[0].totalLength < walkState[1].totalLength )
         {
-            delete tmpNodes[1];
-            m_lastNode = tmpNodes[0];
-            rv = true;
+            bestAttempt = 0;
         }
         else
         {
-            delete tmpNodes[0];
-            m_lastNode = tmpNodes[1];
-            rv = true;
+            bestAttempt = 1;
         }
     }
-    else if ( tmpNodes[0] )
+    else if ( !walkState[0].fail )
     {
-        m_lastNode = tmpNodes[0];
-        rv = true;
+        bestAttempt = 0;
     }
-    else if ( tmpNodes[1] )
+    else if ( !walkState[1].fail )
     {
-        m_lastNode = tmpNodes[1];
-        rv = true;
+        bestAttempt = 1;
     }
+
+    if( !bestAttempt )
+    {
+        delete walkState[0].node;
+        delete walkState[1].node;
+        return false;
+    }
+    else
+    {
+        for( int lidx = 0; lidx < (int) aCompletedLines.size(); lidx++ )
+        {
+            aCompletedLines[lidx].draggedLine = walkState[ *bestAttempt ].postWalkLines[ lidx ];
+        }
+   
+        m_lastNode = walkState[ *bestAttempt ].node;
+        delete walkState[1 - *bestAttempt].node;
+    }
+
+    // trip asan for qa
+    /*for( auto& l : aCompletedLines )
+        for( auto lnk : l.draggedLine.Links() )
+            assert( lnk->Parent() != reinterpret_cast<BOARD_ITEM*>( 0xdeadbeef ) );*/
 
     restoreLeaderSegments( aCompletedLines );
 
-    return rv;
+    return true;
 }
 
 
@@ -568,19 +583,15 @@ bool MULTI_DRAGGER::multidragMarkObstacles( std::vector<MDRAG_LINE>& aCompletedL
     m_lastNode = m_world->Branch();
 
 
-    int nclipped = 0;
-    for( int l1 = 0; l1 < aCompletedLines.size(); l1++ )
+    for( int l1 = 0; l1 < (int)aCompletedLines.size(); l1++ )
     {
-        for( int l2 = l1 + 1; l2 < aCompletedLines.size(); l2++ )
+        for( int l2 = l1 + 1; l2 < (int)aCompletedLines.size(); l2++ )
         {
             const auto& l1l = aCompletedLines[l1].draggedLine;
             auto l2l        = aCompletedLines[l2].draggedLine;
 
             if( clipToOtherLine( m_lastNode, l1l, l2l ) )
-            {
                 aCompletedLines[l2].draggedLine = l2l;
-                nclipped++;
-            }
         }
     }
 
@@ -642,11 +653,30 @@ bool MULTI_DRAGGER::multidragShove( std::vector<MDRAG_LINE>& aCompletedLines )
 
     m_lastNode = m_shove->CurrentNode()->Branch();
 
+    // Re-add any m_mdragLines that were removed from m_preShoveNode during Start() but
+    // are not part of aCompletedLines. Without this, lines that fail the drag angle check
+    // would be silently deleted from the board.
+    std::set<int> completedIndices;
+
+    for( const auto& cl : aCompletedLines )
+        completedIndices.insert( cl.mdragIndex );
+
+    for( const auto& ml : m_mdragLines )
+    {
+        if( completedIndices.find( ml.mdragIndex ) == completedIndices.end() )
+        {
+            LINE preserved( ml.originalLine );
+            preserved.ClearLinks();
+            m_lastNode->Add( preserved );
+        }
+    }
+
     if( status == SHOVE::SH_OK )
     {
-        for( int i = 0; i < aCompletedLines.size(); i++ )
+        for( int i = 0; i < (int) aCompletedLines.size(); i++ )
         {
             MDRAG_LINE&l = aCompletedLines[i];
+
             if( m_shove->HeadsModified( i ) )
                 l.draggedLine = m_shove->GetModifiedHead( i );
 
@@ -731,7 +761,7 @@ bool MULTI_DRAGGER::Drag( const VECTOR2I& aP )
             primaryDragged->SetSnapThreshhold( snapThreshold );
             primaryDragged->DragCorner( aP, primaryDragged->PointCount() - 1, false );
 
-         
+
             if( primaryDragged->SegmentCount() > 0 )
             {
                 SEG lastPrimDrag = primaryDragged->CSegment( -1 );
@@ -747,11 +777,11 @@ bool MULTI_DRAGGER::Drag( const VECTOR2I& aP )
                         lastPrimDrag = lastPreDrag;
                     }
                 }
-            
+
                 perp = (lastPrimDrag.B - lastPrimDrag.A).Perpendicular();
                 primaryLastSegDir = DIRECTION_45( lastPrimDrag );
 
-                
+
                 PNS_DBG( Dbg(), AddItem, &(*primaryDragged), LIGHTGRAY, 100000, "prim" );
                 PNS_DBG( Dbg(), AddShape, SEG(lastPrimDrag.B, lastPrimDrag.B + perp), LIGHTGRAY, 100000, wxString::Format("prim-perp-seg") );
             } else {
@@ -807,6 +837,7 @@ bool MULTI_DRAGGER::Drag( const VECTOR2I& aP )
                         auto leadAngle = primaryDir.Angle( parallelDir );
 
                         if( leadAngle == DIRECTION_45::ANG_OBTUSE
+                            || leadAngle == DIRECTION_45::ANG_RIGHT
                             || leadAngle == DIRECTION_45::ANG_STRAIGHT )
                         {
                             // compute the distance between the primary line and the last point of
@@ -922,7 +953,8 @@ bool MULTI_DRAGGER::Drag( const VECTOR2I& aP )
 
     for( int variant = 0; variant < 3; variant++ )
     {
-        res = tryPosture( 0 );
+        res = tryPosture( variant );
+
         if( res )
             break;
     }
